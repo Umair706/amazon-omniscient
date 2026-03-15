@@ -1,28 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import api from "@/lib/api";
+import type { UserSettings } from "@/types";
 import { Save, Loader2, Download, Eye, EyeOff } from "lucide-react";
 
-interface Settings {
-  sp_api_client_id: string;
-  sp_api_refresh_token: string;
-  amazon_ads_client_id: string;
-  amazon_ads_refresh_token: string;
-  llm_provider: string;
-  llm_model: string;
-  proxy_provider: string;
-  proxy_host: string;
-  sp_api_configured: boolean;
-  amazon_ads_configured: boolean;
-}
-
 export default function SettingsPage() {
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
@@ -38,19 +26,15 @@ export default function SettingsPage() {
   const [llmProvider, setLlmProvider] = useState("qwen");
   const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
+  const [defaultMarketplace, setDefaultMarketplace] = useState("US");
 
   useEffect(() => {
     api
-      .get("/api/v1/settings")
+      .get("/api/v1/settings/")
       .then((res) => {
-        const data = res.data;
+        const data: UserSettings = res.data;
         setSettings(data);
-        setSpApiClientId(data.sp_api_client_id || "");
-        setSpApiRefreshToken(data.sp_api_refresh_token || "");
-        setAdsClientId(data.amazon_ads_client_id || "");
-        setAdsRefreshToken(data.amazon_ads_refresh_token || "");
-        setLlmProvider(data.llm_provider || "qwen");
-        setLlmModel(data.llm_model || "");
+        setDefaultMarketplace(data.default_marketplace || "US");
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -60,33 +44,61 @@ export default function SettingsPage() {
     setSaving(true);
     setMessage(null);
     try {
-      const payload: Record<string, string> = {};
-      if (spApiClientId) payload.sp_api_client_id = spApiClientId;
-      if (spApiClientSecret) payload.sp_api_client_secret = spApiClientSecret;
-      if (spApiRefreshToken) payload.sp_api_refresh_token = spApiRefreshToken;
-      if (adsClientId) payload.amazon_ads_client_id = adsClientId;
-      if (adsClientSecret) payload.amazon_ads_client_secret = adsClientSecret;
-      if (adsRefreshToken) payload.amazon_ads_refresh_token = adsRefreshToken;
-      if (llmProvider) payload.llm_provider = llmProvider;
-      if (llmModel) payload.llm_model = llmModel;
-      if (llmApiKey) payload.llm_api_key = llmApiKey;
+      const payload: Record<string, unknown> = {};
 
-      await api.put("/api/v1/settings", payload);
+      // SP-API credentials — send as dict if any field filled
+      if (spApiClientId || spApiClientSecret || spApiRefreshToken) {
+        payload.sp_api_credentials = {
+          client_id: spApiClientId || undefined,
+          client_secret: spApiClientSecret || undefined,
+          refresh_token: spApiRefreshToken || undefined,
+        };
+      }
+
+      // Ads API credentials
+      if (adsClientId || adsClientSecret || adsRefreshToken) {
+        payload.ads_api_credentials = {
+          client_id: adsClientId || undefined,
+          client_secret: adsClientSecret || undefined,
+          refresh_token: adsRefreshToken || undefined,
+        };
+      }
+
+      // Preferences
+      if (defaultMarketplace) payload.default_marketplace = defaultMarketplace;
+
+      await api.put("/api/v1/settings/", payload);
       setMessage({ type: "success", text: "Settings saved successfully" });
       // Clear secret fields after save
       setSpApiClientSecret("");
       setAdsClientSecret("");
       setLlmApiKey("");
-    } catch (err: any) {
-      setMessage({ type: "error", text: err.response?.data?.detail || "Failed to save settings" });
+
+      // Refresh settings state
+      const res = await api.get("/api/v1/settings/");
+      setSettings(res.data);
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { detail?: string } } };
+      setMessage({ type: "error", text: error.response?.data?.detail || "Failed to save settings" });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleExportCsv = async () => {
+  const handleExportCsv = async (nicheId?: number) => {
     try {
-      const res = await api.get("/api/v1/exports/csv", { responseType: "blob" });
+      // If no niche ID given, fetch the first niche
+      let targetId = nicheId;
+      if (!targetId) {
+        const res = await api.get("/api/v1/niches/", { params: { per_page: 1 } });
+        const items = res.data.items || [];
+        if (items.length === 0) {
+          setMessage({ type: "error", text: "No niches to export. Analyze a niche first." });
+          return;
+        }
+        targetId = items[0].id;
+      }
+      const res = await api.get(`/api/v1/exports/niches/${targetId}/csv`, { responseType: "blob" });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement("a");
       a.href = url;
@@ -94,7 +106,7 @@ export default function SettingsPage() {
       a.click();
       window.URL.revokeObjectURL(url);
     } catch {
-      setMessage({ type: "error", text: "Export failed" });
+      setMessage({ type: "error", text: "Export failed. Make sure you have analyzed at least one niche." });
     }
   };
 
@@ -134,8 +146,8 @@ export default function SettingsPage() {
               <CardTitle className="text-lg">Amazon SP-API</CardTitle>
               <CardDescription>Seller Partner API credentials for product data</CardDescription>
             </div>
-            <Badge variant={settings?.sp_api_configured ? "default" : "secondary"}>
-              {settings?.sp_api_configured ? "Configured" : "Not Configured"}
+            <Badge variant={settings?.has_sp_api_credentials ? "default" : "secondary"}>
+              {settings?.has_sp_api_credentials ? "Configured" : "Not Configured"}
             </Badge>
           </div>
         </CardHeader>
@@ -182,8 +194,8 @@ export default function SettingsPage() {
               <CardTitle className="text-lg">Amazon Advertising API</CardTitle>
               <CardDescription>For PPC data and campaign management</CardDescription>
             </div>
-            <Badge variant={settings?.amazon_ads_configured ? "default" : "secondary"}>
-              {settings?.amazon_ads_configured ? "Configured" : "Not Configured"}
+            <Badge variant={settings?.has_ads_api_credentials ? "default" : "secondary"}>
+              {settings?.has_ads_api_credentials ? "Configured" : "Not Configured"}
             </Badge>
           </div>
         </CardHeader>
@@ -230,6 +242,7 @@ export default function SettingsPage() {
               <option value="qwen">Qwen (Default)</option>
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="openai">OpenAI (GPT)</option>
+              <option value="ollama">Ollama (Local)</option>
             </select>
           </div>
           <div>
@@ -248,6 +261,30 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* Preferences */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Preferences</CardTitle>
+          <CardDescription>Analysis defaults and marketplace</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">Default Marketplace</label>
+            <select
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={defaultMarketplace}
+              onChange={(e) => setDefaultMarketplace(e.target.value)}
+            >
+              <option value="US">United States (US)</option>
+              <option value="UK">United Kingdom (UK)</option>
+              <option value="DE">Germany (DE)</option>
+              <option value="CA">Canada (CA)</option>
+              <option value="JP">Japan (JP)</option>
+            </select>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Export */}
       <Card>
         <CardHeader>
@@ -255,8 +292,8 @@ export default function SettingsPage() {
           <CardDescription>Export your analysis data</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="outline" onClick={handleExportCsv}>
-            <Download className="h-4 w-4 mr-2" /> Export All Data (CSV)
+          <Button variant="outline" onClick={() => handleExportCsv()}>
+            <Download className="h-4 w-4 mr-2" /> Export Latest Niche (CSV)
           </Button>
         </CardContent>
       </Card>

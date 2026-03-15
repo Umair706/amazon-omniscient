@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
+from app.models.niche import Niche
 from app.models.recommendation import Recommendation
 from app.schemas.recommendation import (
     RecommendationListResponse,
@@ -62,8 +63,23 @@ async def list_recommendations(
     result = await db.execute(stmt)
     recs = result.scalars().all()
 
+    # Fetch niche names for all recommendations
+    niche_ids = list({r.niche_id for r in recs})
+    niche_names: dict[int, str] = {}
+    if niche_ids:
+        niche_result = await db.execute(
+            select(Niche.id, Niche.name).where(Niche.id.in_(niche_ids))
+        )
+        niche_names = {row.id: row.name for row in niche_result.all()}
+
+    items = []
+    for r in recs:
+        data = RecommendationResponse.model_validate(r)
+        data.niche_name = niche_names.get(r.niche_id)
+        items.append(data)
+
     return RecommendationListResponse(
-        items=[RecommendationResponse.model_validate(r) for r in recs],
+        items=items,
         total=total,
     )
 
@@ -88,4 +104,12 @@ async def get_recommendation(
             status_code=404,
             detail=f"Recommendation {recommendation_id} not found",
         )
-    return RecommendationResponse.model_validate(rec)
+    data = RecommendationResponse.model_validate(rec)
+    # Fetch niche name
+    niche_result = await db.execute(
+        select(Niche.name).where(Niche.id == rec.niche_id)
+    )
+    niche_row = niche_result.scalar_one_or_none()
+    if niche_row:
+        data.niche_name = niche_row
+    return data

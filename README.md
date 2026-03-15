@@ -13,14 +13,17 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 
 ## What It Does
 
-1. **Scrapes & collects** Amazon search results, product pages, reviews, and BSR history using headless Playwright browsers with rotating residential proxies
-2. **Analyzes competition** by scoring listing quality across 7 dimensions and detecting exploitable vulnerabilities
-3. **Estimates sales** from BSR using category-specific power-law regression models (handles both main-category and sub-category BSR)
-4. **Calculates landed costs** including FOB, shipping, customs duty, Section 301 tariffs, insurance, inspection, FBA prep, and inbound fees
-5. **Runs LLM-powered analysis** for review sentiment, pain point clustering, product spec generation, and competitive insights
-6. **Generates 52-week projections** across bull/base/bear scenarios with weekly P&L, cumulative profit, and break-even timelines
-7. **Scores opportunities 0-100** (Omniscient Score) using 9 weighted sub-scores and 9 hard disqualification filters
-8. **Produces actionable briefs** with product strategy, unit economics, marketing plan, PPC budget, review strategy, and week-by-week launch playbook
+1. **Scrapes & collects** Amazon search results, product pages, reviews, and BSR history using headless Playwright browsers with rotating proxies (free via proxyscrape.com or paid residential)
+2. **Scrapes 1688.com suppliers** for real factory pricing, MOQs, and supplier ratings to feed into landed cost calculations
+3. **Analyzes competition** by scoring listing quality across 7 dimensions and detecting exploitable vulnerabilities
+4. **Estimates sales** from BSR using category-specific power-law regression models (handles both main-category and sub-category BSR)
+5. **Calculates landed costs** including FOB, shipping, customs duty, Section 301 tariffs, insurance, inspection, FBA prep, and inbound fees
+6. **Generates product blueprints** — complaint-driven product design specs built from review pain points, competitor gaps, and differentiation priorities
+7. **Runs LLM-powered analysis** for review sentiment, pain point clustering, product spec generation, and competitive insights
+8. **Generates 52-week projections** across bull/base/bear scenarios with weekly P&L, cumulative profit, and break-even timelines
+9. **Produces consolidated financial reports** with FBA fee breakdowns, unit economics, and scenario-based P&L summaries
+10. **Scores opportunities 0-100** (Omniscient Score) using 9 weighted sub-scores and 9 hard disqualification filters
+11. **Produces actionable briefs** with product strategy, unit economics, marketing plan, PPC budget, review strategy, and week-by-week launch playbook
 
 ---
 
@@ -64,7 +67,7 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 | Database | PostgreSQL 16 + TimescaleDB (BSR/price time-series) |
 | Queue | Celery with Redis broker |
 | LLM | Configurable: Qwen (default), Anthropic Claude, OpenAI GPT |
-| Scraping | Playwright (headless Chromium) + rotating proxies |
+| Scraping | Playwright (headless Chromium) + rotating proxies (free or paid) |
 | Container | Docker + Docker Compose |
 
 ---
@@ -114,6 +117,7 @@ docker compose exec backend python -m playwright install chromium --with-deps
 ### 5. Open the app
 
 - **Dashboard:** http://localhost:3000
+- **Documentation:** http://localhost:3000/docs (in-app documentation page)
 - **API docs:** http://localhost:8000/docs
 - **Health check:** http://localhost:8000/health
 
@@ -189,8 +193,11 @@ omniscient/
 │   │   │   ├── scoring_service.py        # Omniscient Score
 │   │   │   ├── competitor_service.py     # Listing quality + gaps
 │   │   │   ├── supplier_service.py       # Landed cost + margins
+│   │   │   ├── supplier_scraper.py       # 1688.com supplier scraping
 │   │   │   ├── sales_forecast.py         # 52-week projections
 │   │   │   ├── recommendation_engine.py  # Master orchestrator
+│   │   │   ├── product_blueprint.py      # AI-driven product design
+│   │   │   ├── financial_report.py       # Consolidated P&L report
 │   │   │   ├── scraper_service.py        # Playwright scraper
 │   │   │   ├── spapi_service.py          # Amazon SP-API wrapper
 │   │   │   ├── ppc_service.py            # PPC strategy
@@ -200,7 +207,8 @@ omniscient/
 │   │   │   └── bsr_tracker.py            # BSR/price tracking
 │   │   ├── core/                 # Utilities
 │   │   │   ├── bsr_regression.py         # BSR-to-sales model
-│   │   │   ├── proxy_manager.py          # Rotating proxy
+│   │   │   ├── fba_calculator.py         # FBA fee estimation
+│   │   │   ├── proxy_manager.py          # Rotating proxy (free + paid)
 │   │   │   ├── middleware.py             # Logging + error handling
 │   │   │   └── cache.py                  # Redis cache
 │   │   ├── llm/                  # LLM abstraction
@@ -209,17 +217,20 @@ omniscient/
 │   │   │   ├── anthropic_client.py
 │   │   │   └── openai_client.py
 │   │   └── workers/              # Celery tasks
-│   ├── migrations/               # Alembic migrations
-│   └── tests/                    # pytest suite (71 tests)
+│   ├── migrations/               # Alembic migrations (4 versions)
+│   └── tests/                    # pytest suite
 │
 ├── frontend/
 │   └── src/
 │       ├── app/                  # Next.js pages
 │       │   ├── page.tsx                  # Dashboard
 │       │   ├── niches/                   # Explorer + detail
+│       │   ├── products/                 # Product detail by ASIN
 │       │   ├── recommendations/          # Opportunity briefs
+│       │   ├── docs/                     # Documentation page
 │       │   └── settings/                 # Credentials config
 │       ├── components/
+│       │   ├── sidebar.tsx               # Navigation sidebar
 │       │   ├── ui/                       # shadcn-style primitives
 │       │   └── charts/                   # 9 Recharts components
 │       └── lib/                  # API client, utilities
@@ -227,16 +238,18 @@ omniscient/
 
 ---
 
-## API Endpoints
+## API Endpoints (28)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/v1/niches/` | Create a new niche for analysis |
 | `GET` | `/api/v1/niches/` | List niches with pagination |
 | `GET` | `/api/v1/niches/{id}` | Full niche detail |
+| `DELETE` | `/api/v1/niches/{id}` | Delete a niche |
 | `GET` | `/api/v1/niches/{id}/products` | Products in niche |
 | `GET` | `/api/v1/niches/{id}/competitors` | Competitor analysis |
 | `GET` | `/api/v1/niches/{id}/keywords` | Keyword data |
+| `GET` | `/api/v1/niches/{id}/reviews` | Review pain points |
 | `GET` | `/api/v1/niches/{id}/financials` | 52-week projections |
 | `GET` | `/api/v1/niches/{id}/suppliers` | Supplier data |
 | `GET` | `/api/v1/products/{asin}` | Product detail by ASIN |
@@ -244,11 +257,14 @@ omniscient/
 | `GET` | `/api/v1/products/{asin}/price-history` | Price time-series |
 | `GET` | `/api/v1/recommendations/` | All recommendations |
 | `GET` | `/api/v1/recommendations/{id}` | Full opportunity brief |
-| `POST` | `/api/v1/jobs/analyze-niche` | Trigger background analysis |
+| `POST` | `/api/v1/jobs/analyze` | Trigger analysis by keyword |
+| `POST` | `/api/v1/jobs/analyze-niche` | Trigger analysis for existing niche |
 | `GET` | `/api/v1/jobs/{id}/status` | Poll job progress |
 | `GET` | `/api/v1/settings/` | View settings |
 | `PUT` | `/api/v1/settings/` | Update credentials |
-| `GET` | `/api/v1/exports/niches/{id}/csv` | Export niche data |
+| `GET` | `/api/v1/exports/niches/{id}/csv` | Export niche data as CSV |
+| `GET` | `/api/v1/exports/recommendations/{id}/pdf` | Export recommendation as PDF |
+| `GET` | `/health` | Health check |
 
 Full interactive docs at http://localhost:8000/docs after starting the backend.
 
@@ -273,10 +289,14 @@ How Omniscient compares to popular Amazon seller tools:
 | Competitor listing quality scoring | Yes (7 dimensions) | No | No | No |
 | Review sentiment analysis (AI) | Yes (LLM-powered) | No | No | No |
 | Review velocity gap detection | Yes | No | No | No |
-| Landed cost calculator (China to FBA) | Yes (tariffs, duties, shipping) | Basic | Yes | Basic |
+| 1688.com supplier scraping | Yes (factory pricing, MOQ, ratings) | No | No | No |
+| Landed cost calculator (China to FBA) | Yes (tariffs, duties, FBA fees) | Basic | Yes | Basic |
+| Product blueprint (complaint-driven design) | Yes (AI-generated) | No | No | No |
+| Consolidated financial report | Yes (FBA fees, unit economics, P&L) | No | No | No |
 | 52-week financial projections | Yes (3 scenarios) | No | No | No |
 | Opportunity scoring (0-100) | Yes (9 sub-scores + 9 filters) | Yes (simpler) | Yes (simpler) | Yes (simpler) |
 | PPC budget planning | Yes (3-phase) | Yes | No | No |
+| Free proxy rotation | Yes (proxyscrape.com) | N/A | N/A | N/A |
 | Launch playbook generation | Yes (AI-generated) | No | No | No |
 | Supplier comparison (AI) | Yes | No | Yes | No |
 | Self-hosted / no subscription | Yes | No ($99/mo) | No ($49/mo) | No ($30/mo) |
@@ -302,37 +322,37 @@ How Omniscient compares to popular Amazon seller tools:
 Keyword Input
     |
     v
-1. Scrape Amazon search results (top 3 pages)
+ 1. Scrape Amazon search results (top 3 pages)
     |
     v
-2. Scrape product detail pages for each result
+ 2. Scrape product detail pages for each result
     |
     v
-3. Competitor analysis (listing quality, vulnerabilities)
+ 3. Competitor analysis (listing quality, vulnerabilities)
     |
     v
-4. LLM review analysis (sentiment, pain points, opportunities)
+ 4. LLM review analysis (sentiment, pain points, opportunities)
     |
     v
-5. Product spec generation (differentiation strategy)
+ 5. Product blueprint (complaint-driven product design)
     |
     v
-6. Supplier sourcing + landed cost calculation
+ 6. 1688.com supplier scraping + landed cost calculation
     |
     v
-7. PPC keyword portfolio + budget planning
+ 7. PPC keyword portfolio + budget planning
     |
     v
-8. Review strategy (Vine enrollment, organic velocity)
+ 8. Review strategy (Vine enrollment, organic velocity)
     |
     v
-9. 52-week financial projections (bull / base / bear)
+ 9. 52-week financial projections (bull / base / bear)
     |
     v
-10. Omniscient Score (0-100) + confidence tier
+10. Consolidated financial report + FBA fee breakdown
     |
     v
-11. Full recommendation with launch playbook
+11. Omniscient Score (0-100) + full recommendation brief
 ```
 
 ---

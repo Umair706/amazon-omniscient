@@ -28,6 +28,7 @@ class RecommendationResponse(BaseModel):
 
     id: int
     niche_id: int
+    niche_name: str | None = None
 
     # Core scores
     omniscient_score: Decimal = Field(ge=0, le=100)
