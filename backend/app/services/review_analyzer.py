@@ -131,6 +131,111 @@ Use the same JSON structure as the inputs."""
             "competitor_mentions": [],
         }
 
+    async def generate_review_intelligence(
+        self,
+        all_reviews: list[dict],
+        product_reviews: dict[str, list[dict]],
+        niche_keyword: str,
+        product_titles: dict[str, str],
+    ) -> dict:
+        """
+        Cross-product review intelligence synthesis.
+
+        Analyzes all reviews across all products to find patterns, personas,
+        purchase drivers/barriers, and market gaps.
+        """
+        total_reviews = len(all_reviews)
+        if total_reviews == 0:
+            return {
+                "total_reviews_analyzed": 0,
+                "overall_sentiment": "neutral",
+                "sentiment_score": 50,
+                "key_insights": [],
+                "customer_personas": [],
+                "purchase_drivers": [],
+                "purchase_barriers": [],
+                "trending_complaints": [],
+                "market_gaps": [],
+                "best_reviewed_features": [],
+                "worst_reviewed_features": [],
+            }
+
+        # Build a summary of reviews per product for the prompt
+        # Include more reviews per product (up to 20) for richer market gap analysis
+        product_summaries = []
+        for asin, reviews in list(product_reviews.items())[:10]:
+            title = product_titles.get(asin, asin)
+            if not reviews:
+                continue
+            avg_rating = sum(r.get("rating", 3) for r in reviews) / len(reviews)
+            # Include more reviews and prioritize low-rating reviews for gap analysis
+            low_rated = [r for r in reviews if r.get("rating", 5) <= 3]
+            high_rated = [r for r in reviews if r.get("rating", 5) >= 4]
+            # Mix: up to 12 low-rated (rich in gaps) + up to 8 high-rated
+            sample = low_rated[:12] + high_rated[:8]
+            sample_reviews = self._format_reviews_for_prompt(sample)
+            product_summaries.append(
+                f"Product: {title} (ASIN: {asin})\n"
+                f"Reviews: {len(reviews)}, Avg rating: {avg_rating:.1f}\n"
+                f"Low-rated reviews ({len(low_rated)} total): shows complaints & unmet needs\n"
+                f"Sample reviews:\n{sample_reviews}"
+            )
+
+        combined_text = "\n\n===\n\n".join(product_summaries)
+
+        prompt = f"""Analyze reviews across multiple competing products in the "{niche_keyword}" niche on Amazon. Synthesize a comprehensive review intelligence report.
+
+Total reviews analyzed: {total_reviews}
+Products covered: {len(product_reviews)}
+
+{combined_text}
+
+IMPORTANT: Pay special attention to the actual review text content when identifying market_gaps. Look for:
+- Features customers explicitly wish existed but no product offers
+- Use cases customers describe that current products fail at
+- Complaints that appear across multiple products with no solution
+- Customer suggestions and "I wish this product had..." statements
+- Comparisons where customers say "compared to [other product type], this lacks..."
+
+Return a JSON object:
+{{
+    "total_reviews_analyzed": {total_reviews},
+    "overall_sentiment": "<positive|mixed|negative>",
+    "sentiment_score": <0-100>,
+    "key_insights": [
+        {{
+            "insight": "<specific data-backed insight citing review content>",
+            "category": "<quality|feature|price|shipping|packaging>",
+            "impact": "<high|medium|low>",
+            "products_affected": <number>,
+            "actionable_recommendation": "<specific recommendation>"
+        }}
+    ],
+    "customer_personas": [
+        {{
+            "persona": "<persona name>",
+            "percentage": <estimated % of buyers>,
+            "needs": ["<need 1>", "<need 2>"],
+            "price_sensitivity": "<low|medium|high>",
+            "brand_loyalty": "<low|medium|high>"
+        }}
+    ],
+    "purchase_drivers": ["<why people buy — cite specific review themes>"],
+    "purchase_barriers": ["<why people don't buy or return — cite specific complaints>"],
+    "trending_complaints": ["<issues mentioned repeatedly across multiple products>"],
+    "market_gaps": ["<specific unmet need extracted from review content — include the customer language that reveals this gap>"],
+    "best_reviewed_features": [
+        {{"feature": "<feature>", "avg_rating_when_mentioned": <rating>}}
+    ],
+    "worst_reviewed_features": [
+        {{"feature": "<feature>", "avg_rating_when_mentioned": <rating>}}
+    ]
+}}
+
+Focus on actionable, specific insights. Back claims with data where possible."""
+
+        return await self.llm.generate_json(prompt, max_tokens=8192)
+
     async def analyze_competitive_reviews(
         self,
         competitor_reviews: dict[str, list[dict]],

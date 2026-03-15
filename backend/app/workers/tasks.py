@@ -305,6 +305,12 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                         if detail.get(key) is not None:
                             p[key] = detail[key]
 
+            # Ensure image_url from search results flows into detailed_products
+            search_images = {p.get("asin"): p.get("image_url") for p in products_data if p.get("image_url")}
+            for d in detailed_products:
+                if not d.get("image_url") and d.get("asin") in search_images:
+                    d["image_url"] = search_images[d["asin"]]
+
             task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
 
         # ── Step 3: Competitor analysis ────────────────────────────────
@@ -319,7 +325,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         )
 
         # ── Step 4: Analyze reviews (top 10 products) ──────────────────
-        task.update_state(state="PROGRESS", meta={"step": "review_analysis", "progress": 45})
+        task.update_state(state="PROGRESS", meta={"step": "review_analysis", "progress": 38})
         from app.services.review_analyzer import ReviewAnalyzer
         review_analyzer = ReviewAnalyzer(llm_client)
 
@@ -331,13 +337,67 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("Review analysis failed: %s", e)
 
-        # ── Step 4b: Product Blueprint (complaint analysis) ──────────
+        # ── Step 4b: Review Intelligence (deep cross-product synthesis) ──
+        task.update_state(state="PROGRESS", meta={"step": "review_intelligence", "progress": 42})
+        review_intelligence = None
+        competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
+        product_titles_map = {
+            p.get("asin", ""): p.get("title", "")
+            for p in detailed_products if p.get("asin")
+        }
+        if competitor_reviews_map and llm_client:
+            try:
+                # Build flat list of all review dicts for the intelligence method
+                all_review_dicts = []
+                for reviews_list in competitor_reviews_map.values():
+                    all_review_dicts.extend(reviews_list)
+
+                review_intelligence = await review_analyzer.generate_review_intelligence(
+                    all_reviews=all_review_dicts,
+                    product_reviews=competitor_reviews_map,
+                    niche_keyword=keyword,
+                    product_titles=product_titles_map,
+                )
+            except Exception as e:
+                logger.warning("Review intelligence failed: %s", e)
+
+        # ── Step 4c: Niche Intelligence Report (LLM) ──────────────────
+        task.update_state(state="PROGRESS", meta={"step": "niche_intelligence", "progress": 45})
+        from app.services.niche_intelligence import NicheIntelligenceService
+
+        niche_intelligence = None
+        product_overviews = None
+        if llm_client:
+            try:
+                intel_svc = NicheIntelligenceService(llm_client)
+                niche_intelligence = await intel_svc.generate_niche_overview(
+                    keyword, detailed_products, competitor_landscape,
+                    _build_base_metrics(competitor_landscape, detailed_products),
+                )
+            except Exception as e:
+                logger.warning("Niche intelligence generation failed: %s", e)
+
+            try:
+                intel_svc = NicheIntelligenceService(llm_client)
+                competitor_details = (
+                    competitor_landscape.get("competitor_details", [])
+                    if competitor_landscape else []
+                )
+                product_overviews = await intel_svc.generate_product_overviews(
+                    detailed_products, competitor_details,
+                )
+            except Exception as e:
+                logger.warning("Product overviews generation failed: %s", e)
+
+        # ── Step 4d: Product Blueprint (complaint analysis) ──────────
         task.update_state(state="PROGRESS", meta={"step": "product_blueprint", "progress": 48})
         from app.services.product_blueprint import ProductBlueprintService
         blueprint_svc = ProductBlueprintService(llm_client)
 
         product_blueprint = None
-        competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
+        # competitor_reviews_map already collected in step 4b above
+        if not competitor_reviews_map:
+            competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
         competitor_meta = _build_competitor_metadata(detailed_products)
         if competitor_reviews_map:
             try:
@@ -355,14 +415,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         from app.services.spec_generator import SpecGenerator
         spec_gen = SpecGenerator(llm_client)
 
+        # Extract common data used by both product spec and product ideas
+        pain_points = review_insights.get("pain_points", []) if review_insights else []
+        positive_themes = review_insights.get("positive_themes", []) if review_insights else []
+        price_range = competitor_landscape.get("price_stats", {}) if competitor_landscape else {}
+        competitor_list = competitor_landscape.get("competitors", []) if competitor_landscape else []
+
         product_spec = None
         try:
-            # Extract pain points and positive themes from review insights
-            pain_points = review_insights.get("pain_points", []) if review_insights else []
-            positive_themes = review_insights.get("positive_themes", []) if review_insights else []
-            price_range = competitor_landscape.get("price_stats", {}) if competitor_landscape else {}
-            competitor_list = competitor_landscape.get("competitors", []) if competitor_landscape else []
-
             product_spec = await spec_gen.generate_product_spec(
                 niche_keyword=keyword,
                 pain_points=pain_points,
@@ -372,6 +432,22 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             )
         except Exception as e:
             logger.warning("Product spec generation failed: %s", e)
+
+        # ── Step 5b: Product Ideas ──────────────────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "product_ideas", "progress": 53})
+        product_ideas = None
+        if llm_client:
+            try:
+                product_ideas = await spec_gen.generate_product_ideas(
+                    niche_keyword=keyword,
+                    pain_points=pain_points,
+                    positive_themes=positive_themes,
+                    competitor_data=competitor_list,
+                    price_range=price_range,
+                    product_blueprint=product_blueprint,
+                )
+            except Exception as e:
+                logger.warning("Product ideas generation failed: %s", e)
 
         # ── Step 6a: Supplier scraping from 1688 ──────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_scraping", "progress": 55})
@@ -395,6 +471,24 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                 scraped_suppliers = await _translate_supplier_fields(llm_client, scraped_suppliers)
             except Exception as e:
                 logger.warning("Supplier translation failed: %s", e)
+
+        # ── Step 6a-iii: Per-product supplier matching ────────────────
+        task.update_state(state="PROGRESS", meta={"step": "supplier_matching", "progress": 58})
+        from app.services.supplier_match_service import SupplierMatchService
+
+        product_supplier_matches = []
+        if llm_client:
+            try:
+                match_svc = SupplierMatchService(
+                    llm_client=llm_client,
+                    supplier_scraper=supplier_scraper,
+                )
+                product_supplier_matches = await match_svc.find_matches_for_products(
+                    products=detailed_products[:10],
+                    max_suppliers_per_product=3,
+                )
+            except Exception as e:
+                logger.warning("Per-product supplier matching failed: %s", e)
 
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
@@ -562,6 +656,11 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             marketing_plan=marketing_plan,
             product_blueprint=product_blueprint,
             financial_report=financial_report,
+            niche_overview=niche_intelligence,
+            product_overviews=product_overviews,
+            product_ideas=product_ideas,
+            review_intelligence=review_intelligence,
+            product_supplier_matches=product_supplier_matches,
         )
 
         await db.commit()
@@ -863,6 +962,8 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
             existing.current_bsr = p.get("bsr", existing.current_bsr)
             existing.rating = p.get("rating", existing.rating)
             existing.review_count = p.get("review_count", existing.review_count)
+            if p.get("image_url"):
+                existing.image_url = p["image_url"]
             product_ids.append(existing.id)
         else:
             product = Product(
@@ -873,6 +974,7 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
                 current_bsr=p.get("bsr"),
                 rating=p.get("rating"),
                 review_count=p.get("review_count", 0),
+                image_url=p.get("image_url"),
             )
             db.add(product)
             await db.flush()

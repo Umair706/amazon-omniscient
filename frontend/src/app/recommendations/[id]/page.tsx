@@ -54,10 +54,15 @@ interface RecommendationDetail {
   launch_playbook: any;
   product_blueprint: any;
   financial_report: any;
+  niche_overview: any;
+  product_overviews: any;
+  product_ideas: any;
+  review_intelligence: any;
+  product_supplier_matches: any;
   generated_at: string;
 }
 
-type TabId = "overview" | "product" | "blueprint" | "financials" | "marketing" | "playbook";
+type TabId = "overview" | "market-intel" | "competitors" | "product-ideas" | "suppliers" | "reviews" | "product" | "blueprint" | "financials" | "marketing" | "playbook";
 
 export default function OpportunityBriefPage() {
   const params = useParams();
@@ -111,11 +116,16 @@ export default function OpportunityBriefPage() {
 
   const tabs: { id: TabId; label: string }[] = [
     { id: "overview", label: "Overview" },
+    { id: "market-intel", label: "Market Intel" },
+    { id: "competitors", label: "Competitors" },
+    { id: "product-ideas", label: "Product Ideas" },
+    { id: "suppliers", label: "Suppliers" },
+    { id: "reviews", label: "Reviews" },
     { id: "product", label: "Product Strategy" },
-    { id: "blueprint", label: "Product Blueprint" },
-    { id: "financials", label: "Unit Economics" },
+    { id: "blueprint", label: "Blueprint" },
+    { id: "financials", label: "Financials" },
     { id: "marketing", label: "Marketing" },
-    { id: "playbook", label: "Launch Playbook" },
+    { id: "playbook", label: "Playbook" },
   ];
 
   return (
@@ -158,8 +168,8 @@ export default function OpportunityBriefPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b">
-        <div className="flex gap-4">
+      <div className="border-b overflow-x-auto">
+        <div className="flex gap-4 min-w-max">
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -279,6 +289,532 @@ export default function OpportunityBriefPage() {
               )}
             </CardContent>
           </Card>
+        </div>
+      )}
+
+      {/* Market Intelligence Tab */}
+      {tab === "market-intel" && (
+        <div className="space-y-6">
+          {rec.niche_overview ? (
+            <>
+              <Card>
+                <CardHeader><CardTitle className="text-lg">Market Overview</CardTitle></CardHeader>
+                <CardContent>
+                  <p className="text-sm leading-relaxed whitespace-pre-line">
+                    {rec.niche_overview.market_narrative}
+                  </p>
+                </CardContent>
+              </Card>
+
+              {rec.niche_overview.key_takeaway && (
+                <Card className="border-primary/50 bg-primary/5">
+                  <CardContent className="p-4">
+                    <p className="font-semibold text-primary">{rec.niche_overview.key_takeaway}</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {rec.niche_overview.market_size_assessment && (
+                <Card>
+                  <CardHeader><CardTitle className="text-sm">Market Size Assessment</CardTitle></CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">{rec.niche_overview.market_size_assessment}</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {rec.niche_overview.trend_analysis && (
+                <Card>
+                  <CardHeader><CardTitle className="text-sm">Trend Analysis</CardTitle></CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">{rec.niche_overview.trend_analysis}</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {rec.niche_overview.competitive_dynamics && (
+                <Card>
+                  <CardHeader><CardTitle className="text-sm">Competitive Dynamics</CardTitle></CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">{rec.niche_overview.competitive_dynamics}</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader><CardTitle className="text-sm">Entry Barriers</CardTitle></CardHeader>
+                  <CardContent>
+                    {rec.niche_overview.entry_barriers?.length > 0 ? (
+                      <ul className="space-y-2">
+                        {rec.niche_overview.entry_barriers.map((barrier: string, i: number) => (
+                          <li key={i} className="flex items-start gap-2 text-sm">
+                            <AlertTriangle className="h-4 w-4 text-rejected shrink-0 mt-0.5" />
+                            {barrier}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No entry barriers identified.</p>
+                    )}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader><CardTitle className="text-sm">Opportunities</CardTitle></CardHeader>
+                  <CardContent>
+                    {rec.niche_overview.opportunity_windows?.length > 0 ? (
+                      <ul className="space-y-2">
+                        {rec.niche_overview.opportunity_windows.map((opp: string, i: number) => (
+                          <li key={i} className="flex items-start gap-2 text-sm">
+                            <Lightbulb className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                            {opp}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No opportunities identified.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No market intelligence available.
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Competitors Tab */}
+      {tab === "competitors" && (
+        <div className="space-y-4">
+          {rec.product_overviews && rec.product_overviews.length > 0 ? (
+            rec.product_overviews.map((p: any) => (
+              <Card key={p.asin}>
+                <CardContent className="p-4">
+                  <div className="flex gap-4 items-start">
+                    {p.image_url && (
+                      <img
+                        src={p.image_url}
+                        alt={p.title || p.asin}
+                        className="w-16 h-16 object-contain rounded border shrink-0"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1 min-w-0 mr-3">
+                          <h4 className="font-semibold text-sm truncate">{p.title || p.asin}</h4>
+                          <div className="flex gap-2 items-center mt-0.5 text-xs text-muted-foreground">
+                            <span>{p.asin}</span>
+                            {p.price && <span>{formatCurrency(p.price)}</span>}
+                            {p.rating && <span>{p.rating}&#9733;</span>}
+                            {p.review_count && <span>{p.review_count} reviews</span>}
+                          </div>
+                          <p className="text-sm text-muted-foreground mt-1">{p.overview}</p>
+                        </div>
+                        <Badge variant={p.threat_level === "high" ? "destructive" : p.threat_level === "medium" ? "secondary" : "outline"}>
+                          {p.threat_level} threat
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mt-3">
+                    <div>
+                      <p className="text-xs font-medium text-green-600 mb-1">Strengths</p>
+                      <ul className="space-y-1">
+                        {p.strengths?.map((s: string, i: number) => (
+                          <li key={i} className="text-xs text-muted-foreground flex items-start gap-1">
+                            <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0 mt-0.5" />
+                            {s}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-red-600 mb-1">Weaknesses</p>
+                      <ul className="space-y-1">
+                        {p.weaknesses?.map((w: string, i: number) => (
+                          <li key={i} className="text-xs text-muted-foreground flex items-start gap-1">
+                            <AlertTriangle className="h-3 w-3 text-red-500 shrink-0 mt-0.5" />
+                            {w}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  {(p.what_they_do_well || p.vulnerability_to_exploit) && (
+                    <div className="mt-3 pt-3 border-t grid grid-cols-2 gap-4">
+                      {p.what_they_do_well && (
+                        <div>
+                          <p className="text-xs font-medium mb-1">What they do well</p>
+                          <p className="text-xs text-muted-foreground">{p.what_they_do_well}</p>
+                        </div>
+                      )}
+                      {p.vulnerability_to_exploit && (
+                        <div>
+                          <p className="text-xs font-medium mb-1">Vulnerability to exploit</p>
+                          <p className="text-xs text-muted-foreground">{p.vulnerability_to_exploit}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No competitor analysis available.
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Product Ideas Tab */}
+      {tab === "product-ideas" && (
+        <div className="space-y-4">
+          {rec.product_ideas && rec.product_ideas.length > 0 ? (
+            rec.product_ideas.map((idea: any, i: number) => (
+              <Card key={i}>
+                <CardHeader>
+                  <CardTitle className="text-base">{idea.idea_name}</CardTitle>
+                  <div className="flex gap-2 flex-wrap">
+                    {idea.target_price && <Badge>Target: {formatCurrency(idea.target_price)}</Badge>}
+                    {idea.estimated_difficulty && <Badge variant="outline">{idea.estimated_difficulty} difficulty</Badge>}
+                    {idea.estimated_margin && <Badge variant="outline">{idea.estimated_margin} margin</Badge>}
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm">{idea.concept}</p>
+                  {idea.key_differentiators?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium mb-1">Key Differentiators</p>
+                      <ul className="space-y-1">
+                        {idea.key_differentiators.map((d: string, j: number) => (
+                          <li key={j} className="text-xs text-muted-foreground flex items-start gap-1">
+                            <Lightbulb className="h-3 w-3 text-primary shrink-0 mt-0.5" />
+                            {d}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {idea.pain_points_addressed?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium mb-1">Pain Points Addressed</p>
+                      <ul className="space-y-1">
+                        {idea.pain_points_addressed.map((pp: string, j: number) => (
+                          <li key={j} className="text-xs text-muted-foreground flex items-start gap-1">
+                            <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0 mt-0.5" />
+                            {pp}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {idea.why_it_works && (
+                    <p className="text-sm text-muted-foreground italic">{idea.why_it_works}</p>
+                  )}
+                  {idea.risk_factors?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium mb-1">Risk Factors</p>
+                      <ul className="space-y-1">
+                        {idea.risk_factors.map((r: string, j: number) => (
+                          <li key={j} className="text-xs text-muted-foreground flex items-start gap-1">
+                            <AlertTriangle className="h-3 w-3 text-rejected shrink-0 mt-0.5" />
+                            {r}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {idea.supplier_search_terms?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium mb-1">1688 Search Terms</p>
+                      <div className="flex gap-1 flex-wrap">
+                        {idea.supplier_search_terms.map((term: string, j: number) => (
+                          <Badge key={j} variant="secondary" className="text-xs">{term}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No product ideas available.
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Suppliers Tab */}
+      {tab === "suppliers" && (
+        <div className="space-y-6">
+          {rec.product_supplier_matches && rec.product_supplier_matches.length > 0 ? (
+            rec.product_supplier_matches.map((pm: any) => (
+              <Card key={pm.asin}>
+                <CardHeader>
+                  <CardTitle className="text-sm truncate">{pm.product_title}</CardTitle>
+                  <p className="text-xs text-muted-foreground">{pm.asin}</p>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {pm.matched_suppliers?.length > 0 ? (
+                    pm.matched_suppliers.map((s: any, i: number) => (
+                      <div key={i} className="border rounded p-3">
+                        <div className="flex gap-3 items-start">
+                          {s.image_url && (
+                            <img
+                              src={s.image_url}
+                              alt={s.product_title || s.supplier_name || "Supplier product"}
+                              className="w-14 h-14 object-contain rounded border shrink-0"
+                            />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start">
+                              <div className="min-w-0">
+                                <span className="font-medium text-sm">{s.supplier_name || s.shop_name || "Unknown Supplier"}</span>
+                                {s.product_title && (
+                                  <p className="text-xs text-muted-foreground truncate">{s.product_title}</p>
+                                )}
+                              </div>
+                              <Badge variant={s.match_score >= 90 ? "default" : "secondary"} className="shrink-0 ml-2">
+                                {s.match_score}% match
+                              </Badge>
+                            </div>
+                            {s.match_reasoning && (
+                              <p className="text-xs text-muted-foreground mt-1">{s.match_reasoning}</p>
+                            )}
+                            <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+                              {(s.price_min_usd != null || s.price_max_usd != null) && (
+                                <span>
+                                  {formatCurrency(s.price_min_usd || 0)}-{formatCurrency(s.price_max_usd || 0)}
+                                </span>
+                              )}
+                              {s.moq && <span>MOQ: {s.moq}</span>}
+                              {s.location && <span>{s.location}</span>}
+                            </div>
+                            {s.product_url && (
+                              <a
+                                href={s.product_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-primary mt-1 inline-block hover:underline"
+                              >
+                                View on 1688 &rarr;
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No close supplier match found</p>
+                  )}
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No per-product supplier matches available.
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Reviews Intelligence Tab */}
+      {tab === "reviews" && (
+        <div className="space-y-6">
+          {rec.review_intelligence ? (
+            <>
+              {/* Header stats */}
+              <div className="grid grid-cols-3 gap-4">
+                <StatCard
+                  title="Reviews Analyzed"
+                  value={rec.review_intelligence.total_reviews_analyzed?.toString() || "0"}
+                  icon={Star}
+                />
+                <StatCard
+                  title="Sentiment Score"
+                  value={`${rec.review_intelligence.sentiment_score || 0}/100`}
+                  icon={TrendingUp}
+                />
+                <StatCard
+                  title="Overall Sentiment"
+                  value={rec.review_intelligence.overall_sentiment || "N/A"}
+                  icon={Target}
+                />
+              </div>
+
+              {/* Key Insights */}
+              {rec.review_intelligence.key_insights?.length > 0 && (
+                <Card>
+                  <CardHeader><CardTitle className="text-lg">Key Insights</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="space-y-0">
+                      {rec.review_intelligence.key_insights.map((insight: any, i: number) => (
+                        <div key={i} className="border-b last:border-0 py-3">
+                          <div className="flex justify-between items-start">
+                            <p className="text-sm font-medium flex-1 mr-2">{insight.insight}</p>
+                            <div className="flex gap-1 shrink-0">
+                              <Badge variant={insight.impact === "high" ? "destructive" : insight.impact === "medium" ? "secondary" : "outline"}>
+                                {insight.impact}
+                              </Badge>
+                              {insight.category && <Badge variant="outline">{insight.category}</Badge>}
+                            </div>
+                          </div>
+                          {insight.actionable_recommendation && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {insight.actionable_recommendation}
+                            </p>
+                          )}
+                          {insight.products_affected && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Affects {insight.products_affected} products
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Customer Personas */}
+              {rec.review_intelligence.customer_personas?.length > 0 && (
+                <Card>
+                  <CardHeader><CardTitle className="text-lg">Customer Personas</CardTitle></CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {rec.review_intelligence.customer_personas.map((persona: any, i: number) => (
+                        <div key={i} className="p-4 rounded-lg border">
+                          <div className="flex justify-between items-center mb-2">
+                            <h4 className="font-medium text-sm">{persona.persona}</h4>
+                            {persona.percentage && (
+                              <Badge variant="secondary">{persona.percentage}%</Badge>
+                            )}
+                          </div>
+                          {persona.needs?.length > 0 && (
+                            <div className="mb-2">
+                              <p className="text-xs text-muted-foreground">Needs: {persona.needs.join(", ")}</p>
+                            </div>
+                          )}
+                          <div className="flex gap-3 text-xs text-muted-foreground">
+                            {persona.price_sensitivity && <span>Price sensitivity: {persona.price_sensitivity}</span>}
+                            {persona.brand_loyalty && <span>Brand loyalty: {persona.brand_loyalty}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Purchase Drivers vs Barriers */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader><CardTitle className="text-sm text-green-600">Why People Buy</CardTitle></CardHeader>
+                  <CardContent>
+                    {rec.review_intelligence.purchase_drivers?.length > 0 ? (
+                      <ul className="space-y-2">
+                        {rec.review_intelligence.purchase_drivers.map((driver: string, i: number) => (
+                          <li key={i} className="flex items-start gap-2 text-sm">
+                            <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
+                            {driver}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No data available.</p>
+                    )}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader><CardTitle className="text-sm text-red-600">Why People Don&apos;t Buy</CardTitle></CardHeader>
+                  <CardContent>
+                    {rec.review_intelligence.purchase_barriers?.length > 0 ? (
+                      <ul className="space-y-2">
+                        {rec.review_intelligence.purchase_barriers.map((barrier: string, i: number) => (
+                          <li key={i} className="flex items-start gap-2 text-sm">
+                            <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                            {barrier}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No data available.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Market Gaps */}
+              {rec.review_intelligence.market_gaps?.length > 0 && (
+                <Card>
+                  <CardHeader><CardTitle className="text-lg">Market Gaps (Unmet Needs)</CardTitle></CardHeader>
+                  <CardContent>
+                    <ul className="space-y-2">
+                      {rec.review_intelligence.market_gaps.map((gap: string, i: number) => (
+                        <li key={i} className="flex items-start gap-2 text-sm">
+                          <Lightbulb className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                          {gap}
+                        </li>
+                      ))}
+                    </ul>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Best/Worst Reviewed Features */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {rec.review_intelligence.best_reviewed_features?.length > 0 && (
+                  <Card>
+                    <CardHeader><CardTitle className="text-sm text-green-600">Best Reviewed Features</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {rec.review_intelligence.best_reviewed_features.map((f: any, i: number) => (
+                          <div key={i} className="flex justify-between text-sm">
+                            <span>{f.feature}</span>
+                            <Badge variant="secondary">{f.avg_rating_when_mentioned}&#9733;</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+                {rec.review_intelligence.worst_reviewed_features?.length > 0 && (
+                  <Card>
+                    <CardHeader><CardTitle className="text-sm text-red-600">Worst Reviewed Features</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {rec.review_intelligence.worst_reviewed_features.map((f: any, i: number) => (
+                          <div key={i} className="flex justify-between text-sm">
+                            <span>{f.feature}</span>
+                            <Badge variant="destructive">{f.avg_rating_when_mentioned}&#9733;</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </>
+          ) : (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No review intelligence available.
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 

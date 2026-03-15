@@ -1,4 +1,4 @@
-"""Supplier and LandedCostCalculation models."""
+"""Supplier, LandedCostCalculation, and ProductSupplierMatch models."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -99,3 +99,23 @@ class LandedCostCalculation(Base):
         back_populates="landed_cost_calculations"
     )
     niche: Mapped["Niche"] = relationship(back_populates="landed_cost_calculations")
+
+
+class ProductSupplierMatch(Base):
+    """Links individual Amazon products to their matched 1688 suppliers."""
+
+    __tablename__ = "product_supplier_matches"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("suppliers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    match_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    match_reasoning: Mapped[str | None] = mapped_column(Text)

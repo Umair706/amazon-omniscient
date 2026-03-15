@@ -70,6 +70,13 @@ class Recommendation(Base):
     product_blueprint: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     financial_report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Intelligence JSONB payloads
+    niche_overview: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    product_overviews: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    product_ideas: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    review_intelligence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    product_supplier_matches: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     generated_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 
     # ----- Relationships -----

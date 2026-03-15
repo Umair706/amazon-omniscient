@@ -159,6 +159,13 @@ export interface RecommendationDetail extends RecommendationSummary {
   ppc_strategy: Record<string, unknown> | null;
   product_blueprint: Record<string, unknown> | null;
   financial_report: Record<string, unknown> | null;
+
+  // Intelligence JSONB payloads
+  niche_overview: Record<string, unknown> | null;
+  product_overviews: Record<string, unknown>[] | null;
+  product_ideas: Record<string, unknown>[] | null;
+  review_intelligence: Record<string, unknown> | null;
+  product_supplier_matches: Record<string, unknown>[] | null;
 }
 
 // ── Financial Projections ────────────────────────────────────────────────

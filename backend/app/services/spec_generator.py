@@ -127,6 +127,77 @@ Rules:
 
         return await self.llm.generate_json(prompt, max_tokens=4096)
 
+    async def generate_product_ideas(
+        self,
+        niche_keyword: str,
+        pain_points: list[dict],
+        positive_themes: list[dict],
+        competitor_data: list[dict],
+        price_range: dict,
+        product_blueprint: dict | None = None,
+    ) -> list[dict]:
+        """
+        Generate 3-5 differentiated product ideas based on review gaps,
+        competitor weaknesses, and market opportunities.
+        """
+        blueprint_section = ""
+        if product_blueprint:
+            bp = product_blueprint.get("product_blueprint", {})
+            must_haves = bp.get("must_have_improvements", [])
+            differentiators = bp.get("differentiators", [])
+            if must_haves:
+                blueprint_section += "\nMust-have improvements from blueprint:\n"
+                for imp in must_haves[:5]:
+                    blueprint_section += f"  - {imp.get('improvement', '')}: {imp.get('why', '')}\n"
+            if differentiators:
+                blueprint_section += "\nDifferentiator opportunities from blueprint:\n"
+                for d in differentiators[:5]:
+                    blueprint_section += f"  - {d.get('feature', '')}: {d.get('marketing_angle', '')}\n"
+
+        prompt = f"""You are an Amazon FBA product development strategist. Based on the competitive analysis below, generate 3-5 differentiated product ideas for the "{niche_keyword}" niche.
+
+Review Pain Points (what customers hate about existing products):
+{self._format_pain_points(pain_points)}
+
+Positive Themes (what customers love — KEEP these):
+{self._format_positive_themes(positive_themes)}
+
+Competitor Landscape:
+- {len(competitor_data)} products analyzed
+- Price range: ${price_range.get('min', 0):.2f}-${price_range.get('max', 0):.2f}
+- Average price: ${price_range.get('avg', 0):.2f}
+
+{self._format_competitors(competitor_data[:5])}
+{blueprint_section}
+
+Generate 3-5 product ideas. Each idea should:
+- Address at least 2 specific pain points
+- Preserve the top positive features customers already love
+- Have a clear competitive advantage over existing products
+- Be feasible to manufacture in China (include Chinese search terms for 1688)
+- Target a specific price point that balances margin and competitiveness
+
+Return as a JSON array:
+[
+    {{
+        "idea_name": "<creative product name>",
+        "concept": "<2-3 sentence description of the product idea>",
+        "target_price": <recommended selling price as number>,
+        "key_differentiators": ["<unique feature 1>", "<unique feature 2>"],
+        "pain_points_addressed": ["<pain point 1>", "<pain point 2>"],
+        "estimated_difficulty": "<low|medium|high>",
+        "estimated_margin": "<estimated margin range like 20-30%>",
+        "why_it_works": "<explanation of why this product would succeed>",
+        "risk_factors": ["<risk 1>", "<risk 2>"],
+        "supplier_search_terms": ["<Chinese search term>", "<English search term>"]
+    }}
+]"""
+
+        result = await self.llm.generate_json(prompt, max_tokens=4096)
+        if not isinstance(result, list):
+            return []
+        return result
+
     @staticmethod
     def _format_pain_points(pain_points: list[dict]) -> str:
         if not pain_points:

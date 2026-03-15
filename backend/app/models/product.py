@@ -46,6 +46,7 @@ class Product(TimestampMixin, Base):
     has_a_plus: Mapped[bool | None] = mapped_column(Boolean)
     has_video: Mapped[bool | None] = mapped_column(Boolean)
     has_brand_story: Mapped[bool | None] = mapped_column(Boolean)
+    image_url: Mapped[str | None] = mapped_column(Text)
     image_count: Mapped[int | None] = mapped_column(Integer)
     bullet_count: Mapped[int | None] = mapped_column(Integer)
 

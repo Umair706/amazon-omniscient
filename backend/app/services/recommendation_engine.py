@@ -47,6 +47,11 @@ class RecommendationEngine:
         supplier_data: dict | None = None,
         product_blueprint: dict | None = None,
         financial_report: dict | None = None,
+        niche_overview: dict | None = None,
+        product_overviews: list | None = None,
+        product_ideas: list | None = None,
+        review_intelligence: dict | None = None,
+        product_supplier_matches: list | None = None,
     ) -> dict:
         """
         Generate the final recommendation for a niche.
@@ -98,6 +103,18 @@ class RecommendationEngine:
 
         if financial_report:
             recommendation_data["financial_report"] = financial_report
+
+        # Step 3b: Add intelligence data
+        if niche_overview:
+            recommendation_data["niche_overview"] = niche_overview
+        if product_overviews:
+            recommendation_data["product_overviews"] = product_overviews
+        if product_ideas:
+            recommendation_data["product_ideas"] = product_ideas
+        if review_intelligence:
+            recommendation_data["review_intelligence"] = review_intelligence
+        if product_supplier_matches:
+            recommendation_data["product_supplier_matches"] = product_supplier_matches
 
         # Step 4: Generate LLM executive summary
         if self.llm and score_result["confidence_tier"] != "FAIL":
@@ -238,6 +255,12 @@ Return a JSON object:
             ppc_strategy=data.get("ppc_strategy"),
             product_blueprint=data.get("product_blueprint"),
             financial_report=data.get("financial_report"),
+            # Intelligence JSONB payloads
+            niche_overview=data.get("niche_overview"),
+            product_overviews=data.get("product_overviews"),
+            product_ideas=data.get("product_ideas"),
+            review_intelligence=data.get("review_intelligence"),
+            product_supplier_matches=data.get("product_supplier_matches"),
             generated_at=now,
         )
         self.db.add(rec)

@@ -72,6 +72,13 @@ class RecommendationResponse(BaseModel):
     product_blueprint: dict | None = None
     financial_report: dict | None = None
 
+    # Intelligence JSONB payloads
+    niche_overview: dict | None = None
+    product_overviews: list | None = None
+    product_ideas: list | None = None
+    review_intelligence: dict | None = None
+    product_supplier_matches: list | None = None
+
     generated_at: datetime | None = None
 
 

@@ -658,29 +658,33 @@ class FinancialReportService:
 
         # --- Weeks 2+ : PPC spend + revenue (with 14-day hold) ---
         # Amazon holds payouts for ~14 days for new sellers, then pays biweekly.
-        # First payout arrives around week 3 (14-day hold from first sale in week 0/1).
+        # First payout arrives around week 3 (14-day hold from first sale in week 1).
         max_week = 26  # default end
         break_even_found = False
 
-        for week in range(2, 53):
-            week_cash_out = weekly_ppc
-            week_cash_in = 0.0
+        # Track actual units sold each week for delayed payout calculation
+        # Week 1 has sales at month-1 ramp
+        units_sold_by_week: dict[int, float] = {
+            1: weekly_sales_units * self.SALES_RAMP[0],
+        }
 
-            # Determine sales ramp for this week's month
+        for week in range(2, 53):
+            # PPC spend tapers over time as organic rank builds
             month_index = min((week - 1) // 4, 11)
             ramp = self.SALES_RAMP[month_index]
             ppc_taper = self.PPC_MONTHLY_TAPER[month_index]
-            tapered_ppc = round(launch_ppc_daily * 7 * ppc_taper, 2)
-            week_cash_out = tapered_ppc
+            week_cash_out = round(launch_ppc_daily * 7 * ppc_taper, 2)
 
-            units_this_week = round(weekly_sales_units * ramp)
+            # Units sold this week (fractional to preserve accuracy)
+            units_this_week = weekly_sales_units * ramp
+            units_sold_by_week[week] = units_this_week
 
             # Revenue arrives with a 2-week delay (Amazon 14-day hold)
-            if week >= 3:
-                # Revenue from sales 2 weeks ago
-                delayed_month = min((week - 3) // 4, 11)
-                delayed_ramp = self.SALES_RAMP[delayed_month]
-                delayed_units = round(weekly_sales_units * delayed_ramp)
+            week_cash_in = 0.0
+            delayed_units = 0.0
+            payout_week = week - 2  # Revenue from sales 2 weeks ago
+            if payout_week >= 1:
+                delayed_units = units_sold_by_week.get(payout_week, 0.0)
                 week_cash_in = round(net_revenue_per_unit * delayed_units, 2)
 
             balance = round(balance - week_cash_out + week_cash_in, 2)
@@ -689,7 +693,7 @@ class FinancialReportService:
             if week_cash_out > 0:
                 event_parts.append(f"PPC spend (tapered {int(ppc_taper * 100)}%)")
             if week_cash_in > 0:
-                event_parts.append(f"Amazon payout (~{int(round(delayed_units))} units)")
+                event_parts.append(f"Amazon payout (~{max(1, int(round(delayed_units)))} units)")
             event = " + ".join(event_parts) if event_parts else "No activity"
 
             # Check for break-even

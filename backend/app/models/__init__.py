@@ -14,7 +14,7 @@ from .price_history import PriceHistory
 from .product import Product
 from .recommendation import Recommendation
 from .review import Review, ReviewPainPoint
-from .supplier import LandedCostCalculation, Supplier
+from .supplier import LandedCostCalculation, ProductSupplierMatch, Supplier
 from .user_settings import UserSettings
 
 __all__ = [
@@ -29,6 +29,7 @@ __all__ = [
     "PPCKeyword",
     "PriceHistory",
     "Product",
+    "ProductSupplierMatch",
     "Recommendation",
     "Review",
     "ReviewPainPoint",
