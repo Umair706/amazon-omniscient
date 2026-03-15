@@ -67,6 +67,8 @@ class Recommendation(Base):
     risk_flags: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     launch_playbook: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     ppc_strategy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    product_blueprint: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    financial_report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     generated_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 

@@ -140,8 +140,27 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("Review analysis failed: %s", e)
 
+        # ── Step 4b: Product Blueprint (complaint analysis) ──────────
+        task.update_state(state="PROGRESS", meta={"step": "product_blueprint", "progress": 48})
+        from app.services.product_blueprint import ProductBlueprintService
+        blueprint_svc = ProductBlueprintService(llm_client)
+
+        product_blueprint = None
+        competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
+        competitor_meta = _build_competitor_metadata(detailed_products)
+        if competitor_reviews_map:
+            try:
+                product_blueprint = await blueprint_svc.generate_blueprint(
+                    niche_keyword=keyword,
+                    competitor_reviews=competitor_reviews_map,
+                    competitor_metadata=competitor_meta,
+                    price_range=competitor_landscape.get("price_stats") if competitor_landscape else None,
+                )
+            except Exception as e:
+                logger.warning("Product blueprint generation failed: %s", e)
+
         # ── Step 5: Generate product spec ──────────────────────────────
-        task.update_state(state="PROGRESS", meta={"step": "product_spec", "progress": 50})
+        task.update_state(state="PROGRESS", meta={"step": "product_spec", "progress": 52})
         from app.services.spec_generator import SpecGenerator
         spec_gen = SpecGenerator(llm_client)
 
@@ -246,6 +265,28 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("Marketing plan generation failed: %s", e)
 
+        # ── Step 10b: Consolidated financial report ─────────────────
+        task.update_state(state="PROGRESS", meta={"step": "financial_report", "progress": 90})
+        from app.services.financial_report import FinancialReportService
+        fin_report_svc = FinancialReportService()
+
+        financial_report = None
+        try:
+            # Estimate FOB cost from landed cost (reverse-engineer)
+            fob_estimate = metrics.get("landed_cost", 8) * 0.55  # FOB is roughly 55% of landed
+            financial_report = await fin_report_svc.generate_full_report(
+                selling_price=metrics.get("avg_price", 30),
+                unit_cost_fob=fob_estimate,
+                product_dims={"length": 10, "width": 6, "height": 4, "weight_lb": 1.1},
+                category=metrics.get("category", "default"),
+                order_quantity=metrics.get("initial_order_qty", 500),
+                estimated_monthly_sales=metrics.get("estimated_monthly_sales", 200),
+                avg_cpc=metrics.get("avg_cpc", 1.50),
+                launch_ppc_daily=metrics.get("ppc_daily_budget", 30),
+            )
+        except Exception as e:
+            logger.warning("Consolidated financial report failed: %s", e)
+
         # ── Step 11: Compute Omniscient Score & save recommendation ────
         task.update_state(state="PROGRESS", meta={"step": "scoring", "progress": 93})
         from app.services.recommendation_engine import RecommendationEngine
@@ -262,6 +303,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             review_strategy=review_strategy,
             financial_summary=financial_summary,
             marketing_plan=marketing_plan,
+            product_blueprint=product_blueprint,
+            financial_report=financial_report,
         )
 
         await db.commit()
@@ -603,6 +646,53 @@ async def _collect_reviews(db: AsyncSession, niche_id: int) -> list[str]:
     )
     result = await db.execute(stmt)
     return [row[0] for row in result.all() if row[0]]
+
+
+async def _collect_competitor_reviews(db: AsyncSession, niche_id: int) -> dict[str, list[dict]]:
+    """Collect reviews grouped by ASIN for all products in a niche."""
+    from app.models.product import Product
+    from app.models.review import Review
+
+    stmt = (
+        select(Product.asin, Review.rating, Review.title, Review.body, Review.verified_purchase, Review.helpful_votes)
+        .join(Review, Review.product_id == Product.id)
+        .where(Product.niche_id == niche_id)
+        .order_by(Product.asin, Review.helpful_votes.desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    reviews_by_asin: dict[str, list[dict]] = {}
+    for asin, rating, title, body, verified, helpful in rows:
+        if asin not in reviews_by_asin:
+            reviews_by_asin[asin] = []
+        # Cap at 30 reviews per ASIN to stay within LLM context limits
+        if len(reviews_by_asin[asin]) < 30:
+            reviews_by_asin[asin].append({
+                "rating": rating,
+                "title": title,
+                "body": body,
+                "verified_purchase": verified,
+                "helpful_votes": helpful or 0,
+            })
+
+    return reviews_by_asin
+
+
+def _build_competitor_metadata(detailed_products: list[dict]) -> list[dict]:
+    """Build compact competitor metadata for the blueprint service."""
+    return [
+        {
+            "asin": p.get("asin", ""),
+            "title": p.get("title", ""),
+            "price": p.get("price", 0),
+            "rating": p.get("rating", 0),
+            "review_count": p.get("review_count", 0),
+            "bsr": p.get("current_bsr") or p.get("bsr", 0),
+        }
+        for p in detailed_products
+        if p.get("asin")
+    ]
 
 
 async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict) -> dict | None:

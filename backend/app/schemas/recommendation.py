@@ -68,6 +68,8 @@ class RecommendationResponse(BaseModel):
     risk_flags: dict | None = None
     launch_playbook: dict | None = None
     ppc_strategy: dict | None = None
+    product_blueprint: dict | None = None
+    financial_report: dict | None = None
 
     generated_at: datetime | None = None
 

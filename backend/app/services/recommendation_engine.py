@@ -45,6 +45,8 @@ class RecommendationEngine:
         financial_summary: dict | None = None,
         marketing_plan: dict | None = None,
         supplier_data: dict | None = None,
+        product_blueprint: dict | None = None,
+        financial_report: dict | None = None,
     ) -> dict:
         """
         Generate the final recommendation for a niche.
@@ -91,11 +93,17 @@ class RecommendationEngine:
         if marketing_plan:
             recommendation_data["marketing_plan"] = marketing_plan
 
+        if product_blueprint:
+            recommendation_data["product_blueprint"] = product_blueprint
+
+        if financial_report:
+            recommendation_data["financial_report"] = financial_report
+
         # Step 4: Generate LLM executive summary
         if self.llm and score_result["confidence_tier"] != "FAIL":
             try:
                 summary = await self._generate_executive_summary(
-                    metrics, score_result, product_spec, financial_summary,
+                    metrics, score_result, product_spec, financial_summary, product_blueprint,
                 )
                 recommendation_data["executive_summary"] = summary
             except Exception as e:
@@ -120,8 +128,27 @@ class RecommendationEngine:
         score_result: dict,
         product_spec: dict | None,
         financial_summary: dict | None,
+        product_blueprint: dict | None = None,
     ) -> dict:
         """Generate an LLM executive summary of the recommendation."""
+        blueprint_section = ""
+        if product_blueprint:
+            bp = product_blueprint.get("product_blueprint", {})
+            priorities = product_blueprint.get("improvement_priorities", [])[:5]
+            priority_lines = "\n".join(
+                f"  {p.get('rank', '?')}. {p.get('improvement', '')} (score: {p.get('priority_score', '?')}/100)"
+                for p in priorities
+            )
+            blueprint_section = f"""
+
+PRODUCT BLUEPRINT:
+- Strategy: {bp.get('strategy_summary', 'N/A')}
+- Target price: ${bp.get('target_price_point', 'N/A')}
+- Must-have improvements: {len(bp.get('must_have_improvements', []))}
+- Differentiators: {len(bp.get('differentiators', []))}
+- Top improvement priorities:
+{priority_lines}"""
+
         prompt = f"""Generate an executive summary for this Amazon product opportunity analysis.
 
 OMNISCIENT SCORE: {score_result['omniscient_score']}/100 ({score_result['confidence_tier']})
@@ -144,6 +171,7 @@ HARD FILTERS:
 FINANCIALS:
 - Break-even week (base): {financial_summary.get('base', {}).get('break_even_week', 'N/A') if financial_summary else 'N/A'}
 - Launch capital: ${metrics.get('total_launch_capital', 'N/A')}
+{blueprint_section}
 
 Return a JSON object:
 {{
@@ -208,6 +236,8 @@ Return a JSON object:
             risk_flags={"fail_reasons": data.get("fail_reasons", []), "hard_filters": data.get("hard_filters", [])},
             launch_playbook=data.get("marketing_plan", {}).get("launch_playbook"),
             ppc_strategy=data.get("ppc_strategy"),
+            product_blueprint=data.get("product_blueprint"),
+            financial_report=data.get("financial_report"),
             generated_at=now,
         )
         self.db.add(rec)

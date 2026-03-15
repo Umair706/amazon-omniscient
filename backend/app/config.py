@@ -58,6 +58,7 @@ class Settings(BaseSettings):
 
     # ── Freightos ──────────────────────────────────────────────────────
     FREIGHTOS_API_KEY: str = ""
+    FREIGHTOS_API_SECRET: str = ""
 
     # ── Application ────────────────────────────────────────────────────
     APP_SECRET_KEY: str = "change-me-in-production"
