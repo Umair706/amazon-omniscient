@@ -219,6 +219,10 @@ The frontend starts on http://localhost:3000 and proxies API calls to http://loc
 | `ANTHROPIC_API_KEY` | When `LLM_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | When `LLM_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | For OpenAI-compatible APIs (e.g., local models) |
+| *(no key needed)* | When `LLM_PROVIDER=ollama` (local Ollama) |
+| *(no key needed)* | When `LLM_PROVIDER=local` (vLLM, llama.cpp, etc.) |
+
+> **Want to run LLMs locally for free?** See [GUIDE.md](GUIDE.md#1-llm-provider-setup) for detailed Ollama and vLLM setup instructions.
 
 ### Amazon APIs (optional for initial setup)
 
@@ -370,6 +374,11 @@ Check that you've set the correct API key for your chosen `LLM_PROVIDER`:
 - `qwen` needs `DASHSCOPE_API_KEY`
 - `anthropic` needs `ANTHROPIC_API_KEY`
 - `openai` needs `OPENAI_API_KEY`
+- `ollama` and `local` don't need an API key
 
 ### TimescaleDB extension not found
 The `docker-compose.yml` uses `timescale/timescaledb:latest-pg16`. If you're running Postgres locally without Docker, you need to install the TimescaleDB extension separately: https://docs.timescale.com/install/latest/
+
+---
+
+For detailed configuration including local LLM setup, Amazon API registration, proxy providers, limitations, and areas for improvement, see **[GUIDE.md](GUIDE.md)**.

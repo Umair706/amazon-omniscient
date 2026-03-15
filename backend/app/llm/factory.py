@@ -7,9 +7,11 @@ def create_llm_client(settings) -> BaseLLMClient:
     """
     Factory function: creates the appropriate LLM client based on settings.
 
-    LLM_PROVIDER=qwen      -> QwenClient (DEFAULT)
+    LLM_PROVIDER=qwen      -> QwenClient via DashScope API (DEFAULT)
     LLM_PROVIDER=anthropic  -> AnthropicClient
     LLM_PROVIDER=openai     -> OpenAIClient
+    LLM_PROVIDER=local      -> OpenAIClient pointed at a local server (Ollama, vLLM, llama.cpp, etc.)
+    LLM_PROVIDER=ollama     -> Alias for local, defaults to http://localhost:11434/v1
     """
     provider = settings.LLM_PROVIDER.lower()
 
@@ -39,8 +41,22 @@ def create_llm_client(settings) -> BaseLLMClient:
             base_url=settings.OPENAI_BASE_URL or None,
         )
 
+    elif provider in ("local", "ollama"):
+        from app.llm.openai_client import OpenAIClient
+
+        if provider == "ollama":
+            base_url = settings.OPENAI_BASE_URL or "http://localhost:11434/v1"
+        else:
+            base_url = settings.OPENAI_BASE_URL or "http://localhost:8080/v1"
+
+        return OpenAIClient(
+            api_key=settings.OPENAI_API_KEY or "not-needed",
+            model=settings.LLM_MODEL or "qwen2.5:14b",
+            base_url=base_url,
+        )
+
     else:
         raise ValueError(
             f"Unknown LLM_PROVIDER: '{provider}'. "
-            f"Supported providers: qwen, anthropic, openai"
+            f"Supported providers: qwen, anthropic, openai, local, ollama"
         )

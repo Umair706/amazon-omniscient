@@ -20,9 +20,9 @@ class OpenAIClient(BaseLLMClient):
         model: str = "gpt-4o",
         base_url: str | None = None,
     ):
-        if not api_key:
-            raise LLMError("OPENAI_API_KEY is required for OpenAI provider")
-        kwargs: dict = {"api_key": api_key}
+        if not api_key and not base_url:
+            raise LLMError("OPENAI_API_KEY is required for OpenAI provider (or set OPENAI_BASE_URL for local models)")
+        kwargs: dict = {"api_key": api_key or "not-needed"}
         if base_url:
             kwargs["base_url"] = base_url
         self.client = AsyncOpenAI(**kwargs)
