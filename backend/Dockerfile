@@ -8,15 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy application code first (hatch needs to see the package directory)
+COPY . .
+
 # Install Python dependencies
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || pip install --no-cache-dir .
+RUN pip install --no-cache-dir . 2>/dev/null || pip install --no-cache-dir -e .
 
 # Install Playwright browsers
-RUN pip install playwright && python -m playwright install chromium --with-deps
-
-# Copy application code
-COPY . .
+RUN python -m playwright install chromium --with-deps
 
 # Expose port
 EXPOSE 8000

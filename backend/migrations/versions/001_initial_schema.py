@@ -82,7 +82,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "last_scored_at",
-            postgresql.TIMESTAMPTZ(),
+            sa.TIMESTAMP(timezone=True),
             nullable=True,
         ),
         # Timestamps (TimestampMixin)
@@ -147,7 +147,7 @@ def upgrade() -> None:
             "product_weight_lbs", sa.Numeric(precision=8, scale=2), nullable=True
         ),
         sa.Column("product_dimensions", sa.String(length=100), nullable=True),
-        sa.Column("last_scraped_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("last_scraped_at", sa.TIMESTAMP(timezone=True), nullable=True),
         # Timestamps (TimestampMixin)
         sa.Column(
             "created_at",
@@ -224,7 +224,7 @@ def upgrade() -> None:
     # ── bsr_history (TimescaleDB hypertable) ────────────────────────
     op.create_table(
         "bsr_history",
-        sa.Column("time", postgresql.TIMESTAMPTZ(), nullable=False),
+        sa.Column("time", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("product_id", sa.BigInteger(), nullable=False),
         sa.Column("asin", sa.String(length=20), nullable=True),
         sa.Column("bsr", sa.Integer(), nullable=False),
@@ -247,7 +247,7 @@ def upgrade() -> None:
     # ── price_history (TimescaleDB hypertable) ──────────────────────
     op.create_table(
         "price_history",
-        sa.Column("time", postgresql.TIMESTAMPTZ(), nullable=False),
+        sa.Column("time", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("product_id", sa.BigInteger(), nullable=False),
         sa.Column("asin", sa.String(length=20), nullable=True),
         sa.Column("price", sa.Numeric(precision=10, scale=2), nullable=True),
@@ -302,7 +302,7 @@ def upgrade() -> None:
         # Vulnerability
         sa.Column("vulnerability", sa.String(length=20), nullable=True),
         sa.Column("vulnerability_type", sa.String(length=50), nullable=True),
-        sa.Column("last_analyzed_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("last_analyzed_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["niche_id"],
@@ -344,7 +344,7 @@ def upgrade() -> None:
         sa.Column(
             "organic_traffic_pct", sa.Numeric(precision=5, scale=2), nullable=True
         ),
-        sa.Column("calculated_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("calculated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["niche_id"],
@@ -373,7 +373,7 @@ def upgrade() -> None:
         sa.Column("organic_result_count", sa.Integer(), nullable=True),
         sa.Column("sponsored_result_count", sa.Integer(), nullable=True),
         sa.Column("relevance_score", sa.Numeric(precision=5, scale=2), nullable=True),
-        sa.Column("last_updated_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("last_updated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["niche_id"],
@@ -401,7 +401,7 @@ def upgrade() -> None:
         ),
         sa.Column("estimated_acos", sa.Numeric(precision=5, scale=2), nullable=True),
         sa.Column("bid_trend_30d", sa.String(length=20), nullable=True),
-        sa.Column("last_updated_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("last_updated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["niche_id"],
@@ -432,7 +432,7 @@ def upgrade() -> None:
             "helpful_votes", sa.Integer(), server_default="0", nullable=True
         ),
         sa.Column("is_vine", sa.Boolean(), nullable=True),
-        sa.Column("scraped_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("scraped_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["product_id"],
@@ -501,7 +501,7 @@ def upgrade() -> None:
         sa.Column("supplier_score", sa.Numeric(precision=5, scale=2), nullable=True),
         sa.Column("risk_flags", postgresql.ARRAY(sa.Text()), nullable=True),
         sa.Column("price_tiers", postgresql.JSONB(), nullable=True),
-        sa.Column("last_updated_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("last_updated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["niche_id"],
@@ -549,7 +549,7 @@ def upgrade() -> None:
         sa.Column(
             "total_landed_cost", sa.Numeric(precision=10, scale=4), nullable=True
         ),
-        sa.Column("calculated_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("calculated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["supplier_id"],
@@ -618,7 +618,7 @@ def upgrade() -> None:
         sa.Column("risk_flags", postgresql.JSONB(), nullable=True),
         sa.Column("launch_playbook", postgresql.JSONB(), nullable=True),
         sa.Column("ppc_strategy", postgresql.JSONB(), nullable=True),
-        sa.Column("generated_at", postgresql.TIMESTAMPTZ(), nullable=True),
+        sa.Column("generated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(
             ["niche_id"],

@@ -5,10 +5,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import TIMESTAMPTZ
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base, TimestampMixin
+from .base import Base, TimestampMixin, TIMESTAMPTZ
 
 if TYPE_CHECKING:
     from .bsr_history import BSRHistory

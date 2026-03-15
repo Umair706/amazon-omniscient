@@ -3,7 +3,12 @@
 from datetime import datetime
 
 from sqlalchemy import func
+from sqlalchemy.types import TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# Timezone-aware timestamp type compatible with all SQLAlchemy versions.
+# Use this instead of the deprecated ``TIMESTAMPTZ`` dialect type.
+TIMESTAMPTZ = TIMESTAMP(timezone=True)
 
 
 class Base(DeclarativeBase):
