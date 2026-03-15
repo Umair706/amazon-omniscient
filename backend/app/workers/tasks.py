@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
+from app.core.exceptions import ScrapingError
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         if not products_data:
             await _update_niche_status(niche_id, "failed", "No products found for keyword")
-            return
+            raise ScrapingError(f"No products found for keyword '{keyword}'")
 
         # ── Step 2: Save products and scrape details ───────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
@@ -628,6 +629,17 @@ async def _scrape_search_results(keyword: str) -> list[dict]:
         return []
 
 
+def _clamp_int(value, max_val=2_147_483_647):
+    """Clamp an integer to fit PostgreSQL int32 range."""
+    if value is None:
+        return None
+    try:
+        v = int(value)
+        return min(v, max_val) if v > 0 else max(v, -max_val)
+    except (ValueError, TypeError):
+        return None
+
+
 async def _save_products(db: AsyncSession, niche_id: int, products_data: list[dict]) -> list[int]:
     """Save scraped products to the database, return list of product IDs."""
     from app.models.product import Product
@@ -646,9 +658,9 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
             # Update existing
             existing.title = p.get("title", existing.title)
             existing.current_price = p.get("price", existing.current_price)
-            existing.current_bsr = p.get("bsr", existing.current_bsr)
+            existing.current_bsr = _clamp_int(p.get("bsr", existing.current_bsr))
             existing.rating = p.get("rating", existing.rating)
-            existing.review_count = p.get("review_count", existing.review_count)
+            existing.review_count = _clamp_int(p.get("review_count", existing.review_count))
             product_ids.append(existing.id)
         else:
             product = Product(
@@ -656,9 +668,9 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
                 asin=asin,
                 title=p.get("title", ""),
                 current_price=p.get("price"),
-                current_bsr=p.get("bsr"),
+                current_bsr=_clamp_int(p.get("bsr")),
                 rating=p.get("rating"),
-                review_count=p.get("review_count", 0),
+                review_count=_clamp_int(p.get("review_count", 0)),
             )
             db.add(product)
             await db.flush()

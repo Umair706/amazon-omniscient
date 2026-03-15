@@ -39,6 +39,11 @@ services:
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q default,analysis,tracking,scraping
     volumes:
       - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping --timeout 10 2>/dev/null | grep -q OK || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
 
   celery-beat:
     build: ./backend
@@ -53,9 +58,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A app.workers.celery_app beat --loglevel=info
+    command: celery -A app.workers.celery_app beat --loglevel=info --pidfile=/tmp/celerybeat.pid
     volumes:
       - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid && kill -0 $(cat /tmp/celerybeat.pid) || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   frontend:
     build: ./frontend
@@ -64,7 +74,7 @@ services:
     depends_on:
       - backend
     environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
 
   db:
     image: timescale/timescaledb:latest-pg16

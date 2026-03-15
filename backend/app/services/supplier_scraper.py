@@ -215,6 +215,7 @@ class SupplierScraper:
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
             java_script_enabled=True,
+            ignore_https_errors=True,
         )
         page = await context.new_page()
 

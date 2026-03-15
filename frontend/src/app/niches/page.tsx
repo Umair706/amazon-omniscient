@@ -46,7 +46,7 @@ export default function NicheExplorerPage() {
       if (minScore !== "") params.min_score = minScore;
       if (tierFilter) params.confidence_tier = tierFilter;
 
-      const res = await api.get<PaginatedResponse<NicheListItem>>("/api/v1/niches", { params });
+      const res = await api.get<PaginatedResponse<NicheListItem>>("/api/v1/niches/", { params });
       setNiches(res.data.items || []);
       setTotal(res.data.total || 0);
     } catch {

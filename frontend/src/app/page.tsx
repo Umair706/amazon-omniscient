@@ -19,9 +19,9 @@ export default function DashboardPage() {
   useEffect(() => {
     // Fetch aggregated stats from niches and recommendations
     Promise.all([
-      api.get("/api/v1/niches", { params: { per_page: 1 } }).catch(() => ({ data: { total: 0 } })),
-      api.get("/api/v1/recommendations", { params: { per_page: 1 } }).catch(() => ({ data: { total: 0 } })),
-      api.get("/api/v1/niches", { params: { per_page: 100 } }).catch(() => ({ data: { items: [] } })),
+      api.get("/api/v1/niches/", { params: { per_page: 1 } }).catch(() => ({ data: { total: 0 } })),
+      api.get("/api/v1/recommendations/", { params: { per_page: 1 } }).catch(() => ({ data: { total: 0 } })),
+      api.get("/api/v1/niches/", { params: { per_page: 100 } }).catch(() => ({ data: { items: [] } })),
     ]).then(([nichesRes, recsRes, allNiches]) => {
       const items = allNiches.data.items || [];
       const scores = items

@@ -131,6 +131,7 @@ class ScraperService:
             locale="en-US",
             timezone_id="America/New_York",
             java_script_enabled=True,
+            ignore_https_errors=True,
         )
         page = await context.new_page()
 

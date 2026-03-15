@@ -15,7 +15,7 @@ export default function RecommendationsPage() {
 
   useEffect(() => {
     api
-      .get("/api/v1/recommendations", { params: { per_page: 50 } })
+      .get("/api/v1/recommendations/", { params: { per_page: 50 } })
       .then((res) => setRecs(res.data.items || []))
       .catch(() => {})
       .finally(() => setLoading(false));

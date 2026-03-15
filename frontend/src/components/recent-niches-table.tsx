@@ -14,7 +14,7 @@ export function RecentNichesTable() {
 
   useEffect(() => {
     api
-      .get("/api/v1/niches", { params: { page: 1, per_page: 10, sort_by: "analyzed_at", sort_dir: "desc" } })
+      .get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "analyzed_at", sort_dir: "desc" } })
       .then((res) => setNiches(res.data.items || []))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -47,14 +47,13 @@ export function RecentNichesTable() {
                 <th className="pb-3 font-medium">Score</th>
                 <th className="pb-3 font-medium">Avg Price</th>
                 <th className="pb-3 font-medium">Search Volume</th>
-                <th className="pb-3 font-medium">Reviews</th>
                 <th className="pb-3 font-medium">Status</th>
               </tr>
             </thead>
             <tbody>
               {niches.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={5} className="py-8 text-center text-muted-foreground">
                     No niches analyzed yet. Start by entering a keyword above.
                   </td>
                 </tr>
@@ -80,7 +79,6 @@ export function RecentNichesTable() {
                   </td>
                   <td className="py-3">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "\u2014"}</td>
                   <td className="py-3">{niche.monthly_search_volume?.toLocaleString() || "\u2014"}</td>
-                  <td className="py-3">{niche.avg_review_count?.toLocaleString() || "\u2014"}</td>
                   <td className="py-3">
                     <Badge variant={niche.confidence_tier === "HIGH" ? "default" : "secondary"}>
                       {niche.confidence_tier || "Pending"}
