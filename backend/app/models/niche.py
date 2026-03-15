@@ -27,6 +27,9 @@ class Niche(TimestampMixin, Base):
     primary_keyword: Mapped[str] = mapped_column(
         String(255), nullable=False, unique=True
     )
+    status: Mapped[str | None] = mapped_column(
+        String(20), server_default="pending"
+    )
     category_id: Mapped[str | None] = mapped_column(String(50))
     monthly_search_volume: Mapped[int | None] = mapped_column(Integer)
     avg_sale_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))

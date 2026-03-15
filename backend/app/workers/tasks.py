@@ -17,33 +17,33 @@ logger = logging.getLogger(__name__)
 # Async DB session helper — Celery workers run in sync context, so we need
 # our own engine + event loop to run async DB operations.
 # ---------------------------------------------------------------------------
-_engine = None
-_session_factory = None
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Lazily create an async engine + session factory for Celery workers."""
-    global _engine, _session_factory
-    if _session_factory is None:
-        settings = Settings()
-        _engine = create_async_engine(
-            settings.DATABASE_URL,
-            echo=False,
-            pool_size=5,
-            max_overflow=5,
-            pool_pre_ping=True,
-        )
-        _session_factory = async_sessionmaker(
-            bind=_engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-        )
-    return _session_factory
+    """Create a fresh async engine + session factory for each call.
+
+    We intentionally do NOT cache the engine across calls because Celery's
+    prefork workers create new event loops for each task, and asyncpg
+    connection pools are bound to the loop that created them.
+    """
+    settings = Settings()
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=False,
+        pool_size=5,
+        max_overflow=5,
+    )
+    return async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
 
 
 def _run_async(coro):
     """Run an async coroutine in a new event loop (safe for Celery workers)."""
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(coro)
     finally:
@@ -51,9 +51,13 @@ def _run_async(coro):
 
 
 def _get_llm_client():
-    """Create an LLM client from settings."""
+    """Create an LLM client from settings. Returns None if no API key is configured."""
     from app.llm.factory import create_llm_client
-    return create_llm_client(Settings())
+    try:
+        return create_llm_client(Settings())
+    except Exception as e:
+        logger.warning("LLM client not available (LLM-powered steps will be skipped): %s", e)
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -79,7 +83,7 @@ def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = 
     logger.info("Starting full analysis for niche %d: %s", niche_id, keyword)
 
     try:
-        _run_async(_run_full_analysis_async(self, niche_id, keyword, options))
+        return _run_async(_run_full_analysis_async(self, niche_id, keyword, options))
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
@@ -124,7 +128,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         competitor_landscape = await competitor_svc.analyze_landscape(
             niche_id=niche_id,
-            keyword=keyword,
+            products=products_data[:20],
+            category=keyword,
         )
 
         # ── Step 4: Analyze reviews (top 10 products) ──────────────────
@@ -166,10 +171,18 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         product_spec = None
         try:
+            # Extract pain points and positive themes from review insights
+            pain_points = review_insights.get("pain_points", []) if review_insights else []
+            positive_themes = review_insights.get("positive_themes", []) if review_insights else []
+            price_range = competitor_landscape.get("price_stats", {}) if competitor_landscape else {}
+            competitor_list = competitor_landscape.get("competitors", []) if competitor_landscape else []
+
             product_spec = await spec_gen.generate_product_spec(
                 niche_keyword=keyword,
-                competitor_data=competitor_landscape,
-                review_insights=review_insights,
+                pain_points=pain_points,
+                positive_themes=positive_themes,
+                competitor_data=competitor_list,
+                price_range=price_range,
             )
         except Exception as e:
             logger.warning("Product spec generation failed: %s", e)
@@ -192,7 +205,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
         from app.services.supplier_service import SupplierService
-        supplier_svc = SupplierService(db)
+        supplier_svc = SupplierService()
 
         metrics = _build_base_metrics(competitor_landscape, detailed_products)
         supplier_data = None
@@ -208,12 +221,24 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         ppc_strategy = None
         try:
+            # Build PPC inputs
+            break_even_acos = ppc_svc.calculate_break_even_acos(
+                selling_price=metrics.get("avg_price", 30),
+                landed_cost=metrics.get("landed_cost", 8),
+                fba_fees=metrics.get("fba_fees", 5),
+            )
+            keyword_portfolio = await ppc_svc.build_keyword_portfolio(niche_id=niche_id)
+            budget_plan = {
+                "daily_budget": metrics.get("ppc_daily_budget", 30),
+                "monthly_budget": metrics.get("ppc_daily_budget", 30) * 30,
+            }
+
             ppc_strategy = await ppc_svc.generate_ppc_strategy(
-                niche_id=niche_id,
                 niche_keyword=keyword,
-                avg_price=metrics.get("avg_price", 0),
-                pre_ppc_margin_pct=metrics.get("pre_ppc_margin_pct", 30),
-                avg_cpc=metrics.get("avg_cpc", 1.5),
+                keyword_portfolio=keyword_portfolio,
+                budget_plan=budget_plan,
+                break_even_acos=break_even_acos,
+                competitor_landscape=competitor_landscape,
             )
         except Exception as e:
             logger.warning("PPC strategy generation failed: %s", e)
@@ -221,15 +246,18 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 8: Review strategy ────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "review_strategy", "progress": 72})
         from app.services.review_strategy import ReviewStrategyService
-        review_svc = ReviewStrategyService(db, llm_client)
+        review_svc = ReviewStrategyService(llm_client)
 
         review_strategy = None
         try:
+            # Gather competitor review counts from products data
+            competitor_reviews = [p.get("review_count", 0) for p in products_data[:20] if p.get("review_count")]
             review_strategy = await review_svc.generate_review_strategy(
-                niche_id=niche_id,
                 niche_keyword=keyword,
-                avg_price=metrics.get("avg_price", 0),
-                estimated_monthly_sales=metrics.get("estimated_monthly_sales", 0),
+                competitor_reviews=competitor_reviews,
+                monthly_sales_estimate=metrics.get("estimated_monthly_sales", 100),
+                product_cost=metrics.get("landed_cost", 8),
+                selling_price=metrics.get("avg_price", 30),
             )
         except Exception as e:
             logger.warning("Review strategy generation failed: %s", e)
@@ -393,11 +421,11 @@ async def _track_bsr_niche_async(niche_id: int):
         for product in products:
             try:
                 # Record current BSR
-                if product.bsr_current:
+                if product.current_bsr:
                     await tracker.record_bsr(
                         product_id=product.id,
                         asin=product.asin,
-                        bsr=product.bsr_current,
+                        bsr=product.current_bsr,
                         category_id=product.category_id,
                     )
 
@@ -512,7 +540,23 @@ async def _refresh_competitor_async(niche_id: int, keyword: str):
     async with session_factory() as db:
         svc = CompetitorService(db, llm_client)
         try:
-            await svc.analyze_landscape(niche_id=niche_id, keyword=keyword)
+            # Fetch products from DB for this niche
+            from app.models.product import Product as ProductModel
+            stmt = select(ProductModel).where(ProductModel.niche_id == niche_id).limit(20)
+            result = await db.execute(stmt)
+            db_products = result.scalars().all()
+            products_for_analysis = [
+                {
+                    "asin": p.asin,
+                    "title": p.title,
+                    "price": float(p.current_price) if p.current_price else None,
+                    "current_bsr": p.current_bsr,
+                    "review_count": p.review_count,
+                    "rating": float(p.rating) if p.rating else None,
+                }
+                for p in db_products
+            ]
+            await svc.analyze_landscape(niche_id=niche_id, products=products_for_analysis, category=keyword)
             await db.commit()
             logger.info("Competitor refresh complete for niche %d", niche_id)
         except Exception as e:
@@ -578,7 +622,7 @@ async def _scrape_search_results(keyword: str) -> list[dict]:
 
     scraper = ScraperService()
     try:
-        return await scraper.scrape_search_results(keyword, max_pages=3)
+        return await scraper.scrape_search_results(keyword, pages=3)
     except Exception as e:
         logger.warning("Search scraping failed for '%s': %s", keyword, e)
         return []
@@ -602,10 +646,9 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
             # Update existing
             existing.title = p.get("title", existing.title)
             existing.current_price = p.get("price", existing.current_price)
-            existing.bsr_current = p.get("bsr", existing.bsr_current)
+            existing.current_bsr = p.get("bsr", existing.current_bsr)
             existing.rating = p.get("rating", existing.rating)
             existing.review_count = p.get("review_count", existing.review_count)
-            existing.main_image_url = p.get("image_url", existing.main_image_url)
             product_ids.append(existing.id)
         else:
             product = Product(
@@ -613,10 +656,9 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
                 asin=asin,
                 title=p.get("title", ""),
                 current_price=p.get("price"),
-                bsr_current=p.get("bsr"),
+                current_bsr=p.get("bsr"),
                 rating=p.get("rating"),
                 review_count=p.get("review_count", 0),
-                main_image_url=p.get("image_url"),
             )
             db.add(product)
             await db.flush()
@@ -769,30 +811,32 @@ async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict) -> 
     """Run supplier analysis."""
     from app.services.supplier_service import SupplierService
 
-    svc = SupplierService(db)
+    svc = SupplierService()
     avg_price = metrics.get("avg_price", 30)
 
-    # Calculate landed cost and margins
+    # Estimate FOB unit cost: roughly 15% of selling price
+    estimated_unit_cost = avg_price * 0.15
+
+    # Calculate landed cost (returns LandedCost dataclass)
     landed = svc.calculate_landed_cost(
-        unit_price_cny=avg_price * 0.15,  # Rough estimate: 15% of sell price in CNY
-        units=500,
-        weight_kg_per_unit=0.5,
+        unit_cost=estimated_unit_cost,
+        quantity=500,
+        weight_kg=0.5,
     )
 
+    # Calculate margins (pass LandedCost object directly)
     margin = svc.calculate_margins(
         selling_price=avg_price,
-        landed_cost=landed["total_landed_cost_usd_per_unit"],
-        fba_fee=metrics.get("fba_fees", 5),
-        referral_fee_pct=0.15,
-        avg_cpc=metrics.get("avg_cpc", 1.5),
-        conversion_rate=0.12,
+        landed_cost=landed,
+        fba_fulfillment_fee=metrics.get("fba_fees", 5),
+        ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,  # CPC / conversion rate
     )
 
-    metrics["landed_cost"] = landed["total_landed_cost_usd_per_unit"]
+    metrics["landed_cost"] = landed.total_cost_to_amazon
     metrics["pre_ppc_margin_pct"] = margin["pre_ppc_margin_pct"]
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
 
-    return {"landed_cost": landed, "margins": margin}
+    return {"landed_cost": {"total_landed_cost_usd_per_unit": landed.total_cost_to_amazon}, "margins": margin}
 
 
 # CNY to USD conversion rate

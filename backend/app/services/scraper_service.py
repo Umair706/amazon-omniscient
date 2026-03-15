@@ -116,7 +116,10 @@ class ScraperService:
             ],
         }
         if self.proxy_manager.has_proxy:
-            launch_kwargs["proxy"] = self.proxy_manager.get_playwright_proxy()
+            proxy_conf = self.proxy_manager.get_playwright_proxy()
+            # Only pass proxy if it has a non-empty server URL
+            if proxy_conf and proxy_conf.get("server"):
+                launch_kwargs["proxy"] = proxy_conf
         browser = await playwright.chromium.launch(**launch_kwargs)
         return browser
 

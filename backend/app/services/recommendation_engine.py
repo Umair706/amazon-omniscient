@@ -268,29 +268,27 @@ Return a JSON object:
         niche.hard_filter_passed = score_result["pass_all_filters"]
         niche.hard_filter_fail_reasons = score_result.get("fail_reasons", [])
 
+        # Map scoring sub-scores to model field names
         sub = score_result["sub_scores"]
         niche.demand_score = Decimal(str(sub.get("demand", 0)))
         niche.competition_score = Decimal(str(sub.get("competition", 0)))
-        niche.revenue_score = Decimal(str(sub.get("revenue", 0)))
+        niche.sales_velocity_score = Decimal(str(sub.get("revenue", 0)))
         niche.margin_score = Decimal(str(sub.get("margin", 0)))
-        niche.trend_score = Decimal(str(sub.get("trend", 0)))
-        niche.review_feasibility_score = Decimal(str(sub.get("review_feasibility", 0)))
-        niche.supplier_score = Decimal(str(sub.get("supplier", 0)))
-        niche.ppc_viability_score = Decimal(str(sub.get("ppc_viability", 0)))
-        niche.launch_feasibility_score = Decimal(str(sub.get("launch_feasibility", 0)))
+        niche.marketing_score = Decimal(str(sub.get("trend", 0)))
+        niche.review_achievability_score = Decimal(str(sub.get("review_feasibility", 0)))
+        niche.supplier_reliability_score = Decimal(str(sub.get("supplier", 0)))
+        niche.ad_profitability_score = Decimal(str(sub.get("ppc_viability", 0)))
+        niche.brand_building_score = Decimal(str(sub.get("launch_feasibility", 0)))
 
-        # Update market metrics
+        # Update market metrics (use model field names)
         niche.avg_bsr = metrics.get("avg_bsr")
-        niche.avg_price = Decimal(str(metrics.get("avg_price", 0))) if metrics.get("avg_price") else None
-        niche.avg_rating = Decimal(str(metrics.get("avg_rating", 0))) if metrics.get("avg_rating") else None
+        niche.avg_sale_price = Decimal(str(metrics.get("avg_price", 0))) if metrics.get("avg_price") else None
         niche.avg_review_count = metrics.get("avg_review_count")
-        niche.total_monthly_revenue = Decimal(str(metrics.get("total_monthly_revenue", 0))) if metrics.get("total_monthly_revenue") else None
-        niche.estimated_monthly_sales = metrics.get("estimated_monthly_sales")
-        niche.top_keyword_search_volume = metrics.get("search_volume")
+        niche.monthly_search_volume = metrics.get("search_volume")
         niche.is_seasonal = metrics.get("is_seasonal", False)
 
         niche.status = "completed"
-        niche.analyzed_at = datetime.now(timezone.utc)
+        niche.last_scored_at = datetime.now(timezone.utc)
 
         await self.db.flush()
 
