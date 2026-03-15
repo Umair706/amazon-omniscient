@@ -2,7 +2,7 @@
 import { cn } from "@/lib/utils";
 
 interface ScoreBadgeProps {
-  score: number;
+  score: number | string;
   tier: string;
   size?: "sm" | "md" | "lg";
 }
@@ -32,7 +32,8 @@ function getTierLabel(tier: string): string {
   }
 }
 
-export function ScoreBadge({ score, tier, size = "md" }: ScoreBadgeProps) {
+export function ScoreBadge({ score: rawScore, tier, size = "md" }: ScoreBadgeProps) {
+  const score = typeof rawScore === "string" ? parseFloat(rawScore) || 0 : rawScore;
   const sizes = {
     sm: "w-12 h-12 text-lg",
     md: "w-16 h-16 text-xl",

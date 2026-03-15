@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ARRAY, BigInteger, Boolean, Integer, Numeric, String, Text
+from sqlalchemy import ARRAY, BigInteger, Boolean, ForeignKey, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, TIMESTAMPTZ
@@ -62,7 +62,17 @@ class Niche(TimestampMixin, Base):
     )
     last_scored_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 
+    # Sub-niche support
+    parent_niche_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("niches.id"), nullable=True
+    )
+    sub_niche_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sub_niche_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # ----- Relationships -----
+    parent_niche: Mapped["Niche | None"] = relationship(
+        "Niche", remote_side=[id], foreign_keys=[parent_niche_id], lazy="selectin"
+    )
     products: Mapped[list["Product"]] = relationship(
         back_populates="niche", lazy="selectin"
     )

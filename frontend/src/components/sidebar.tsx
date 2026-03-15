@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   BarChart3,
   Search,
@@ -21,9 +21,25 @@ const NAV_ITEMS = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+const STORAGE_KEY = "omniscient_active_job";
+
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [hasActiveJob, setHasActiveJob] = useState(false);
+
+  useEffect(() => {
+    const check = () => {
+      try {
+        setHasActiveJob(!!localStorage.getItem(STORAGE_KEY));
+      } catch {
+        setHasActiveJob(false);
+      }
+    };
+    check();
+    const interval = setInterval(check, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
@@ -57,6 +73,9 @@ export function Sidebar() {
           >
             <Icon className="h-4 w-4" />
             {label}
+            {href === "/" && hasActiveJob && (
+              <span className="ml-auto h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+            )}
           </Link>
         ))}
       </nav>

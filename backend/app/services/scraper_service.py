@@ -96,14 +96,16 @@ class ScraperService:
 
     @staticmethod
     def _safe_int(text: str | None) -> int | None:
-        """Parse an integer out of *text* (strips commas / non-digits)."""
+        """Parse the first contiguous number (with optional commas) from *text*."""
         if not text:
             return None
         try:
-            digits = re.sub(r"[^\d]", "", text)
-            return int(digits) if digits else None
+            match = re.search(r"([\d,]+)", text)
+            if match:
+                return int(match.group(1).replace(",", ""))
         except (ValueError, AttributeError):
-            return None
+            pass
+        return None
 
     async def _launch_browser(self, playwright) -> Browser:
         """Launch a Chromium browser instance, optionally with a rotating proxy."""
@@ -208,14 +210,32 @@ class ScraperService:
                         except Exception:
                             pass
 
-                        # Price
+                        # Price — try non-struck-through price first, then any price
                         price: float | None = None
                         try:
-                            price_el = div.locator("span.a-price span.a-offscreen").first
-                            if await price_el.count():
-                                price = self._safe_float(await price_el.inner_text())
+                            for price_sel in (
+                                "span.a-price:not([data-a-strike='true']) span.a-offscreen",
+                                ".a-price[data-a-color='base'] span.a-offscreen",
+                                "span.a-price span.a-offscreen",
+                            ):
+                                price_el = div.locator(price_sel).first
+                                if await price_el.count():
+                                    price = self._safe_float(await price_el.inner_text())
+                                    if price is not None and price > 0:
+                                        break
                         except Exception:
                             pass
+                        # Fallback: build from whole + fraction parts
+                        if price is None:
+                            try:
+                                whole_el = div.locator("span.a-price-whole").first
+                                frac_el = div.locator("span.a-price-fraction").first
+                                if await whole_el.count() and await frac_el.count():
+                                    whole = (await whole_el.inner_text()).strip().rstrip(".")
+                                    frac = (await frac_el.inner_text()).strip()
+                                    price = self._safe_float(f"{whole}.{frac}")
+                            except Exception:
+                                pass
 
                         # Rating
                         rating: float | None = None
@@ -362,20 +382,34 @@ class ScraperService:
                 # Title
                 title = await self._safe_text(page, "#productTitle")
 
-                # Price — multiple possible selectors
+                # Price — try multiple selectors (ordered by reliability)
                 price: float | None = None
                 for sel in (
+                    "#corePriceDisplay_desktop_feature_div span.a-offscreen",
+                    "#corePrice_feature_div span.a-offscreen",
+                    ".priceToPay span.a-offscreen",
+                    "#apex_offerDisplay_desktop span.a-offscreen",
+                    "span.a-price[data-a-color='base'] span.a-offscreen",
+                    "span.a-price:not([data-a-strike='true']) span.a-offscreen",
                     "#priceblock_ourprice",
                     "#priceblock_dealprice",
-                    "span.a-price .a-offscreen",
-                    "#corePrice_feature_div span.a-offscreen",
-                    "#apex_offerDisplay_desktop span.a-offscreen",
                 ):
                     price_text = await self._safe_text(page, sel)
                     if price_text:
                         price = self._safe_float(price_text)
-                        if price is not None:
+                        if price is not None and price > 0:
                             break
+                # Fallback: build from whole + fraction parts
+                if price is None:
+                    try:
+                        whole_el = page.locator("span.a-price-whole").first
+                        frac_el = page.locator("span.a-price-fraction").first
+                        if await whole_el.count() and await frac_el.count():
+                            whole = (await whole_el.inner_text()).strip().rstrip(".")
+                            frac = (await frac_el.inner_text()).strip()
+                            price = self._safe_float(f"{whole}.{frac}")
+                    except Exception:
+                        pass
 
                 # Rating
                 rating: float | None = None

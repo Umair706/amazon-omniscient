@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
+import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +23,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Lightbulb,
+  RefreshCw,
 } from "lucide-react";
 
 interface RecommendationDetail {
@@ -62,15 +65,25 @@ export default function OpportunityBriefPage() {
 
   const [rec, setRec] = useState<RecommendationDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("overview");
 
-  useEffect(() => {
-    api
-      .get(`/api/v1/recommendations/${id}`)
-      .then((res) => setRec(res.data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+  const fetchRec = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get(`/api/v1/recommendations/${id}`);
+      setRec(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message || "Failed to load recommendation");
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
+
+  useEffect(() => {
+    fetchRec();
+  }, [fetchRec]);
 
   if (loading) {
     return (
@@ -78,6 +91,18 @@ export default function OpportunityBriefPage() {
         <Skeleton className="h-10 w-64" />
         <div className="grid grid-cols-4 gap-4">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)}</div>
         <Skeleton className="h-96" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-4 text-center py-12">
+        <AlertTriangle className="h-10 w-10 text-destructive mx-auto" />
+        <p className="text-destructive font-medium">{error}</p>
+        <Button variant="outline" onClick={fetchRec}>
+          <RefreshCw className="h-4 w-4 mr-2" /> Retry
+        </Button>
       </div>
     );
   }
@@ -94,7 +119,12 @@ export default function OpportunityBriefPage() {
   ];
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.4 }}
+      className="space-y-6"
+    >
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -112,8 +142,18 @@ export default function OpportunityBriefPage() {
       {/* Key Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard title="Sale Price" value={rec.recommended_sale_price ? formatCurrency(rec.recommended_sale_price) : "—"} icon={DollarSign} />
-        <StatCard title="Net Margin" value={rec.estimated_net_margin_pct ? formatPercent(rec.estimated_net_margin_pct) : "—"} icon={TrendingUp} />
-        <StatCard title="Break-Even" value={rec.break_even_week_base ? `Week ${rec.break_even_week_base}` : "—"} icon={Clock} />
+        <div className="relative">
+          <StatCard title="Net Margin" value={rec.estimated_net_margin_pct ? formatPercent(rec.estimated_net_margin_pct) : "—"} icon={TrendingUp} />
+          {rec.confidence_tier === "FAIL" && (
+            <span className="absolute top-2 right-2 text-[10px] text-destructive font-medium">risk-adjusted</span>
+          )}
+        </div>
+        <div className="relative">
+          <StatCard title="Break-Even" value={rec.break_even_week_base ? `Week ${rec.break_even_week_base}` : "—"} icon={Clock} />
+          {rec.confidence_tier === "FAIL" && (
+            <span className="absolute top-2 right-2 text-[10px] text-destructive font-medium">risk-adjusted</span>
+          )}
+        </div>
         <StatCard title="Launch Capital" value={rec.total_launch_capital ? formatCurrency(rec.total_launch_capital) : "—"} icon={Target} />
       </div>
 
@@ -536,18 +576,48 @@ export default function OpportunityBriefPage() {
         <div className="space-y-6">
           {rec.financial_report ? (
             <>
+              {/* FAIL Warning Banner */}
+              {rec.confidence_tier === "FAIL" && (
+                <Card className="border-destructive/50 bg-destructive/5">
+                  <CardContent className="p-4 flex items-start gap-3">
+                    <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-destructive text-sm">
+                        This niche failed hard filters — financials are risk-adjusted
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Sales projections have been reduced to account for competitive barriers
+                        {rec.risk_flags?.fail_reasons?.length > 0 && (
+                          <> ({rec.risk_flags.fail_reasons.join(", ")})</>
+                        )}. Actual performance may be worse than shown. The unit economics are
+                        accurate, but the sales volume assumptions are optimistic for a FAIL-tier niche.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Verdict Banner */}
               {rec.financial_report.key_metrics && (
                 <Card>
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
                       <div>
-                        <Badge variant={rec.financial_report.key_metrics.verdict === "PROFITABLE" ? "default" : rec.financial_report.key_metrics.verdict === "MARGINAL" ? "secondary" : "destructive"} className="text-sm px-3 py-1">
+                        <Badge variant={
+                          rec.financial_report.key_metrics.verdict === "PROFITABLE" ? "default"
+                          : rec.financial_report.key_metrics.verdict === "MARGINAL" ? "secondary"
+                          : "destructive"
+                        } className="text-sm px-3 py-1">
                           {rec.financial_report.key_metrics.verdict}
                         </Badge>
                         <p className="text-sm text-muted-foreground mt-2">
                           Annual ROI: {rec.financial_report.key_metrics.annual_roi_pct}% | Break-even: Week {rec.financial_report.key_metrics.break_even_week_base}
                         </p>
+                        {rec.financial_report.key_metrics.risk_warning && (
+                          <p className="text-xs text-destructive mt-1">
+                            {rec.financial_report.key_metrics.risk_warning}
+                          </p>
+                        )}
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-bold">{formatCurrency(rec.financial_report.key_metrics.annual_profit_base)}</p>
@@ -978,6 +1048,6 @@ export default function OpportunityBriefPage() {
           )}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

@@ -13,7 +13,7 @@ from app.dependencies import get_db
 from app.models.niche import Niche
 from app.schemas.common import JobStatusResponse
 from app.workers.celery_app import celery_app
-from app.workers.tasks import run_full_analysis
+from app.workers.tasks import run_full_analysis, run_discovery
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -56,6 +56,14 @@ class AnalyzeKeywordRequest(BaseModel):
     force: bool = Field(
         default=False, description="Force re-analysis if niche already exists"
     )
+
+
+class AnalyzeSubNicheRequest(BaseModel):
+    """Payload to trigger full analysis on a selected sub-niche."""
+
+    parent_niche_id: int = Field(description="ID of the parent (discovery) niche")
+    sub_niche_label: str = Field(min_length=1, max_length=255, description="Label of the selected sub-niche")
+    product_asins: list[str] = Field(description="ASINs belonging to the selected sub-niche")
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +167,121 @@ async def trigger_niche_analysis(
         status="pending",
         progress=0,
         result=None,
+        error=None,
+        created_at=now,
+        updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/discover — Run discovery phase (sub-niche detection)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/discover", response_model=JobStatusResponse, status_code=202)
+async def trigger_discovery(
+    payload: AnalyzeKeywordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JobStatusResponse:
+    """Run discovery phase only — returns sub-niche options if keyword is broad."""
+    keyword = payload.keyword.strip()
+
+    # Check if niche already exists
+    result = await db.execute(
+        select(Niche).where(Niche.primary_keyword == keyword)
+    )
+    niche = result.scalar_one_or_none()
+
+    if niche is not None and not payload.force:
+        if niche.opportunity_score is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Niche '{keyword}' already analyzed. Use force=true to re-analyze.",
+            )
+
+    if niche is None:
+        niche = Niche(name=keyword, primary_keyword=keyword)
+        db.add(niche)
+        await db.flush()
+        await db.refresh(niche)
+
+    # Dispatch discovery task
+    task = run_discovery.delay(
+        niche_id=niche.id,
+        keyword=niche.primary_keyword,
+        options={"force": payload.force},
+    )
+
+    now = datetime.now(timezone.utc)
+
+    return JobStatusResponse(
+        job_id=task.id,
+        status="pending",
+        progress=0,
+        result={"niche_id": niche.id, "keyword": keyword},
+        error=None,
+        created_at=now,
+        updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/analyze-sub-niche — Create child niche and run full analysis
+# ---------------------------------------------------------------------------
+
+
+@router.post("/analyze-sub-niche", response_model=JobStatusResponse, status_code=202)
+async def trigger_sub_niche_analysis(
+    payload: AnalyzeSubNicheRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JobStatusResponse:
+    """Create child niche from selected sub-niche and run full analysis on subset."""
+    # Validate parent niche exists
+    result = await db.execute(
+        select(Niche).where(Niche.id == payload.parent_niche_id)
+    )
+    parent_niche = result.scalar_one_or_none()
+    if parent_niche is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Parent niche {payload.parent_niche_id} not found",
+        )
+
+    # Create child niche with composite primary_keyword
+    child_keyword = f"{parent_niche.primary_keyword} :: {payload.sub_niche_label}"
+
+    # Check if child already exists
+    result = await db.execute(
+        select(Niche).where(Niche.primary_keyword == child_keyword)
+    )
+    child_niche = result.scalar_one_or_none()
+
+    if child_niche is None:
+        child_niche = Niche(
+            name=payload.sub_niche_label,
+            primary_keyword=child_keyword,
+            parent_niche_id=payload.parent_niche_id,
+            sub_niche_label=payload.sub_niche_label,
+        )
+        db.add(child_niche)
+        await db.flush()
+        await db.refresh(child_niche)
+
+    # Dispatch full analysis with product_asins filter
+    task = run_full_analysis.delay(
+        niche_id=child_niche.id,
+        keyword=parent_niche.primary_keyword,
+        options={"force": True},
+        product_asins=payload.product_asins,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    return JobStatusResponse(
+        job_id=task.id,
+        status="pending",
+        progress=0,
+        result={"niche_id": child_niche.id, "keyword": child_keyword},
         error=None,
         created_at=now,
         updated_at=None,

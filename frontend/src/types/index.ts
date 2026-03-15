@@ -15,8 +15,9 @@ export interface NicheListItem {
   name: string;
   primary_keyword: string;
   monthly_search_volume: number | null;
-  avg_sale_price: string | null;
-  opportunity_score: string | null;
+  avg_sale_price: string | number | null;
+  avg_review_count: number | null;
+  opportunity_score: string | number | null;
   confidence_tier: string | null;
   is_seasonal: boolean | null;
   hard_filter_passed: boolean | null;
@@ -120,9 +121,9 @@ export interface RecommendationSummary {
   niche_name?: string;
   omniscient_score: string | number;
   confidence_tier: string;
-  recommended_sale_price: string | null;
-  estimated_net_margin_pct: string | null;
-  total_launch_capital: string | null;
+  recommended_sale_price: string | number | null;
+  estimated_net_margin_pct: string | number | null;
+  total_launch_capital: string | number | null;
   break_even_week_base: number | null;
   generated_at: string | null;
 }

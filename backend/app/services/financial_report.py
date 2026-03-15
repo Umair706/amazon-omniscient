@@ -112,6 +112,8 @@ class FinancialReportService:
         supplier_lead_time_weeks: int = 4,
         shipping_transit_weeks: int = 4,
         amazon_inbound_weeks: int = 1,
+        hard_filter_results: list[dict] | None = None,
+        confidence_tier: str | None = None,
     ) -> dict:
         """
         Generate a comprehensive financial report for an Amazon FBA product.
@@ -196,6 +198,17 @@ class FinancialReportService:
             conversion_rate=conversion_rate,
         )
 
+        # --- Step 3b: Compute ramp penalty from hard filter failures ---
+        ramp_penalty = 1.0
+        if hard_filter_results:
+            failed = {f["filter"] for f in hard_filter_results if not f["passed"]}
+            if "review_moat" in failed:
+                ramp_penalty *= 0.5
+            if "amazon_dominance" in failed:
+                ramp_penalty *= 0.7
+            if "bsr_demand" in failed:
+                ramp_penalty *= 0.6
+
         # --- Step 4: Build each report section ---
         per_unit = self._build_per_unit_section(unit_econ)
 
@@ -231,6 +244,7 @@ class FinancialReportService:
             shipping_transit_weeks=shipping_transit_weeks,
             amazon_inbound_weeks=amazon_inbound_weeks,
             fba_fees=fba_fees,
+            ramp_penalty=ramp_penalty,
         )
 
         monthly_summary = self._build_monthly_summary(
@@ -241,6 +255,7 @@ class FinancialReportService:
             estimated_monthly_sales=estimated_monthly_sales,
             launch_ppc_daily=launch_ppc_daily,
             order_quantity=order_quantity,
+            ramp_penalty=ramp_penalty,
         )
 
         reorder_plan = self._build_reorder_plan(
@@ -258,6 +273,7 @@ class FinancialReportService:
             launch_capital_total=launch_capital["total_with_buffer"],
             landed=landed,
             fba_fees=fba_fees,
+            ramp_penalty=ramp_penalty,
         )
 
         key_metrics = self._build_key_metrics(
@@ -269,6 +285,8 @@ class FinancialReportService:
             fba_fees=fba_fees,
             avg_cpc=avg_cpc,
             conversion_rate=conversion_rate,
+            confidence_tier=confidence_tier,
+            ramp_penalty=ramp_penalty,
         )
 
         return {
@@ -508,6 +526,7 @@ class FinancialReportService:
         shipping_transit_weeks: int,
         amazon_inbound_weeks: int,
         fba_fees: dict,
+        ramp_penalty: float = 1.0,
     ) -> list[dict]:
         """
         Build a week-by-week cash flow timeline from supplier deposit
@@ -561,7 +580,7 @@ class FinancialReportService:
         weekly_ppc = round(launch_ppc_daily * 7, 2)
 
         # Weekly sales revenue (with Amazon's 14-day hold for new sellers)
-        weekly_sales_units = estimated_monthly_sales / 4.33
+        weekly_sales_units = estimated_monthly_sales / 4.33 * ramp_penalty
         # Use ramped sales for the first weeks
         ramp_factor_initial = self.SALES_RAMP[0]  # Month 1 ramp
         ramped_weekly_units = weekly_sales_units * ramp_factor_initial
@@ -707,6 +726,7 @@ class FinancialReportService:
         estimated_monthly_sales: int,
         launch_ppc_daily: float,
         order_quantity: int,
+        ramp_penalty: float = 1.0,
     ) -> list[dict]:
         monthly = []
         cumulative_profit = 0.0
@@ -723,7 +743,7 @@ class FinancialReportService:
             ramp = self.SALES_RAMP[idx]
             ppc_taper = self.PPC_MONTHLY_TAPER[idx]
 
-            units_sold = int(round(estimated_monthly_sales * ramp))
+            units_sold = int(round(estimated_monthly_sales * ramp * ramp_penalty))
 
             # Don't sell more than remaining inventory
             units_sold = min(units_sold, max(inventory_remaining, 0))
@@ -835,6 +855,7 @@ class FinancialReportService:
         launch_capital_total: float,
         landed,
         fba_fees: dict,
+        ramp_penalty: float = 1.0,
     ) -> dict:
         """
         Generate simplified bull (1.3x), base (1.0x), bear (0.7x) annual
@@ -855,7 +876,7 @@ class FinancialReportService:
                 ramp = self.SALES_RAMP[month]
                 ppc_taper = self.PPC_MONTHLY_TAPER[month]
 
-                monthly_units = int(round(estimated_monthly_sales * ramp * mult))
+                monthly_units = int(round(estimated_monthly_sales * ramp * mult * ramp_penalty))
                 monthly_revenue = selling_price * monthly_units
                 monthly_cogs = landed.total_cost_to_amazon * monthly_units
                 monthly_amazon_fees = (
@@ -894,7 +915,7 @@ class FinancialReportService:
                 ramp = self.SALES_RAMP[month]
                 ppc_taper = self.PPC_MONTHLY_TAPER[month]
 
-                mu = int(round(estimated_monthly_sales * ramp * mult))
+                mu = int(round(estimated_monthly_sales * ramp * mult * ramp_penalty))
                 mr = selling_price * mu
                 mc = landed.total_cost_to_amazon * mu
                 maf = (
@@ -940,6 +961,8 @@ class FinancialReportService:
         fba_fees: dict,
         avg_cpc: float,
         conversion_rate: float,
+        confidence_tier: str | None = None,
+        ramp_penalty: float = 1.0,
     ) -> dict:
         base = scenarios.get("base", {})
         annual_profit_base = base.get("annual_profit", 0.0)
@@ -949,7 +972,9 @@ class FinancialReportService:
 
         # Verdict
         margin = unit_econ.post_ppc_margin_pct
-        if margin >= 20:
+        if confidence_tier == "FAIL":
+            verdict = "NOT VIABLE"
+        elif margin >= 20:
             verdict = "PROFITABLE"
         elif margin >= 10:
             verdict = "MARGINAL"
@@ -973,7 +998,7 @@ class FinancialReportService:
             else None
         )
 
-        return {
+        metrics = {
             "verdict": verdict,
             "post_ppc_margin_pct": unit_econ.post_ppc_margin_pct,
             "annual_profit_base": annual_profit_base,
@@ -984,3 +1009,12 @@ class FinancialReportService:
             "max_cpc_breakeven": max_cpc_breakeven,
             "units_to_break_even": units_to_break_even,
         }
+
+        if confidence_tier == "FAIL":
+            metrics["risk_warning"] = (
+                "Hard filter failures detected. Financial projections use reduced "
+                "sales assumptions. Actual performance likely worse than shown."
+            )
+            metrics["ramp_penalty_applied"] = ramp_penalty
+
+        return metrics

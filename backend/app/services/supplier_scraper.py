@@ -100,14 +100,16 @@ class SupplierScraper:
 
     @staticmethod
     def _safe_int(text: str | None) -> int | None:
-        """Parse an integer out of *text* (strips commas / non-digits)."""
+        """Parse the first contiguous number (with optional commas) from *text*."""
         if not text:
             return None
         try:
-            digits = re.sub(r"[^\d]", "", text)
-            return int(digits) if digits else None
+            match = re.search(r"([\d,]+)", text)
+            if match:
+                return int(match.group(1).replace(",", ""))
         except (ValueError, AttributeError):
-            return None
+            pass
+        return None
 
     @staticmethod
     def _parse_price_range(text: str | None) -> tuple[float | None, float | None]:

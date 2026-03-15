@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
@@ -65,12 +66,12 @@ def _get_llm_client():
 # 1. Full Niche Analysis Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
 @celery_app.task(bind=True, name="app.workers.tasks.run_full_analysis", max_retries=2)
-def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = None):
+def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = None, product_asins: list[str] | None = None):
     """
     Master analysis pipeline for a niche.
 
     Steps:
-    1. Scrape Amazon search results for the keyword
+    1. Scrape Amazon search results for the keyword (skipped if product_asins provided)
     2. Scrape top product pages (details, BSR, reviews)
     3. Run competitor analysis
     4. Fetch supplier data
@@ -79,19 +80,141 @@ def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = 
     7. Generate financial projections
     8. Generate marketing plan
     9. Compute Omniscient Score and save recommendation
+
+    Parameters
+    ----------
+    product_asins : list[str] | None
+        If provided, skip scraping and filter to only these ASINs (sub-niche flow).
     """
     options = options or {}
     logger.info("Starting full analysis for niche %d: %s", niche_id, keyword)
 
     try:
-        return _run_async(_run_full_analysis_async(self, niche_id, keyword, options))
+        return _run_async(_run_full_analysis_async(self, niche_id, keyword, options, product_asins=product_asins))
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
         raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
 
 
-async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: dict):
+# ═══════════════════════════════════════════════════════════════════════════
+# 1b. Discovery Phase (sub-niche detection)
+# ═══════════════════════════════════════════════════════════════════════════
+@celery_app.task(bind=True, name="app.workers.tasks.run_discovery", max_retries=2)
+def run_discovery(self, niche_id: int, keyword: str, options: dict | None = None):
+    """
+    Phase A: Scrape products, detect heterogeneity, optionally cluster sub-niches.
+
+    Returns
+    -------
+    dict
+        If narrow: {"is_broad": false, "niche_id": N}
+        If broad:  {"is_broad": true, "sub_niches": [...], "niche_id": N, "heterogeneity": {...}}
+    """
+    options = options or {}
+    logger.info("Starting discovery for niche %d: %s", niche_id, keyword)
+
+    try:
+        return _run_async(_run_discovery_async(self, niche_id, keyword, options))
+    except Exception as exc:
+        logger.exception("Discovery failed for niche %d", niche_id)
+        _run_async(_update_niche_status(niche_id, "failed", str(exc)))
+        raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+
+async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict):
+    """Async implementation of the discovery pipeline."""
+    from app.models.niche import Niche
+
+    session_factory = _get_session_factory()
+    llm_client = _get_llm_client()
+
+    async with session_factory() as db:
+        # Update status to discovering
+        await db.execute(
+            update(Niche).where(Niche.id == niche_id).values(status="discovering")
+        )
+        await db.commit()
+
+        # ── Step 1: Scrape search results ──────────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
+        products_data = await _scrape_search_results(keyword)
+
+        if not products_data:
+            await _update_niche_status(niche_id, "failed", "No products found for keyword")
+            raise ScrapingError(f"No products found for keyword '{keyword}'")
+
+        # ── Step 2: Save products ──────────────────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 10})
+        await _save_products(db, niche_id, products_data)
+
+        # ── Step 3: Scrape top product details ─────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
+        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20])
+
+        # Merge detail data back
+        detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
+        for p in products_data:
+            detail = detail_by_asin.get(p.get("asin"))
+            if detail:
+                if detail.get("price") is not None:
+                    p["price"] = detail["price"]
+                if detail.get("rating") is not None:
+                    p["rating"] = detail["rating"]
+                if detail.get("review_count") is not None:
+                    p["review_count"] = detail["review_count"]
+
+        # ── Step 4: Detect heterogeneity ───────────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "detecting_sub_niches", "progress": 25})
+        from app.services.sub_niche_service import SubNicheService
+        sub_niche_svc = SubNicheService(llm_client)
+
+        heterogeneity = sub_niche_svc.detect_heterogeneity(products_data)
+        logger.info(
+            "Heterogeneity for '%s': is_broad=%s, price_cv=%.3f, title_diversity=%.3f",
+            keyword, heterogeneity["is_broad"], heterogeneity["price_cv"],
+            heterogeneity["title_diversity"],
+        )
+
+        if not heterogeneity["is_broad"]:
+            # Narrow keyword — update status and return
+            await db.execute(
+                update(Niche).where(Niche.id == niche_id).values(
+                    status="discovered",
+                    sub_niche_metadata={"is_broad": False, "heterogeneity": heterogeneity},
+                )
+            )
+            await db.commit()
+            task.update_state(state="PROGRESS", meta={"step": "complete", "progress": 100})
+            return {"is_broad": False, "niche_id": niche_id}
+
+        # ── Step 5: Cluster sub-niches via LLM ────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "clustering", "progress": 30})
+        sub_niches = await sub_niche_svc.cluster_sub_niches(keyword, products_data)
+
+        # Save metadata to niche
+        await db.execute(
+            update(Niche).where(Niche.id == niche_id).values(
+                status="discovered",
+                sub_niche_metadata={
+                    "is_broad": True,
+                    "heterogeneity": heterogeneity,
+                    "sub_niches": sub_niches,
+                },
+            )
+        )
+        await db.commit()
+
+        task.update_state(state="PROGRESS", meta={"step": "complete", "progress": 100})
+        return {
+            "is_broad": True,
+            "sub_niches": sub_niches,
+            "niche_id": niche_id,
+            "heterogeneity": heterogeneity,
+        }
+
+
+async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: dict, product_asins: list[str] | None = None):
     """Async implementation of the full analysis pipeline."""
     from app.models.niche import Niche
     from app.models.product import Product
@@ -106,21 +229,83 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         )
         await db.commit()
 
-        # ── Step 1: Scrape search results ──────────────────────────────
-        task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-        products_data = await _scrape_search_results(keyword)
+        if product_asins:
+            # ── Sub-niche flow: load products from parent niche by ASIN ──
+            task.update_state(state="PROGRESS", meta={"step": "loading_products", "progress": 5})
 
-        if not products_data:
-            await _update_niche_status(niche_id, "failed", "No products found for keyword")
-            raise ScrapingError(f"No products found for keyword '{keyword}'")
+            # Look up the parent niche to get its products
+            niche_row = (await db.execute(select(Niche).where(Niche.id == niche_id))).scalar_one_or_none()
+            parent_id = niche_row.parent_niche_id if niche_row else None
 
-        # ── Step 2: Save products and scrape details ───────────────────
-        task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
-        product_ids = await _save_products(db, niche_id, products_data)
+            # Load products from DB that match the given ASINs
+            product_query = select(Product).where(Product.asin.in_(product_asins))
+            if parent_id:
+                product_query = product_query.where(Product.niche_id == parent_id)
+            result = await db.execute(product_query)
+            db_products = result.scalars().all()
 
-        # Scrape individual product pages for detailed data
-        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20])
-        task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
+            # Reassign products to child niche
+            for p in db_products:
+                p.niche_id = niche_id
+            await db.flush()
+            await db.commit()
+
+            products_data = [
+                {
+                    "asin": p.asin,
+                    "title": p.title,
+                    "price": float(p.current_price) if p.current_price else None,
+                    "bsr": p.current_bsr,
+                    "rating": float(p.rating) if p.rating else None,
+                    "review_count": p.review_count,
+                    "brand": p.brand if hasattr(p, "brand") else None,
+                }
+                for p in db_products
+            ]
+            detailed_products = products_data  # Already have detail data
+            task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
+
+        else:
+            # ── Standard flow: scrape from scratch ────────────────────────
+
+            # ── Step 1: Scrape search results ──────────────────────────────
+            task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
+            products_data = await _scrape_search_results(keyword)
+
+            if not products_data:
+                await _update_niche_status(niche_id, "failed", "No products found for keyword")
+                raise ScrapingError(f"No products found for keyword '{keyword}'")
+
+            # ── Step 2: Save products and scrape details ───────────────────
+            task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
+            product_ids = await _save_products(db, niche_id, products_data)
+
+            # Scrape individual product pages for detailed data
+            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20])
+
+            # Merge detail page data back into products_data so downstream
+            # services (competitor analysis, scoring, financials) use the
+            # enriched values (price, rating, review_count, BSR, etc.)
+            detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
+            for p in products_data:
+                detail = detail_by_asin.get(p.get("asin"))
+                if detail:
+                    if detail.get("price") is not None:
+                        p["price"] = detail["price"]
+                    if detail.get("rating") is not None:
+                        p["rating"] = detail["rating"]
+                    if detail.get("review_count") is not None:
+                        p["review_count"] = detail["review_count"]
+                    if detail.get("current_bsr") is not None:
+                        p["bsr"] = detail["current_bsr"]
+                    if detail.get("brand"):
+                        p["brand"] = detail["brand"]
+                    for key in ("bullet_count", "image_count", "has_video",
+                                "has_a_plus", "has_brand_story", "seller_id"):
+                        if detail.get(key) is not None:
+                            p[key] = detail[key]
+
+            task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
 
         # ── Step 3: Competitor analysis ────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "competitor_analysis", "progress": 35})
@@ -203,6 +388,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         if scraped_suppliers:
             await _save_suppliers(db, niche_id, scraped_suppliers)
 
+        # ── Step 6a-ii: Translate Chinese supplier fields ─────────────
+        if scraped_suppliers and llm_client:
+            task.update_state(state="PROGRESS", meta={"step": "translating_suppliers", "progress": 57})
+            try:
+                scraped_suppliers = await _translate_supplier_fields(llm_client, scraped_suppliers)
+            except Exception as e:
+                logger.warning("Supplier translation failed: %s", e)
+
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
         from app.services.supplier_service import SupplierService
@@ -215,7 +408,24 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         except Exception as e:
             logger.warning("Supplier analysis failed: %s", e)
 
-        # ── Step 7: PPC strategy ───────────────────────────────────────
+        # ── Step 7: Scoring (moved up to inform financial report) ──────
+        task.update_state(state="PROGRESS", meta={"step": "scoring", "progress": 60})
+        from app.services.scoring_service import ScoringService
+        scorer = ScoringService()
+
+        # Enrich metrics with everything we've gathered so far
+        _enrich_metrics(metrics, competitor_landscape, None, None, supplier_data)
+
+        score_result = scorer.compute_score(metrics)
+        hard_filter_results = score_result.get("hard_filters", [])
+        confidence_tier = score_result.get("confidence_tier")
+
+        logger.info(
+            "Scoring complete for niche %d: score=%s tier=%s",
+            niche_id, score_result["omniscient_score"], confidence_tier,
+        )
+
+        # ── Step 8: PPC strategy ───────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "ppc_strategy", "progress": 65})
         from app.services.ppc_service import PPCService
         ppc_svc = PPCService(db, llm_client)
@@ -224,14 +434,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         try:
             # Build PPC inputs
             break_even_acos = ppc_svc.calculate_break_even_acos(
-                selling_price=metrics.get("avg_price", 30),
-                landed_cost=metrics.get("landed_cost", 8),
-                fba_fees=metrics.get("fba_fees", 5),
+                selling_price=metrics.get("avg_price") or 30,
+                landed_cost=metrics.get("landed_cost") or 8,
+                fba_fees=metrics.get("fba_fees") or 5,
             )
             keyword_portfolio = await ppc_svc.build_keyword_portfolio(niche_id=niche_id)
             budget_plan = {
-                "daily_budget": metrics.get("ppc_daily_budget", 30),
-                "monthly_budget": metrics.get("ppc_daily_budget", 30) * 30,
+                "daily_budget": metrics.get("ppc_daily_budget") or 30,
+                "monthly_budget": (metrics.get("ppc_daily_budget") or 30) * 30,
             }
 
             ppc_strategy = await ppc_svc.generate_ppc_strategy(
@@ -244,7 +454,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         except Exception as e:
             logger.warning("PPC strategy generation failed: %s", e)
 
-        # ── Step 8: Review strategy ────────────────────────────────────
+        # ── Step 9: Review strategy ────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "review_strategy", "progress": 72})
         from app.services.review_strategy import ReviewStrategyService
         review_svc = ReviewStrategyService(llm_client)
@@ -256,14 +466,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             review_strategy = await review_svc.generate_review_strategy(
                 niche_keyword=keyword,
                 competitor_reviews=competitor_reviews,
-                monthly_sales_estimate=metrics.get("estimated_monthly_sales", 100),
-                product_cost=metrics.get("landed_cost", 8),
-                selling_price=metrics.get("avg_price", 30),
+                monthly_sales_estimate=metrics.get("estimated_monthly_sales") or 100,
+                product_cost=metrics.get("landed_cost") or 8,
+                selling_price=metrics.get("avg_price") or 30,
             )
         except Exception as e:
             logger.warning("Review strategy generation failed: %s", e)
 
-        # ── Step 9: Financial projections ──────────────────────────────
+        # ── Step 10: Financial projections ──────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "financial_projections", "progress": 80})
         from app.services.sales_forecast import SalesForecastService
         forecast_svc = SalesForecastService(db)
@@ -271,27 +481,27 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         financial_summary = None
         try:
             forecast = forecast_svc.generate_forecast(
-                selling_price=metrics.get("avg_price", 30),
-                landed_cost=metrics.get("landed_cost", 8),
-                fba_fees=metrics.get("fba_fees", 5),
-                base_weekly_sales=max(1, metrics.get("estimated_monthly_sales", 100) // 4),
-                initial_ppc_daily=metrics.get("ppc_daily_budget", 30),
+                selling_price=metrics.get("avg_price") or 30,
+                landed_cost=metrics.get("landed_cost") or 8,
+                fba_fees=metrics.get("fba_fees") or 5,
+                base_weekly_sales=max(1, (metrics.get("estimated_monthly_sales") or 100) // 4),
+                initial_ppc_daily=metrics.get("ppc_daily_budget") or 30,
             )
             financial_summary = forecast_svc.summarize_forecast(forecast)
             await forecast_svc.save_projections(niche_id, forecast)
 
             # Calculate launch capital
             launch_capital = forecast_svc.calculate_launch_capital(
-                landed_cost=metrics.get("landed_cost", 8),
-                initial_order_qty=metrics.get("initial_order_qty", 500),
+                landed_cost=metrics.get("landed_cost") or 8,
+                initial_order_qty=metrics.get("initial_order_qty") or 500,
                 vine_cost=review_strategy.get("vine_plan", {}).get("costs", {}).get("total_vine_cost", 0) if review_strategy else 0,
-                ppc_budget_90_days=metrics.get("ppc_budget_90d", 2700),
+                ppc_budget_90_days=metrics.get("ppc_budget_90d") or 2700,
             )
             metrics["total_launch_capital"] = launch_capital["total_launch_capital"]
         except Exception as e:
             logger.warning("Financial projections failed: %s", e)
 
-        # ── Step 10: Marketing plan ────────────────────────────────────
+        # ── Step 11: Marketing plan ────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "marketing_plan", "progress": 87})
         from app.services.marketing_service import MarketingService
         marketing_svc = MarketingService(llm_client)
@@ -309,7 +519,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("Marketing plan generation failed: %s", e)
 
-        # ── Step 10b: Consolidated financial report ─────────────────
+        # ── Step 12: Consolidated financial report ─────────────────
         task.update_state(state="PROGRESS", meta={"step": "financial_report", "progress": 90})
         from app.services.financial_report import FinancialReportService
         fin_report_svc = FinancialReportService()
@@ -317,27 +527,29 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         financial_report = None
         try:
             # Estimate FOB cost from landed cost (reverse-engineer)
-            fob_estimate = metrics.get("landed_cost", 8) * 0.55  # FOB is roughly 55% of landed
+            fob_estimate = (metrics.get("landed_cost") or 8) * 0.55  # FOB is roughly 55% of landed
             product_dims = _extract_avg_dimensions(detailed_products)
             financial_report = await fin_report_svc.generate_full_report(
-                selling_price=metrics.get("avg_price", 30),
+                selling_price=metrics.get("avg_price") or 30,
                 unit_cost_fob=fob_estimate,
                 product_dims=product_dims,
                 category=metrics.get("category", "default"),
-                order_quantity=metrics.get("initial_order_qty", 500),
-                estimated_monthly_sales=metrics.get("estimated_monthly_sales", 200),
-                avg_cpc=metrics.get("avg_cpc", 1.50),
-                launch_ppc_daily=metrics.get("ppc_daily_budget", 30),
+                order_quantity=metrics.get("initial_order_qty") or 500,
+                estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
+                avg_cpc=metrics.get("avg_cpc") or 1.50,
+                launch_ppc_daily=metrics.get("ppc_daily_budget") or 30,
+                hard_filter_results=hard_filter_results,
+                confidence_tier=confidence_tier,
             )
         except Exception as e:
             logger.warning("Consolidated financial report failed: %s", e)
 
-        # ── Step 11: Compute Omniscient Score & save recommendation ────
-        task.update_state(state="PROGRESS", meta={"step": "scoring", "progress": 93})
+        # ── Step 13: Save recommendation ───────────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "saving_recommendation", "progress": 93})
         from app.services.recommendation_engine import RecommendationEngine
         engine = RecommendationEngine(db, llm_client)
 
-        # Enrich metrics with everything we've gathered
+        # Re-enrich metrics with PPC and review data now available
         _enrich_metrics(metrics, competitor_landscape, ppc_strategy, review_strategy, supplier_data)
 
         recommendation = await engine.generate_recommendation(
@@ -629,17 +841,6 @@ async def _scrape_search_results(keyword: str) -> list[dict]:
         return []
 
 
-def _clamp_int(value, max_val=2_147_483_647):
-    """Clamp an integer to fit PostgreSQL int32 range."""
-    if value is None:
-        return None
-    try:
-        v = int(value)
-        return min(v, max_val) if v > 0 else max(v, -max_val)
-    except (ValueError, TypeError):
-        return None
-
-
 async def _save_products(db: AsyncSession, niche_id: int, products_data: list[dict]) -> list[int]:
     """Save scraped products to the database, return list of product IDs."""
     from app.models.product import Product
@@ -650,17 +851,18 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
         if not asin:
             continue
 
-        # Check if product already exists
-        stmt = select(Product).where(Product.asin == asin, Product.niche_id == niche_id)
+        # Check if product already exists (asin is globally unique)
+        stmt = select(Product).where(Product.asin == asin)
         existing = (await db.execute(stmt)).scalar_one_or_none()
 
         if existing:
-            # Update existing
+            # Update existing — reassign to current niche
+            existing.niche_id = niche_id
             existing.title = p.get("title", existing.title)
             existing.current_price = p.get("price", existing.current_price)
-            existing.current_bsr = _clamp_int(p.get("bsr", existing.current_bsr))
+            existing.current_bsr = p.get("bsr", existing.current_bsr)
             existing.rating = p.get("rating", existing.rating)
-            existing.review_count = _clamp_int(p.get("review_count", existing.review_count))
+            existing.review_count = p.get("review_count", existing.review_count)
             product_ids.append(existing.id)
         else:
             product = Product(
@@ -668,9 +870,9 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
                 asin=asin,
                 title=p.get("title", ""),
                 current_price=p.get("price"),
-                current_bsr=_clamp_int(p.get("bsr")),
+                current_bsr=p.get("bsr"),
                 rating=p.get("rating"),
-                review_count=_clamp_int(p.get("review_count", 0)),
+                review_count=p.get("review_count", 0),
             )
             db.add(product)
             await db.flush()
@@ -683,7 +885,8 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
 async def _scrape_product_details(
     db: AsyncSession, niche_id: int, products_data: list[dict]
 ) -> list[dict]:
-    """Scrape detailed product pages for enriched data."""
+    """Scrape detailed product pages for enriched data and update DB rows."""
+    from app.models.product import Product
     from app.services.scraper_service import ScraperService
 
     scraper = ScraperService()
@@ -697,9 +900,45 @@ async def _scrape_product_details(
             detail = await scraper.scrape_product_page(asin)
             if detail:
                 detailed.append(detail)
+                # Write enriched data back to the product row
+                stmt = select(Product).where(Product.asin == asin)
+                existing = (await db.execute(stmt)).scalar_one_or_none()
+                if existing:
+                    if detail.get("price") is not None:
+                        existing.current_price = detail["price"]
+                    if detail.get("rating") is not None:
+                        existing.rating = detail["rating"]
+                    if detail.get("review_count") is not None:
+                        existing.review_count = detail["review_count"]
+                    if detail.get("brand"):
+                        existing.brand = detail["brand"]
+                    if detail.get("current_bsr") is not None:
+                        existing.current_bsr = detail["current_bsr"]
+                    if detail.get("bsr_category"):
+                        existing.bsr_category = detail["bsr_category"]
+                    if detail.get("current_subcategory_bsr") is not None:
+                        existing.current_subcategory_bsr = detail["current_subcategory_bsr"]
+                    if detail.get("subcategory_name"):
+                        existing.subcategory_name = detail["subcategory_name"]
+                    if detail.get("bullet_count") is not None:
+                        existing.bullet_count = detail["bullet_count"]
+                    if detail.get("image_count") is not None:
+                        existing.image_count = detail["image_count"]
+                    existing.has_video = detail.get("has_video", existing.has_video)
+                    existing.has_a_plus = detail.get("has_a_plus", existing.has_a_plus)
+                    existing.has_brand_story = detail.get("has_brand_story", existing.has_brand_story)
+                    if detail.get("seller_id"):
+                        existing.seller_id = detail["seller_id"]
+                    if detail.get("last_scraped_at"):
+                        from datetime import datetime as dt
+                        try:
+                            existing.last_scraped_at = dt.fromisoformat(detail["last_scraped_at"])
+                        except (ValueError, TypeError):
+                            pass
         except Exception as e:
             logger.warning("Failed to scrape details for %s: %s", asin, e)
 
+    await db.commit()
     return detailed
 
 
@@ -982,17 +1221,60 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
     }
 
     if competitor_landscape:
+        price_stats = competitor_landscape.get("price_stats", {})
+        review_stats = competitor_landscape.get("review_stats", {})
+        rating_stats = competitor_landscape.get("rating_stats", {})
         metrics.update({
-            "avg_price": competitor_landscape.get("avg_price", 0),
+            "avg_price": price_stats.get("avg", competitor_landscape.get("avg_price", 0)),
             "avg_bsr": competitor_landscape.get("avg_bsr", 0),
-            "avg_rating": competitor_landscape.get("avg_rating", 0),
-            "avg_review_count": competitor_landscape.get("avg_review_count", 0),
-            "median_competitor_reviews": competitor_landscape.get("median_reviews", 0),
+            "avg_rating": rating_stats.get("avg", competitor_landscape.get("avg_rating", 0)),
+            "avg_review_count": review_stats.get("avg", competitor_landscape.get("avg_review_count", 0)),
+            "median_competitor_reviews": review_stats.get("median", competitor_landscape.get("median_reviews", 0)),
             "avg_listing_quality": competitor_landscape.get("avg_listing_quality", 50),
             "strong_seller_count": competitor_landscape.get("strong_seller_count", 0),
             "amazon_seller_pct": competitor_landscape.get("amazon_seller_pct", 0),
             "estimated_monthly_sales": competitor_landscape.get("estimated_monthly_sales", 0),
         })
+
+    # Fallback: if avg_price is still 0, compute from detailed products
+    if not metrics["avg_price"] and detailed_products:
+        prices = [p.get("price") for p in detailed_products if p.get("price")]
+        if prices:
+            metrics["avg_price"] = round(sum(prices) / len(prices), 2)
+            logger.info(
+                "Computed avg_price from %d detailed products: $%.2f",
+                len(prices), metrics["avg_price"],
+            )
+
+    # Fallback: if avg_bsr is still 0, compute from detailed products
+    if not metrics["avg_bsr"] and detailed_products:
+        bsrs = [p.get("current_bsr") for p in detailed_products if p.get("current_bsr")]
+        if bsrs:
+            metrics["avg_bsr"] = round(sum(bsrs) / len(bsrs))
+
+    # Fallback: if avg_review_count is still 0, compute from detailed products
+    if not metrics["avg_review_count"] and detailed_products:
+        reviews = [p.get("review_count") for p in detailed_products if p.get("review_count")]
+        if reviews:
+            metrics["avg_review_count"] = round(sum(reviews) / len(reviews))
+
+    # Compute estimated_monthly_sales from BSR using regression model
+    if not metrics["estimated_monthly_sales"] and metrics["avg_bsr"]:
+        from app.core.bsr_regression import BSRSalesEstimator
+        estimator = BSRSalesEstimator()
+        metrics["estimated_monthly_sales"] = estimator.estimate_monthly_sales(
+            bsr=int(metrics["avg_bsr"]),
+            category=metrics.get("category", "default"),
+        )
+        logger.info(
+            "Estimated monthly sales from BSR %d: %d units",
+            metrics["avg_bsr"], metrics["estimated_monthly_sales"],
+        )
+
+    # Fallback: if still zero but we have products with prices, estimate from product count
+    if not metrics["estimated_monthly_sales"]:
+        metrics["estimated_monthly_sales"] = 300
+        logger.info("Using fallback estimated_monthly_sales: 300")
 
     return metrics
 
@@ -1031,3 +1313,67 @@ def _enrich_metrics(
     metrics.setdefault("break_even_week_base", 16)
     metrics.setdefault("search_volume", 3000)
     metrics.setdefault("monthly_revenue_per_seller", 5000)
+
+
+def _has_chinese(text: str | None) -> bool:
+    """Return True if text contains Chinese characters."""
+    if not text:
+        return False
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
+async def _translate_supplier_fields(llm_client, suppliers: list[dict]) -> list[dict]:
+    """Detect Chinese text in supplier fields and batch-translate via LLM."""
+    # Collect all Chinese strings that need translation
+    texts_to_translate: list[str] = []
+    field_map: list[tuple[int, str]] = []  # (supplier_index, field_name)
+
+    translatable_fields = [
+        "supplier_name", "product_title", "location", "description",
+        "product_name", "shop_name", "category",
+    ]
+
+    for i, s in enumerate(suppliers):
+        for field in translatable_fields:
+            val = s.get(field)
+            if _has_chinese(val):
+                texts_to_translate.append(val)
+                field_map.append((i, field))
+
+    if not texts_to_translate:
+        return suppliers
+
+    # Batch translate via LLM (chunks of 20)
+    chunk_size = 20
+    translated: list[str] = []
+
+    for start in range(0, len(texts_to_translate), chunk_size):
+        chunk = texts_to_translate[start : start + chunk_size]
+        numbered = "\n".join(f"{j+1}. {t}" for j, t in enumerate(chunk))
+        prompt = (
+            "Translate the following Chinese text to English. "
+            "Return ONLY the translations, one per line, numbered to match.\n\n"
+            f"{numbered}"
+        )
+        try:
+            result = await llm_client.generate(prompt)
+            lines = [l.strip() for l in result.strip().split("\n") if l.strip()]
+            # Parse numbered lines
+            parsed: list[str] = []
+            for line in lines:
+                # Strip leading number + dot/parenthesis
+                cleaned = re.sub(r"^\d+[\.\)\]]\s*", "", line)
+                parsed.append(cleaned)
+            translated.extend(parsed)
+        except Exception as e:
+            logger.warning("Translation chunk failed: %s", e)
+            # Keep originals for failed chunks
+            translated.extend(chunk)
+
+    # Apply translations back
+    for idx, (sup_idx, field_name) in enumerate(field_map):
+        if idx < len(translated) and translated[idx]:
+            suppliers[sup_idx][field_name] = translated[idx]
+
+    logger.info("Translated %d supplier fields from Chinese to English", len(field_map))
+    return suppliers

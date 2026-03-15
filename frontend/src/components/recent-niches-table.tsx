@@ -1,24 +1,36 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ScoreBadge } from "@/components/score-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import api from "@/lib/api";
 import type { NicheListItem } from "@/types";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 
 export function RecentNichesTable() {
   const [niches, setNiches] = useState<NicheListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchNiches = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "analyzed_at", sort_dir: "desc" } });
+      setNiches(res.data.items || []);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message || "Failed to load niches");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    api
-      .get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "analyzed_at", sort_dir: "desc" } })
-      .then((res) => setNiches(res.data.items || []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+    fetchNiches();
+  }, [fetchNiches]);
 
   if (loading) {
     return (
@@ -28,6 +40,21 @@ export function RecentNichesTable() {
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-12 w-full" />
           ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader><CardTitle>Recent Analyses</CardTitle></CardHeader>
+        <CardContent className="text-center space-y-3 py-8">
+          <AlertTriangle className="h-8 w-8 text-destructive mx-auto" />
+          <p className="text-sm text-destructive">{error}</p>
+          <Button variant="outline" size="sm" onClick={fetchNiches}>
+            <RefreshCw className="h-4 w-4 mr-2" /> Retry
+          </Button>
         </CardContent>
       </Card>
     );
