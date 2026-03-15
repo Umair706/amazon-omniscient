@@ -1,8 +1,13 @@
-# Omniscient
+# Omniscient — Amazon Product Research Tool
 
-**Amazon Product Research Engine** — Data-driven FBA product opportunity identification with 52-week financial projections.
+**Open-source Amazon FBA product research software** — an alternative to Helium 10, Jungle Scout, and AMZScout for finding profitable private label products.
 
-Omniscient analyzes demand, competition, supplier availability, advertising costs, review barriers, and sales velocity across Amazon's marketplace, then produces a scored recommendation with three-scenario financial projections (bull / base / bear) designed to guarantee profitability under worst-case conditions.
+Omniscient is a full-stack Amazon product research engine that automates niche analysis, competitor intelligence, supplier sourcing, profit margin calculation, and sales estimation. It scrapes Amazon product data, tracks BSR (Best Sellers Rank) history, analyzes reviews with AI, calculates landed costs and FBA fees, and generates 52-week financial projections across bull/base/bear scenarios.
+
+Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce businesses who want a self-hosted, data-driven product research tool without recurring SaaS subscription fees.
+
+### Keywords
+`amazon product research` `amazon fba tool` `private label product finder` `amazon niche finder` `bsr tracker` `amazon competitor analysis` `fba profit calculator` `amazon keyword research` `product opportunity score` `amazon seller tools` `helium 10 alternative` `jungle scout alternative` `amazon scraper` `fba revenue calculator` `amazon market analysis`
 
 ---
 
@@ -255,8 +260,87 @@ Full interactive docs at http://localhost:8000/docs after starting the backend.
 
 ---
 
+## Feature Comparison
+
+How Omniscient compares to popular Amazon seller tools:
+
+| Feature | Omniscient | Helium 10 | Jungle Scout | AMZScout |
+|---------|-----------|-----------|-------------|---------|
+| Product research / niche finder | Yes | Yes | Yes | Yes |
+| BSR tracking & history | Yes | Yes | Yes | Yes |
+| BSR-to-sales estimation | Yes (category-specific regression) | Yes | Yes | Yes |
+| Sub-category BSR handling | Yes (10x scaling) | Partial | No | No |
+| Competitor listing quality scoring | Yes (7 dimensions) | No | No | No |
+| Review sentiment analysis (AI) | Yes (LLM-powered) | No | No | No |
+| Review velocity gap detection | Yes | No | No | No |
+| Landed cost calculator (China to FBA) | Yes (tariffs, duties, shipping) | Basic | Yes | Basic |
+| 52-week financial projections | Yes (3 scenarios) | No | No | No |
+| Opportunity scoring (0-100) | Yes (9 sub-scores + 9 filters) | Yes (simpler) | Yes (simpler) | Yes (simpler) |
+| PPC budget planning | Yes (3-phase) | Yes | No | No |
+| Launch playbook generation | Yes (AI-generated) | No | No | No |
+| Supplier comparison (AI) | Yes | No | Yes | No |
+| Self-hosted / no subscription | Yes | No ($99/mo) | No ($49/mo) | No ($30/mo) |
+| Configurable LLM (Qwen/Claude/GPT) | Yes | N/A | N/A | N/A |
+| Open source code | Yes (visible) | No | No | No |
+
+---
+
+## Use Cases
+
+- **Amazon FBA sellers** researching new private label product opportunities
+- **E-commerce entrepreneurs** validating product ideas before investing
+- **Amazon wholesale sellers** analyzing market demand and competition
+- **Product sourcing teams** calculating landed costs and profit margins
+- **PPC managers** planning Amazon advertising budgets and keyword strategy
+- **Market researchers** tracking BSR trends and category performance
+
+---
+
+## How the Analysis Pipeline Works
+
+```
+Keyword Input
+    |
+    v
+1. Scrape Amazon search results (top 3 pages)
+    |
+    v
+2. Scrape product detail pages for each result
+    |
+    v
+3. Competitor analysis (listing quality, vulnerabilities)
+    |
+    v
+4. LLM review analysis (sentiment, pain points, opportunities)
+    |
+    v
+5. Product spec generation (differentiation strategy)
+    |
+    v
+6. Supplier sourcing + landed cost calculation
+    |
+    v
+7. PPC keyword portfolio + budget planning
+    |
+    v
+8. Review strategy (Vine enrollment, organic velocity)
+    |
+    v
+9. 52-week financial projections (bull / base / bear)
+    |
+    v
+10. Omniscient Score (0-100) + confidence tier
+    |
+    v
+11. Full recommendation with launch playbook
+```
+
+---
+
 ## License
 
 Copyright (c) 2026 Umair706. All Rights Reserved.
 
 This source code is made publicly visible for reference and transparency purposes only. No permission is granted to use, copy, modify, or distribute this software without prior written authorization. See [LICENSE](LICENSE) for full terms.
+
+For licensing inquiries, contact via GitHub: [@Umair706](https://github.com/Umair706)
