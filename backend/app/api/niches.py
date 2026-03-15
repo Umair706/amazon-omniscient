@@ -76,6 +76,8 @@ async def list_niches(
     min_score: float | None = Query(None, ge=0, le=100, description="Minimum opportunity score"),
     confidence_tier: str | None = Query(None, description="Filter by confidence tier (e.g. HIGH, MEDIUM, LOW, FAIL)"),
     status: str | None = Query(None, description="Filter by status (e.g. pending, analyzing, completed, failed)"),
+    sort_by: str | None = Query(None, description="Sort field (opportunity_score, avg_sale_price, monthly_search_volume, avg_review_count, name, created_at)"),
+    sort_dir: str | None = Query("desc", description="Sort direction (asc, desc)"),
     db: AsyncSession = Depends(get_db),
 ) -> NicheListResponse:
     """Return a paginated list of niche summaries ordered by most recent first."""
@@ -95,6 +97,22 @@ async def list_niches(
     if status is not None:
         conditions.append(Niche.status == status)
 
+    # Sorting
+    SORTABLE_FIELDS = {
+        "opportunity_score": Niche.opportunity_score,
+        "avg_sale_price": Niche.avg_sale_price,
+        "monthly_search_volume": Niche.monthly_search_volume,
+        "avg_review_count": Niche.avg_review_count,
+        "name": Niche.name,
+        "created_at": Niche.created_at,
+    }
+
+    sort_column = SORTABLE_FIELDS.get(sort_by, Niche.created_at)
+    if sort_dir == "asc":
+        order_clause = sort_column.asc().nullslast()
+    else:
+        order_clause = sort_column.desc().nullslast()
+
     # Total count
     count_stmt = select(func.count(Niche.id))
     if conditions:
@@ -109,7 +127,7 @@ async def list_niches(
     fetch_stmt = select(Niche)
     if conditions:
         fetch_stmt = fetch_stmt.where(*conditions)
-    fetch_stmt = fetch_stmt.order_by(Niche.created_at.desc()).offset(offset).limit(per_page)
+    fetch_stmt = fetch_stmt.order_by(order_clause).offset(offset).limit(per_page)
 
     result = await db.execute(fetch_stmt)
     niches = result.scalars().all()

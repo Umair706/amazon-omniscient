@@ -47,8 +47,73 @@ class AnalyzeNicheRequest(BaseModel):
     )
 
 
+class AnalyzeKeywordRequest(BaseModel):
+    """Payload to trigger analysis from a keyword (creates niche automatically)."""
+
+    keyword: str = Field(
+        min_length=1, max_length=255, description="Niche keyword to analyze"
+    )
+    force: bool = Field(
+        default=False, description="Force re-analysis if niche already exists"
+    )
+
+
 # ---------------------------------------------------------------------------
-# POST /jobs/analyze-niche — Trigger full niche analysis
+# POST /jobs/analyze — Trigger analysis from a keyword
+# ---------------------------------------------------------------------------
+
+
+@router.post("/analyze", response_model=JobStatusResponse, status_code=202)
+async def trigger_keyword_analysis(
+    payload: AnalyzeKeywordRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JobStatusResponse:
+    """Trigger analysis from a keyword. Creates the niche if it doesn't exist."""
+    keyword = payload.keyword.strip()
+
+    # Check if niche already exists
+    result = await db.execute(
+        select(Niche).where(Niche.primary_keyword == keyword)
+    )
+    niche = result.scalar_one_or_none()
+
+    if niche is not None and not payload.force:
+        # Niche exists — check if already analyzed (opportunity_score is set
+        # only after the scoring step completes successfully).
+        if niche.opportunity_score is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Niche '{keyword}' already analyzed. Use force=true to re-analyze.",
+            )
+
+    if niche is None:
+        niche = Niche(name=keyword, primary_keyword=keyword)
+        db.add(niche)
+        await db.flush()
+        await db.refresh(niche)
+
+    # Dispatch to Celery
+    task = run_full_analysis.delay(
+        niche_id=niche.id,
+        keyword=niche.primary_keyword,
+        options={"force": payload.force},
+    )
+
+    now = datetime.now(timezone.utc)
+
+    return JobStatusResponse(
+        job_id=task.id,
+        status="pending",
+        progress=0,
+        result={"niche_id": niche.id, "keyword": keyword},
+        error=None,
+        created_at=now,
+        updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/analyze-niche — Trigger full niche analysis (by niche ID)
 # ---------------------------------------------------------------------------
 
 
@@ -122,6 +187,7 @@ async def get_job_status(
         # Worker reports progress via self.update_state(state="PROGRESS", meta={...})
         info = result.info or {}
         progress = info.get("progress", 0)
+        task_result = {"step": info.get("step", "unknown")}
     elif state == "SUCCESS":
         progress = 100
         raw = result.result

@@ -30,7 +30,18 @@ _MAX_RETRIES = 3
 class ScraperService:
     """Scrapes Amazon search results, product pages, and reviews via Playwright."""
 
-    def __init__(self, proxy_manager: ProxyManager):
+    def __init__(self, proxy_manager: ProxyManager | None = None):
+        if proxy_manager is None:
+            from app.config import Settings
+
+            settings = Settings()
+            proxy_manager = ProxyManager(
+                provider=settings.PROXY_PROVIDER or "none",
+                host=settings.PROXY_HOST,
+                port=settings.PROXY_PORT,
+                username=settings.PROXY_USERNAME,
+                password=settings.PROXY_PASSWORD,
+            )
         self.proxy_manager = proxy_manager
 
     # ------------------------------------------------------------------
@@ -95,17 +106,18 @@ class ScraperService:
             return None
 
     async def _launch_browser(self, playwright) -> Browser:
-        """Launch a Chromium browser instance with a fresh rotating proxy."""
-        proxy = self.proxy_manager.get_playwright_proxy()
-        browser = await playwright.chromium.launch(
-            headless=True,
-            proxy=proxy,
-            args=[
+        """Launch a Chromium browser instance, optionally with a rotating proxy."""
+        launch_kwargs = {
+            "headless": True,
+            "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
             ],
-        )
+        }
+        if self.proxy_manager.has_proxy:
+            launch_kwargs["proxy"] = self.proxy_manager.get_playwright_proxy()
+        browser = await playwright.chromium.launch(**launch_kwargs)
         return browser
 
     async def _new_page(self, browser: Browser) -> Page:

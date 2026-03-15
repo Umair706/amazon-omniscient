@@ -174,8 +174,23 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         except Exception as e:
             logger.warning("Product spec generation failed: %s", e)
 
-        # ── Step 6: Supplier analysis ──────────────────────────────────
-        task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 55})
+        # ── Step 6a: Supplier scraping from 1688 ──────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "supplier_scraping", "progress": 55})
+        from app.services.supplier_scraper import SupplierScraper
+        supplier_scraper = SupplierScraper()
+
+        scraped_suppliers: list[dict] = []
+        try:
+            scraped_suppliers = await supplier_scraper.search_suppliers(keyword, max_results=10)
+        except Exception as e:
+            logger.warning("Supplier scraping failed: %s", e)
+
+        # Save scraped suppliers to DB
+        if scraped_suppliers:
+            await _save_suppliers(db, niche_id, scraped_suppliers)
+
+        # ── Step 6b: Supplier cost analysis ───────────────────────────
+        task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
         from app.services.supplier_service import SupplierService
         supplier_svc = SupplierService(db)
 
@@ -778,6 +793,116 @@ async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict) -> 
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
 
     return {"landed_cost": landed, "margins": margin}
+
+
+# CNY to USD conversion rate
+_CNY_TO_USD_RATE = 7.2
+
+
+def _calculate_supplier_score(supplier: dict) -> float:
+    """Calculate a basic supplier score (0-100) from scraped data.
+
+    Scoring breakdown:
+        - Transaction count: up to 30 points
+        - Years in business: up to 25 points
+        - Verification badge: 20 points
+        - Response rate: up to 15 points
+        - Has MOQ listed: 10 points
+    """
+    score = 0.0
+
+    # Transaction count (up to 30 pts)
+    txn = supplier.get("transaction_count") or 0
+    if txn >= 10000:
+        score += 30
+    elif txn >= 1000:
+        score += 25
+    elif txn >= 100:
+        score += 18
+    elif txn > 0:
+        score += 10
+
+    # Years in business (up to 25 pts)
+    years = supplier.get("years_in_business") or 0
+    if years >= 10:
+        score += 25
+    elif years >= 5:
+        score += 20
+    elif years >= 3:
+        score += 15
+    elif years >= 1:
+        score += 8
+
+    # Verification badge (20 pts)
+    if supplier.get("is_verified"):
+        score += 20
+
+    # Response rate (up to 15 pts)
+    rate = supplier.get("response_rate") or 0
+    if rate >= 90:
+        score += 15
+    elif rate >= 70:
+        score += 10
+    elif rate > 0:
+        score += 5
+
+    # Has MOQ listed (10 pts — indicates professional listing)
+    if supplier.get("moq") is not None:
+        score += 10
+
+    return min(score, 100.0)
+
+
+async def _save_suppliers(
+    db: AsyncSession, niche_id: int, scraped_suppliers: list[dict]
+) -> list[int]:
+    """Save scraped 1688 supplier data to the Supplier model.
+
+    Converts CNY prices to USD and computes a basic supplier score.
+    Returns the list of created supplier IDs.
+    """
+    from app.models.supplier import Supplier
+
+    supplier_ids: list[int] = []
+
+    for s in scraped_suppliers:
+        supplier_name = s.get("supplier_name")
+        if not supplier_name:
+            continue
+
+        # Convert CNY prices to USD
+        price_min_cny = s.get("price_min")
+        price_max_cny = s.get("price_max")
+        fob_min = round(price_min_cny / _CNY_TO_USD_RATE, 4) if price_min_cny else None
+        fob_max = round(price_max_cny / _CNY_TO_USD_RATE, 4) if price_max_cny else None
+
+        # Calculate supplier score
+        score = _calculate_supplier_score(s)
+
+        supplier = Supplier(
+            niche_id=niche_id,
+            supplier_name=supplier_name,
+            country="China",
+            city=s.get("location"),
+            alibaba_url=s.get("product_url"),
+            years_in_business=s.get("years_in_business"),
+            is_gold_supplier=s.get("is_verified", False),
+            is_verified=s.get("is_verified", False),
+            trade_assurance=False,  # 1688 does not use Alibaba Trade Assurance
+            moq=s.get("moq"),
+            fob_price_min=fob_min,
+            fob_price_max=fob_max,
+            transaction_volume=s.get("transaction_count"),
+            response_rate=s.get("response_rate"),
+            supplier_score=score,
+        )
+        db.add(supplier)
+        await db.flush()
+        supplier_ids.append(supplier.id)
+
+    await db.commit()
+    logger.info("Saved %d suppliers for niche %d from 1688", len(supplier_ids), niche_id)
+    return supplier_ids
 
 
 def _build_base_metrics(competitor_landscape: dict | None, detailed_products: list[dict]) -> dict:
