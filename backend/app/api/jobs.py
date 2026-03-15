@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,14 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db
 from app.models.niche import Niche
 from app.schemas.common import JobStatusResponse
+from app.workers.celery_app import celery_app
+from app.workers.tasks import run_full_analysis
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 # ---------------------------------------------------------------------------
-# In-memory job store (replace with Redis/Celery in production)
+# Celery state -> API status mapping
 # ---------------------------------------------------------------------------
-# Keys: job_id (str) -> dict with status info
-_job_store: dict[str, dict] = {}
+
+_CELERY_STATE_MAP: dict[str, str] = {
+    "PENDING": "pending",
+    "STARTED": "running",
+    "PROGRESS": "running",
+    "SUCCESS": "completed",
+    "FAILURE": "failed",
+    "RETRY": "running",
+    "REVOKED": "failed",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -50,10 +59,10 @@ async def trigger_niche_analysis(
 ) -> JobStatusResponse:
     """Trigger the full analysis pipeline for a niche.
 
-    This enqueues the analysis as a background job and returns immediately
+    This dispatches the analysis as a Celery task and returns immediately
     with a ``job_id`` that can be polled for progress.
 
-    Pipeline stages (executed asynchronously):
+    Pipeline stages (executed asynchronously by Celery worker):
     1. Product scraping & enrichment
     2. Keyword research
     3. Competitor analysis
@@ -71,36 +80,23 @@ async def trigger_niche_analysis(
             detail=f"Niche {payload.niche_id} not found",
         )
 
-    # Create job record
-    job_id = str(uuid.uuid4())
+    # Dispatch to Celery
+    task = run_full_analysis.delay(
+        niche_id=payload.niche_id,
+        keyword=niche.primary_keyword,
+        options={"force": payload.force},
+    )
+
     now = datetime.now(timezone.utc)
 
-    _job_store[job_id] = {
-        "job_id": job_id,
-        "status": "pending",
-        "progress": 0,
-        "result": {
-            "niche_id": payload.niche_id,
-            "force": payload.force,
-        },
-        "error": None,
-        "created_at": now,
-        "updated_at": now,
-    }
-
-    # In production, this is where you would dispatch the job to Celery / ARQ:
-    #   await enqueue_niche_analysis(niche_id=payload.niche_id, force=payload.force)
-    #
-    # For now, the job sits in "pending" state until a worker picks it up.
-
     return JobStatusResponse(
-        job_id=job_id,
+        job_id=task.id,
         status="pending",
         progress=0,
-        result={"niche_id": payload.niche_id, "force": payload.force},
+        result=None,
         error=None,
         created_at=now,
-        updated_at=now,
+        updated_at=None,
     )
 
 
@@ -114,19 +110,36 @@ async def get_job_status(
     job_id: str,
 ) -> JobStatusResponse:
     """Return the current status and progress of a background job."""
-    job = _job_store.get(job_id)
-    if job is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Job '{job_id}' not found",
-        )
+    result = celery_app.AsyncResult(job_id)
+    state = result.state
+    status = _CELERY_STATE_MAP.get(state, "pending")
+
+    progress: int | None = None
+    task_result: dict | None = None
+    error: str | None = None
+
+    if state == "PROGRESS":
+        # Worker reports progress via self.update_state(state="PROGRESS", meta={...})
+        info = result.info or {}
+        progress = info.get("progress", 0)
+    elif state == "SUCCESS":
+        progress = 100
+        raw = result.result
+        task_result = raw if isinstance(raw, dict) else {"result": raw}
+    elif state == "FAILURE":
+        progress = None
+        error = str(result.result)
+    elif state in ("STARTED", "RETRY"):
+        progress = 0
+
+    now = datetime.now(timezone.utc)
 
     return JobStatusResponse(
-        job_id=job["job_id"],
-        status=job["status"],
-        progress=job["progress"],
-        result=job["result"],
-        error=job["error"],
-        created_at=job["created_at"],
-        updated_at=job["updated_at"],
+        job_id=job_id,
+        status=status,
+        progress=progress,
+        result=task_result,
+        error=error,
+        created_at=now,
+        updated_at=now if state != "PENDING" else None,
     )

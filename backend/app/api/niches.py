@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -72,23 +72,46 @@ async def create_niche(
 async def list_niches(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: str | None = Query(None, description="Search by keyword or name"),
+    min_score: float | None = Query(None, ge=0, le=100, description="Minimum opportunity score"),
+    confidence_tier: str | None = Query(None, description="Filter by confidence tier (e.g. HIGH, MEDIUM, LOW, FAIL)"),
+    status: str | None = Query(None, description="Filter by status (e.g. pending, analyzing, completed, failed)"),
     db: AsyncSession = Depends(get_db),
 ) -> NicheListResponse:
     """Return a paginated list of niche summaries ordered by most recent first."""
+    # Build filter conditions
+    conditions: list = []
+    if search is not None:
+        conditions.append(
+            or_(
+                Niche.primary_keyword.ilike(f"%{search}%"),
+                Niche.name.ilike(f"%{search}%"),
+            )
+        )
+    if min_score is not None:
+        conditions.append(Niche.opportunity_score >= min_score)
+    if confidence_tier is not None:
+        conditions.append(Niche.confidence_tier == confidence_tier)
+    if status is not None:
+        conditions.append(Niche.status == status)
+
     # Total count
-    count_result = await db.execute(select(func.count(Niche.id)))
+    count_stmt = select(func.count(Niche.id))
+    if conditions:
+        count_stmt = count_stmt.where(*conditions)
+    count_result = await db.execute(count_stmt)
     total: int = count_result.scalar_one()
 
     total_pages = math.ceil(total / per_page) if total > 0 else 0
     offset = (page - 1) * per_page
 
     # Fetch page
-    result = await db.execute(
-        select(Niche)
-        .order_by(Niche.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    )
+    fetch_stmt = select(Niche)
+    if conditions:
+        fetch_stmt = fetch_stmt.where(*conditions)
+    fetch_stmt = fetch_stmt.order_by(Niche.created_at.desc()).offset(offset).limit(per_page)
+
+    result = await db.execute(fetch_stmt)
     niches = result.scalars().all()
 
     return NicheListResponse(

@@ -274,10 +274,11 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         try:
             # Estimate FOB cost from landed cost (reverse-engineer)
             fob_estimate = metrics.get("landed_cost", 8) * 0.55  # FOB is roughly 55% of landed
+            product_dims = _extract_avg_dimensions(detailed_products)
             financial_report = await fin_report_svc.generate_full_report(
                 selling_price=metrics.get("avg_price", 30),
                 unit_cost_fob=fob_estimate,
-                product_dims={"length": 10, "width": 6, "height": 4, "weight_lb": 1.1},
+                product_dims=product_dims,
                 category=metrics.get("category", "default"),
                 order_quantity=metrics.get("initial_order_qty", 500),
                 estimated_monthly_sales=metrics.get("estimated_monthly_sales", 200),
@@ -677,6 +678,60 @@ async def _collect_competitor_reviews(db: AsyncSession, niche_id: int) -> dict[s
             })
 
     return reviews_by_asin
+
+
+def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
+    """Extract and average product dimensions/weight from scraped product data.
+
+    Parses dimension strings like "10.2 x 6.1 x 4.0 inches" and weight values
+    from each product, then returns averaged values.  Falls back to sensible
+    defaults when no parseable data is found.
+    """
+    import re
+
+    DEFAULT_DIMS = {"length": 10, "width": 6, "height": 4, "weight_lb": 1.1}
+
+    lengths, widths, heights, weights = [], [], [], []
+
+    for product in detailed_products:
+        # --- dimensions ---
+        dim_str = product.get("dimensions") or product.get("product_dimensions") or ""
+        if dim_str:
+            # Match patterns like "10.2 x 6.1 x 4.0 inches" or "10.2 x 6.1 x 4"
+            match = re.search(
+                r"([\d.]+)\s*x\s*([\d.]+)\s*x\s*([\d.]+)",
+                dim_str,
+                re.IGNORECASE,
+            )
+            if match:
+                try:
+                    lengths.append(float(match.group(1)))
+                    widths.append(float(match.group(2)))
+                    heights.append(float(match.group(3)))
+                except (ValueError, IndexError):
+                    pass
+
+        # --- weight ---
+        weight_val = (
+            product.get("weight")
+            or product.get("product_weight_lbs")
+            or product.get("weight_lbs")
+        )
+        if weight_val is not None:
+            try:
+                weights.append(float(weight_val))
+            except (ValueError, TypeError):
+                pass
+
+    if not lengths:
+        return DEFAULT_DIMS
+
+    return {
+        "length": round(sum(lengths) / len(lengths), 2),
+        "width": round(sum(widths) / len(widths), 2),
+        "height": round(sum(heights) / len(heights), 2),
+        "weight_lb": round(sum(weights) / len(weights), 2) if weights else DEFAULT_DIMS["weight_lb"],
+    }
 
 
 def _build_competitor_metadata(detailed_products: list[dict]) -> list[dict]:
