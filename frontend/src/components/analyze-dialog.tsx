@@ -18,6 +18,7 @@ const STEP_LABELS: Record<string, string> = {
   scraping_search: "Searching Amazon...",
   scraping_products: "Scraping product details...",
   products_scraped: "Products collected",
+  review_scraping: "Scraping product reviews...",
   detecting_sub_niches: "Detecting product categories...",
   clustering: "Clustering into sub-niches...",
   loading_products: "Loading product data...",

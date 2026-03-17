@@ -29,6 +29,7 @@ import {
 interface RecommendationDetail {
   id: number;
   niche_id: number;
+  niche_name: string | null;
   omniscient_score: number;
   confidence_tier: string;
   product_description: string | null;
@@ -48,6 +49,8 @@ interface RecommendationDetail {
   ppc_budget_90d: number | null;
   break_even_acos: number | null;
   estimated_acos: number | null;
+  subscore_breakdown: Record<string, number> | null;
+  competitor_landscape: any;
   risk_flags: any;
   ppc_strategy: any;
   marketing_channels: any;
@@ -141,7 +144,9 @@ export default function OpportunityBriefPage() {
           <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
             <ArrowLeft className="h-4 w-4" /> Back
           </button>
-          <h1 className="text-3xl font-bold">Product Opportunity Brief</h1>
+          <h1 className="text-3xl font-bold">
+            {rec.niche_name ? `${rec.niche_name.charAt(0).toUpperCase() + rec.niche_name.slice(1)}` : "Product Opportunity Brief"}
+          </h1>
           <p className="text-muted-foreground mt-1">
             Generated {new Date(rec.generated_at).toLocaleDateString()}
           </p>
@@ -188,107 +193,200 @@ export default function OpportunityBriefPage() {
 
       {/* Overview Tab */}
       {tab === "overview" && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Break-Even Scenarios */}
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Break-Even Analysis</CardTitle></CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {[
-                  { label: "Bull (Optimistic)", week: rec.break_even_week_bull, color: "text-tier1" },
-                  { label: "Base (Realistic)", week: rec.break_even_week_base, color: "text-primary" },
-                  { label: "Bear (Pessimistic)", week: rec.break_even_week_bear, color: "text-rejected" },
-                ].map((s) => (
-                  <div key={s.label} className="flex items-center justify-between">
-                    <span className="text-sm">{s.label}</span>
-                    <span className={`font-semibold ${s.color}`}>
-                      {s.week ? `Week ${s.week}` : "N/A"}
-                    </span>
+        <div className="space-y-6">
+          {/* Subscore Breakdown */}
+          {rec.subscore_breakdown && Object.keys(rec.subscore_breakdown).length > 0 && (
+            <Card>
+              <CardHeader><CardTitle className="text-lg">Omniscient Score Breakdown</CardTitle></CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-3 md:grid-cols-3 gap-3">
+                  {Object.entries(rec.subscore_breakdown).map(([key, value]) => {
+                    const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                    const score = typeof value === "number" ? value : 0;
+                    const color = score >= 70 ? "text-green-600" : score >= 40 ? "text-yellow-600" : "text-red-600";
+                    return (
+                      <div key={key} className="p-3 rounded-lg border text-center">
+                        <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                        <p className={`text-lg font-bold ${color}`}>{score}<span className="text-xs text-muted-foreground">/100</span></p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Market Stats from competitor_landscape */}
+          {rec.competitor_landscape && (
+            <Card>
+              <CardHeader><CardTitle className="text-lg">Market Snapshot</CardTitle></CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Competitors</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.total_competitors ?? "—"}</p>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* PPC Overview */}
-          <Card>
-            <CardHeader><CardTitle className="text-lg">PPC Overview</CardTitle></CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span>30-day Budget</span>
-                  <span className="font-semibold">{rec.ppc_budget_30d ? formatCurrency(rec.ppc_budget_30d) : "—"}</span>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Avg Price</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.price_stats?.avg ? formatCurrency(rec.competitor_landscape.price_stats.avg) : "—"}</p>
+                  </div>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Avg Rating</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.rating_stats?.avg ? `${rec.competitor_landscape.rating_stats.avg}★` : "—"}</p>
+                  </div>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Avg Reviews</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.review_stats?.avg ? Math.round(rec.competitor_landscape.review_stats.avg) : "—"}</p>
+                  </div>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Avg Listing Quality</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.avg_listing_quality ?? "—"}<span className="text-xs text-muted-foreground">/100</span></p>
+                  </div>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Entry Difficulty</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.entry_difficulty_score ?? "—"}<span className="text-xs text-muted-foreground">/100</span></p>
+                  </div>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Price Range</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.price_stats?.min != null ? `${formatCurrency(rec.competitor_landscape.price_stats.min)}-${formatCurrency(rec.competitor_landscape.price_stats.max)}` : "—"}</p>
+                  </div>
+                  <div className="text-center p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground">Vulnerable Competitors</p>
+                    <p className="text-xl font-bold mt-1">{(rec.competitor_landscape.high_vulnerability_count || 0) + (rec.competitor_landscape.medium_vulnerability_count || 0)}</p>
+                  </div>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span>90-day Budget</span>
-                  <span className="font-semibold">{rec.ppc_budget_90d ? formatCurrency(rec.ppc_budget_90d) : "—"}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span>Break-Even ACOS</span>
-                  <span className="font-semibold">{rec.break_even_acos ? `${rec.break_even_acos}%` : "—"}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span>Estimated ACOS</span>
-                  <span className="font-semibold">{rec.estimated_acos ? `${rec.estimated_acos}%` : "—"}</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Review Strategy */}
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Review Strategy</CardTitle></CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span>Target Reviews</span>
-                  <span className="font-semibold">{rec.review_threshold || "—"}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span>Weeks to Target</span>
-                  <span className="font-semibold">{rec.weeks_to_review_threshold || "—"}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span>Vine Recommended</span>
-                  <span className="font-semibold">
-                    {rec.vine_recommended ? (
-                      <Badge>Yes</Badge>
-                    ) : (
-                      <Badge variant="secondary">No</Badge>
-                    )}
-                  </span>
-                </div>
-                {rec.vine_cost && (
-                  <div className="flex justify-between text-sm">
-                    <span>Vine Cost</span>
-                    <span className="font-semibold">{formatCurrency(rec.vine_cost)}</span>
+                {rec.competitor_landscape.opportunity_areas?.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-sm font-medium mb-2">Opportunity Areas</p>
+                    <ul className="space-y-1">
+                      {rec.competitor_landscape.opportunity_areas.map((area: string, i: number) => (
+                        <li key={i} className="flex items-start gap-2 text-sm">
+                          <Lightbulb className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                          {area}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Risk Flags */}
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Risk Flags</CardTitle></CardHeader>
-            <CardContent>
-              {rec.risk_flags?.fail_reasons?.length > 0 ? (
-                <div className="space-y-2">
-                  {rec.risk_flags.fail_reasons.map((reason: string, i: number) => (
-                    <div key={i} className="flex items-start gap-2 text-sm">
-                      <AlertTriangle className="h-4 w-4 text-rejected shrink-0 mt-0.5" />
-                      <span className="text-rejected">{reason}</span>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Break-Even Scenarios */}
+            <Card>
+              <CardHeader><CardTitle className="text-lg">Break-Even Analysis</CardTitle></CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {[
+                    { label: "Bull (Optimistic)", week: rec.break_even_week_bull, color: "text-tier1" },
+                    { label: "Base (Realistic)", week: rec.break_even_week_base, color: "text-primary" },
+                    { label: "Bear (Pessimistic)", week: rec.break_even_week_bear, color: "text-rejected" },
+                  ].map((s) => (
+                    <div key={s.label} className="flex items-center justify-between">
+                      <span className="text-sm">{s.label}</span>
+                      <span className={`font-semibold ${s.color}`}>
+                        {s.week ? `Week ${s.week}` : "N/A"}
+                      </span>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="flex items-center gap-2 text-sm text-tier1">
-                  <CheckCircle2 className="h-4 w-4" />
-                  No risk flags detected
+              </CardContent>
+            </Card>
+
+            {/* PPC Overview */}
+            <Card>
+              <CardHeader><CardTitle className="text-lg">PPC Overview</CardTitle></CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex justify-between text-sm">
+                    <span>30-day Budget</span>
+                    <span className="font-semibold">{rec.ppc_budget_30d ? formatCurrency(rec.ppc_budget_30d) : "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span>90-day Budget</span>
+                    <span className="font-semibold">{rec.ppc_budget_90d ? formatCurrency(rec.ppc_budget_90d) : "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span>Break-Even ACOS</span>
+                    <span className="font-semibold">{rec.break_even_acos ? `${rec.break_even_acos}%` : "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span>Estimated ACOS</span>
+                    <span className="font-semibold">{rec.estimated_acos ? `${rec.estimated_acos}%` : "—"}</span>
+                  </div>
                 </div>
-              )}
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+
+            {/* Review Strategy */}
+            <Card>
+              <CardHeader><CardTitle className="text-lg">Review Strategy</CardTitle></CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex justify-between text-sm">
+                    <span>Target Reviews</span>
+                    <span className="font-semibold">{rec.review_threshold || "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span>Weeks to Target</span>
+                    <span className="font-semibold">{rec.weeks_to_review_threshold || "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span>Vine Recommended</span>
+                    <span className="font-semibold">
+                      {rec.vine_recommended ? (
+                        <Badge>Yes</Badge>
+                      ) : (
+                        <Badge variant="secondary">No</Badge>
+                      )}
+                    </span>
+                  </div>
+                  {rec.vine_cost && (
+                    <div className="flex justify-between text-sm">
+                      <span>Vine Cost</span>
+                      <span className="font-semibold">{formatCurrency(rec.vine_cost)}</span>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Risk Flags & Hard Filters */}
+            <Card>
+              <CardHeader><CardTitle className="text-lg">Risk Flags</CardTitle></CardHeader>
+              <CardContent>
+                {rec.risk_flags?.fail_reasons?.length > 0 ? (
+                  <div className="space-y-2">
+                    {rec.risk_flags.fail_reasons.map((reason: string, i: number) => (
+                      <div key={i} className="flex items-start gap-2 text-sm">
+                        <AlertTriangle className="h-4 w-4 text-rejected shrink-0 mt-0.5" />
+                        <span className="text-rejected">{reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-sm text-tier1">
+                    <CheckCircle2 className="h-4 w-4" />
+                    No risk flags detected
+                  </div>
+                )}
+                {rec.risk_flags?.hard_filters?.length > 0 && (
+                  <div className="mt-4 pt-4 border-t space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Hard Filter Results</p>
+                    {rec.risk_flags.hard_filters.map((f: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="capitalize">{f.filter?.replace(/_/g, " ")}</span>
+                        <Badge variant={f.passed ? "outline" : "destructive"} className="text-[10px]">
+                          {f.passed ? "Pass" : "Fail"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
 
@@ -400,20 +498,28 @@ export default function OpportunityBriefPage() {
                       <img
                         src={p.image_url}
                         alt={p.title || p.asin}
-                        className="w-16 h-16 object-contain rounded border shrink-0"
+                        className="w-20 h-20 object-contain rounded border shrink-0"
                       />
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-start">
                         <div className="flex-1 min-w-0 mr-3">
-                          <h4 className="font-semibold text-sm truncate">{p.title || p.asin}</h4>
-                          <div className="flex gap-2 items-center mt-0.5 text-xs text-muted-foreground">
-                            <span>{p.asin}</span>
-                            {p.price && <span>{formatCurrency(p.price)}</span>}
-                            {p.rating && <span>{p.rating}&#9733;</span>}
-                            {p.review_count && <span>{p.review_count} reviews</span>}
+                          <h4 className="font-semibold text-sm">{p.title || p.asin}</h4>
+                          <div className="flex flex-wrap gap-2 items-center mt-1 text-xs text-muted-foreground">
+                            <a
+                              href={`https://www.amazon.com/dp/${p.asin}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline font-mono"
+                            >
+                              {p.asin}
+                            </a>
+                            {p.price != null && <span className="font-semibold text-foreground">{formatCurrency(p.price)}</span>}
+                            {p.rating != null && <span>{p.rating}&#9733;</span>}
+                            {p.review_count != null && <span>{p.review_count.toLocaleString()} reviews</span>}
+                            {p.bsr != null && <span>BSR: {p.bsr.toLocaleString()}</span>}
                           </div>
-                          <p className="text-sm text-muted-foreground mt-1">{p.overview}</p>
+                          <p className="text-sm text-muted-foreground mt-2">{p.overview}</p>
                         </div>
                         <Badge variant={p.threat_level === "high" ? "destructive" : p.threat_level === "medium" ? "secondary" : "outline"}>
                           {p.threat_level} threat
@@ -467,7 +573,7 @@ export default function OpportunityBriefPage() {
           ) : (
             <Card>
               <CardContent className="p-8 text-center text-muted-foreground">
-                No competitor analysis available.
+                No competitor analysis available. This data requires LLM analysis to generate.
               </CardContent>
             </Card>
           )}

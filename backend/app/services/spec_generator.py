@@ -194,9 +194,18 @@ Return as a JSON array:
 ]"""
 
         result = await self.llm.generate_json(prompt, max_tokens=4096)
-        if not isinstance(result, list):
-            return []
-        return result
+        if isinstance(result, list):
+            return result
+        # Some LLMs wrap arrays in an object — try to extract
+        if isinstance(result, dict):
+            for key in ("ideas", "product_ideas", "products", "items"):
+                if isinstance(result.get(key), list):
+                    return result[key]
+            # If the dict has a single list value, use that
+            list_values = [v for v in result.values() if isinstance(v, list)]
+            if len(list_values) == 1:
+                return list_values[0]
+        return []
 
     @staticmethod
     def _format_pain_points(pain_points: list[dict]) -> str:

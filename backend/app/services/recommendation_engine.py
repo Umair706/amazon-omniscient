@@ -52,6 +52,7 @@ class RecommendationEngine:
         product_ideas: list | None = None,
         review_intelligence: dict | None = None,
         product_supplier_matches: list | None = None,
+        competitor_landscape: dict | None = None,
     ) -> dict:
         """
         Generate the final recommendation for a niche.
@@ -115,6 +116,8 @@ class RecommendationEngine:
             recommendation_data["review_intelligence"] = review_intelligence
         if product_supplier_matches:
             recommendation_data["product_supplier_matches"] = product_supplier_matches
+        if competitor_landscape:
+            recommendation_data["competitor_landscape"] = competitor_landscape
 
         # Step 4: Generate LLM executive summary
         if self.llm and score_result["confidence_tier"] != "FAIL":
@@ -227,7 +230,11 @@ Return a JSON object:
             confidence_tier=data["confidence_tier"],
             # Product strategy
             product_description=data.get("product_spec", {}).get("differentiation_strategy"),
-            differentiation_features=data.get("product_spec", {}).get("key_features_list"),
+            differentiation_features=(
+                data.get("product_spec", {}).get("key_features_list")
+                or data.get("product_spec", {}).get("quality_standards")
+                or data.get("product_spec", {}).get("packaging_requirements")
+            ),
             # Unit economics
             best_landed_cost=Decimal(str(metrics.get("landed_cost", 0))) if metrics.get("landed_cost") else None,
             recommended_sale_price=Decimal(str(metrics.get("avg_price", 0))) if metrics.get("avg_price") else None,
@@ -248,6 +255,9 @@ Return a JSON object:
             ppc_budget_90d=Decimal(str(metrics.get("ppc_budget_90d", 0))) if metrics.get("ppc_budget_90d") else None,
             break_even_acos=Decimal(str(metrics.get("break_even_acos", 0))) if metrics.get("break_even_acos") else None,
             estimated_acos=Decimal(str(metrics.get("estimated_acos", 0))) if metrics.get("estimated_acos") else None,
+            # Scoring breakdown
+            subscore_breakdown=data.get("sub_scores"),
+            competitor_landscape=data.get("competitor_landscape"),
             # JSONB payloads
             marketing_channels=data.get("marketing_plan", {}).get("channels"),
             risk_flags={"fail_reasons": data.get("fail_reasons", []), "hard_filters": data.get("hard_filters", [])},

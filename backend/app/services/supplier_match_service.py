@@ -51,14 +51,18 @@ class SupplierMatchService:
         ]
         """
         results = []
+        consecutive_empty = 0  # Circuit breaker for when 1688 is blocking
 
         for product in products:
             asin = product.get("asin", "")
             title = product.get("title", "")
-            if not title:
+            if not title or consecutive_empty >= 3:
+                # Skip if 1688 is consistently returning no results (blocked)
+                if consecutive_empty >= 3 and title:
+                    logger.info("Skipping supplier match for %s — 1688 appears blocked", asin)
                 results.append({
                     "asin": asin,
-                    "product_title": title,
+                    "product_title": title or "",
                     "matched_suppliers": [],
                 })
                 continue
@@ -68,8 +72,13 @@ class SupplierMatchService:
                     product, max_suppliers_per_product
                 )
                 results.append(match_result)
+                if match_result.get("matched_suppliers"):
+                    consecutive_empty = 0
+                else:
+                    consecutive_empty += 1
             except Exception as e:
                 logger.warning("Supplier matching failed for %s: %s", asin, e)
+                consecutive_empty += 1
                 results.append({
                     "asin": asin,
                     "product_title": title,

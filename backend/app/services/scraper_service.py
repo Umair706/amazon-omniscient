@@ -186,7 +186,21 @@ class ScraperService:
                             timeout=15_000,
                         )
                     except Exception:
-                        logger.warning("No search results found on page %d for '%s'", page_num, keyword)
+                        # Debug: log page title and CAPTCHA detection
+                        try:
+                            page_title = await page.title()
+                            has_captcha = await page.locator("form[action*='validateCaptcha'], #captchacharacters, img[src*='captcha']").count()
+                            body_len = len(await page.locator("body").inner_text())
+                            logger.warning(
+                                "No search results found on page %d for '%s' — "
+                                "page_title='%s', captcha=%s, body_len=%d",
+                                page_num, keyword,
+                                page_title[:80] if page_title else "N/A",
+                                has_captcha > 0,
+                                body_len,
+                            )
+                        except Exception:
+                            logger.warning("No search results found on page %d for '%s'", page_num, keyword)
                         break
 
                     result_divs = page.locator('div[data-component-type="s-search-result"]')
@@ -201,14 +215,28 @@ class ScraperService:
                         if not asin:
                             continue
 
-                        # Title
+                        # Title — try multiple selectors
                         title: str | None = None
-                        try:
-                            title_el = div.locator("h2 a span").first
-                            if await title_el.count():
-                                title = (await title_el.inner_text()).strip()
-                        except Exception:
-                            pass
+                        for title_sel in (
+                            "h2 a span",
+                            "h2 span a",
+                            "h2 a",
+                            "h2 span",
+                            "h2",
+                            'span[class*="a-text-normal"]',
+                            'a.a-link-normal span.a-text-normal',
+                            '[data-cy="title-recipe"] a span',
+                            '[data-cy="title-recipe"] h2',
+                        ):
+                            try:
+                                title_el = div.locator(title_sel).first
+                                if await title_el.count():
+                                    txt = (await title_el.inner_text()).strip()
+                                    if txt and len(txt) > 3:
+                                        title = txt
+                                        break
+                            except Exception:
+                                continue
 
                         # Price — try non-struck-through price first, then any price
                         price: float | None = None
@@ -247,17 +275,25 @@ class ScraperService:
                         except Exception:
                             pass
 
-                        # Review count
+                        # Review count — try multiple selectors
                         review_count: int | None = None
-                        try:
-                            rc_el = div.locator('span[data-component-type="s-client-side-analytics"] span.a-size-base.s-underline-text').first
-                            if await rc_el.count() == 0:
-                                # Fallback: look for the link near the rating
-                                rc_el = div.locator("a.a-link-normal .a-size-base").first
-                            if await rc_el.count():
-                                review_count = self._safe_int(await rc_el.inner_text())
-                        except Exception:
-                            pass
+                        for rc_sel in (
+                            'span[data-component-type="s-client-side-analytics"] span.a-size-base.s-underline-text',
+                            'a.a-link-normal .a-size-base',
+                            'a[href*="#customerReviews"] span.a-size-base',
+                            'span.a-size-base.s-underline-text',
+                            'a[data-hook="review-count"]',
+                            '.a-row.a-size-small span:last-child',
+                        ):
+                            try:
+                                rc_el = div.locator(rc_sel).first
+                                if await rc_el.count():
+                                    val = self._safe_int(await rc_el.inner_text())
+                                    if val is not None and val > 0:
+                                        review_count = val
+                                        break
+                            except Exception:
+                                continue
 
                         # Sponsored
                         is_sponsored = False
@@ -375,12 +411,36 @@ class ScraperService:
 
                 # Wait for the product title to confirm the page loaded
                 try:
-                    await page.wait_for_selector("#productTitle", timeout=15_000)
+                    await page.wait_for_selector("#productTitle, h1#title, span#productTitle, h1[class*='title']", timeout=15_000)
                 except Exception:
                     logger.warning("Product title not found for ASIN %s", asin)
 
-                # Title
-                title = await self._safe_text(page, "#productTitle")
+                # Title — try multiple selectors
+                title: str | None = None
+                for title_sel in (
+                    "#productTitle",
+                    "h1#title span",
+                    "h1#title",
+                    "span#productTitle",
+                    "h1[class*='title']",
+                    "#titleSection h1",
+                    "#title_feature_div #productTitle",
+                    "[data-feature-name='title'] h1",
+                    "#dp-container h1",
+                ):
+                    title = await self._safe_text(page, title_sel)
+                    if title:
+                        break
+                # Last resort: try the page's <title> tag (strip " - Amazon.com" suffix)
+                if not title:
+                    try:
+                        page_title = await page.title()
+                        if page_title and "Amazon.com" in page_title:
+                            title = page_title.split(" - Amazon.com")[0].split(" : Amazon.com")[0].strip()
+                            if title and len(title) < 5:
+                                title = None  # Too short, probably not a real title
+                    except Exception:
+                        pass
 
                 # Price — try multiple selectors (ordered by reliability)
                 price: float | None = None
@@ -657,21 +717,41 @@ class ScraperService:
 
                     await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
-                    # Wait for review cards
-                    try:
-                        await page.wait_for_selector(
-                            'div[data-hook="review"]',
-                            timeout=15_000,
-                        )
-                    except Exception:
-                        # No reviews found — we've likely exhausted all pages
+                    # Wait for review cards — try multiple selectors
+                    review_selector: str | None = None
+                    for rs in (
+                        'div[data-hook="review"]',
+                        'div.review',
+                        'div[id^="customer_review-"]',
+                        'div.a-section.review',
+                        'div[class*="review-views"]',
+                        'div.cr-widget-FocalReviews div[id^="R"]',
+                    ):
+                        try:
+                            await page.wait_for_selector(rs, timeout=8_000)
+                            review_selector = rs
+                            break
+                        except Exception:
+                            continue
+
+                    if not review_selector:
+                        # Debug: log what's on the page
+                        try:
+                            page_title = await page.title()
+                            body_text_len = len(await page.locator("body").inner_text())
+                            logger.info(
+                                "Review page debug for %s page %d: title='%s', body_len=%d",
+                                asin, page_num, page_title[:80] if page_title else "N/A", body_text_len,
+                            )
+                        except Exception:
+                            pass
                         logger.info(
                             "No more reviews found for %s at page %d",
                             asin, page_num,
                         )
                         break
 
-                    review_divs = page.locator('div[data-hook="review"]')
+                    review_divs = page.locator(review_selector)
                     count = await review_divs.count()
                     if count == 0:
                         break

@@ -305,13 +305,69 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                         if detail.get(key) is not None:
                             p[key] = detail[key]
 
-            # Ensure image_url from search results flows into detailed_products
-            search_images = {p.get("asin"): p.get("image_url") for p in products_data if p.get("image_url")}
+            # Ensure search result data flows into detailed_products
+            search_data = {
+                p.get("asin"): p for p in products_data if p.get("asin")
+            }
             for d in detailed_products:
-                if not d.get("image_url") and d.get("asin") in search_images:
-                    d["image_url"] = search_images[d["asin"]]
+                search = search_data.get(d.get("asin"), {})
+                if not d.get("image_url") and search.get("image_url"):
+                    d["image_url"] = search["image_url"]
+                if not d.get("title") and search.get("title"):
+                    d["title"] = search["title"]
+                if d.get("review_count") is None and search.get("review_count") is not None:
+                    d["review_count"] = search["review_count"]
+                if d.get("price") is None and search.get("price") is not None:
+                    d["price"] = search["price"]
+                if d.get("rating") is None and search.get("rating") is not None:
+                    d["rating"] = search["rating"]
+                if d.get("bsr") is None and d.get("current_bsr") is None and search.get("bsr") is not None:
+                    d["bsr"] = search["bsr"]
 
             task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
+
+        # ── Step 2c: Scrape reviews for top products ─────────────────
+        task.update_state(state="PROGRESS", meta={"step": "review_scraping", "progress": 32})
+        from app.models.review import Review as ReviewModel
+        from app.services.scraper_service import ScraperService as ReviewScraper
+        review_scraper = ReviewScraper()
+        top_asins = [p.get("asin") for p in detailed_products[:10] if p.get("asin")]
+        reviews_scraped = 0
+        for asin in top_asins:
+            try:
+                # Find product in DB
+                p_stmt = select(Product).where(Product.asin == asin)
+                p_result = await db.execute(p_stmt)
+                product_obj = p_result.scalar_one_or_none()
+                if not product_obj:
+                    continue
+
+                # Check if reviews already exist
+                r_count = await db.execute(
+                    select(ReviewModel.id).where(ReviewModel.product_id == product_obj.id).limit(1)
+                )
+                if r_count.scalar_one_or_none():
+                    continue  # Already have reviews for this product
+
+                # Scrape reviews (1 page = ~10 reviews per product, all stars)
+                reviews_data = await review_scraper.scrape_reviews(asin, filter_star="all_stars", max_pages=1)
+                for review_data in reviews_data:
+                    review_obj = ReviewModel(
+                        product_id=product_obj.id,
+                        reviewer_name=review_data.get("reviewer_name", "Anonymous"),
+                        rating=review_data.get("rating", 0),
+                        title=review_data.get("title", ""),
+                        body=review_data.get("body", ""),
+                        review_date=review_data.get("date"),
+                        verified_purchase=review_data.get("verified", False),
+                        helpful_votes=review_data.get("helpful_votes", 0),
+                    )
+                    db.add(review_obj)
+                    reviews_scraped += 1
+                await db.flush()
+            except Exception as e:
+                logger.warning("Review scraping failed for %s: %s", asin, e)
+        logger.info("Scraped %d reviews for %d products", reviews_scraped, len(top_asins))
 
         # ── Step 3: Competitor analysis ────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "competitor_analysis", "progress": 35})
@@ -661,6 +717,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             product_ideas=product_ideas,
             review_intelligence=review_intelligence,
             product_supplier_matches=product_supplier_matches,
+            competitor_landscape=competitor_landscape,
         )
 
         await db.commit()
@@ -957,11 +1014,16 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
         if existing:
             # Update existing — reassign to current niche
             existing.niche_id = niche_id
-            existing.title = p.get("title", existing.title)
-            existing.current_price = p.get("price", existing.current_price)
-            existing.current_bsr = p.get("bsr", existing.current_bsr)
-            existing.rating = p.get("rating", existing.rating)
-            existing.review_count = p.get("review_count", existing.review_count)
+            if p.get("title"):
+                existing.title = p["title"]
+            if p.get("price") is not None:
+                existing.current_price = p["price"]
+            if p.get("bsr") is not None:
+                existing.current_bsr = p["bsr"]
+            if p.get("rating") is not None:
+                existing.rating = p["rating"]
+            if p.get("review_count") is not None:
+                existing.review_count = p["review_count"]
             if p.get("image_url"):
                 existing.image_url = p["image_url"]
             product_ids.append(existing.id)
@@ -1006,6 +1068,8 @@ async def _scrape_product_details(
                 stmt = select(Product).where(Product.asin == asin)
                 existing = (await db.execute(stmt)).scalar_one_or_none()
                 if existing:
+                    if detail.get("title"):
+                        existing.title = detail["title"]
                     if detail.get("price") is not None:
                         existing.current_price = detail["price"]
                     if detail.get("rating") is not None:
@@ -1389,6 +1453,14 @@ def _enrich_metrics(
     supplier_data: dict | None,
 ):
     """Enrich the metrics dict with data from all analysis services."""
+    if competitor_landscape:
+        metrics.setdefault("avg_review_count", competitor_landscape.get("avg_reviews"))
+        metrics.setdefault("median_competitor_reviews", competitor_landscape.get("median_reviews", competitor_landscape.get("avg_reviews")))
+        if competitor_landscape.get("avg_listing_quality") is not None:
+            metrics.setdefault("avg_listing_quality", competitor_landscape.get("avg_listing_quality"))
+        if competitor_landscape.get("high_vulnerability_count") is not None:
+            metrics.setdefault("high_vulnerability_count", competitor_landscape.get("high_vulnerability_count"))
+
     if ppc_strategy:
         metrics["avg_cpc"] = ppc_strategy.get("avg_cpc", metrics.get("avg_cpc", 1.5))
         metrics["break_even_acos"] = ppc_strategy.get("break_even_acos", 0)

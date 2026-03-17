@@ -152,6 +152,10 @@ export interface RecommendationDetail extends RecommendationSummary {
   break_even_acos: string | null;
   estimated_acos: string | null;
 
+  // Scoring breakdown
+  subscore_breakdown: Record<string, number> | null;
+  competitor_landscape: Record<string, unknown> | null;
+
   // JSONB payloads
   marketing_channels: Record<string, unknown> | null;
   risk_flags: Record<string, unknown> | null;

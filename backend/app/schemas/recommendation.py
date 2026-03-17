@@ -64,6 +64,10 @@ class RecommendationResponse(BaseModel):
     break_even_acos: Decimal | None = None
     estimated_acos: Decimal | None = None
 
+    # Scoring breakdown
+    subscore_breakdown: dict | None = None
+    competitor_landscape: dict | None = None
+
     # Rich JSONB payloads
     marketing_channels: dict | None = None
     risk_flags: dict | None = None

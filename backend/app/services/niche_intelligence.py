@@ -33,10 +33,10 @@ class NicheIntelligenceService:
         top_products_text = ""
         for p in products[:5]:
             top_products_text += (
-                f"  - {p.get('title', 'N/A')[:80]}: "
-                f"${p.get('price', '?')}, "
-                f"BSR={p.get('bsr') or p.get('current_bsr', '?')}, "
-                f"Reviews={p.get('review_count', '?')}\n"
+                f"  - {(p.get('title') or 'N/A')[:80]}: "
+                f"${p.get('price') or '?'}, "
+                f"BSR={p.get('bsr') or p.get('current_bsr') or '?'}, "
+                f"Reviews={p.get('review_count') or '?'}\n"
             )
 
         avg_price = metrics.get("avg_price", 0)
@@ -115,18 +115,21 @@ Write a market intelligence report as JSON:
                 "bsr": p.get("bsr") or p.get("current_bsr"),
             }
             detail = detail_by_asin.get(asin, {})
+            listing_scores = detail.get("listing_scores", {}) or {}
+            vulnerabilities = detail.get("vulnerabilities", []) or []
+            vuln_types = [v.get("type", "") for v in vulnerabilities if isinstance(v, dict)]
             products_text += (
                 f"- ASIN: {asin}\n"
-                f"  Title: {p.get('title', 'N/A')[:100]}\n"
-                f"  Price: ${p.get('price', '?')}\n"
-                f"  Rating: {p.get('rating', '?')}\n"
-                f"  Reviews: {p.get('review_count', '?')}\n"
-                f"  BSR: {p.get('bsr') or p.get('current_bsr', '?')}\n"
-                f"  Listing quality: {detail.get('listing_quality_score', 'N/A')}/100\n"
-                f"  Vulnerability: {detail.get('vulnerability', 'N/A')}\n"
-                f"  Has A+: {p.get('has_a_plus', 'N/A')}\n"
-                f"  Has video: {p.get('has_video', 'N/A')}\n"
-                f"  Image count: {p.get('image_count', 'N/A')}\n\n"
+                f"  Title: {(p.get('title') or 'N/A')[:100]}\n"
+                f"  Price: ${p.get('price') or '?'}\n"
+                f"  Rating: {p.get('rating') or '?'}\n"
+                f"  Reviews: {p.get('review_count') or '?'}\n"
+                f"  BSR: {p.get('bsr') or p.get('current_bsr') or '?'}\n"
+                f"  Listing quality: {listing_scores.get('overall', 'N/A')}/100\n"
+                f"  Vulnerabilities: {', '.join(vuln_types) if vuln_types else 'none'}\n"
+                f"  Has A+: {p.get('has_a_plus') or 'N/A'}\n"
+                f"  Has video: {p.get('has_video') or 'N/A'}\n"
+                f"  Image count: {p.get('image_count') or 'N/A'}\n\n"
             )
 
         prompt = f"""Analyze each Amazon product as a competitor. For each product, assess its competitive position.
@@ -146,6 +149,15 @@ For each product return a JSON object with:
 Return as a JSON array."""
 
         result = await self.llm.generate_json(prompt, max_tokens=8192)
+        if isinstance(result, dict):
+            # LLM may wrap array in an object
+            for key in ("products", "product_overviews", "overviews", "competitors", "items"):
+                if isinstance(result.get(key), list):
+                    result = result[key]
+                    break
+            else:
+                list_values = [v for v in result.values() if isinstance(v, list)]
+                result = list_values[0] if len(list_values) == 1 else []
         if not isinstance(result, list):
             return []
 

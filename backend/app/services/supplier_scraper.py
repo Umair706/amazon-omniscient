@@ -23,7 +23,7 @@ _USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
 ]
 
-_MAX_RETRIES = 3
+_MAX_RETRIES = 2
 
 # 1688 supplier badge keywords
 _POWER_SUPPLIER_BADGE = "\u5b9e\u529b\u5546\u5bb6"  # Power supplier
@@ -33,12 +33,17 @@ _VERIFIED_BADGES = [_POWER_SUPPLIER_BADGE, _GOLD_SUPPLIER_BADGE, "\u8bda\u4fe1\u
 # Container selectors for product cards — 1688 updates its layout frequently,
 # so we try multiple selectors in order of likelihood.
 _CARD_SELECTORS = [
+    'div[data-trackkey="offercard"]',
+    "div.pc-offer-card",
     "div.sm-offer-item",
     "div.offer-item-row",
-    'div[data-trackkey="offercard"]',
     "div.space-offer-card-box",
     "div.common-offer-card",
     "div.img-offer-item",
+    "div.mojar-offer-card",
+    'div[class*="OfferCard"]',
+    'div[class*="offer-card"]',
+    'a[class*="CardContainer"]',
 ]
 
 
@@ -281,16 +286,42 @@ class SupplierScraper:
                 card_selector = None
                 try:
                     # Give 1688 time to render its dynamic content
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(5)
+                    # Try waiting for any known card selector
+                    for sel in _CARD_SELECTORS:
+                        try:
+                            await page.wait_for_selector(sel, timeout=3000)
+                            break
+                        except Exception:
+                            continue
                     card_selector = await self._find_card_selector(page)
                 except Exception:
                     pass
 
+                # If no cards found, try scrolling down to trigger lazy loading
                 if not card_selector:
-                    logger.warning(
-                        "No product cards found for '%s' on 1688 (attempt %d)",
-                        keyword, attempt,
-                    )
+                    try:
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+                        await asyncio.sleep(3)
+                        card_selector = await self._find_card_selector(page)
+                    except Exception:
+                        pass
+
+                if not card_selector:
+                    # Log what's actually on the page for debugging
+                    try:
+                        page_title = await page.title()
+                        body_classes = await page.evaluate("document.body.className || ''")
+                        div_count = await page.evaluate("document.querySelectorAll('div').length")
+                        logger.warning(
+                            "No product cards found for '%s' on 1688 (attempt %d) - page title: '%s', body classes: '%s', div count: %d",
+                            keyword, attempt, page_title, body_classes, div_count,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "No product cards found for '%s' on 1688 (attempt %d)",
+                            keyword, attempt,
+                        )
                     if attempt < _MAX_RETRIES:
                         await self._random_delay(1.0, 2.0)
                         continue

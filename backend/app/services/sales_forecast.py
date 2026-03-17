@@ -281,14 +281,14 @@ class SalesForecastService:
         now = datetime.now(timezone.utc)
         count = 0
 
-        # Delete existing projections for this niche
-        existing = await self.db.execute(
-            select(FinancialProjection).where(
+        # Delete existing projections for this niche using bulk delete
+        from sqlalchemy import delete
+        await self.db.execute(
+            delete(FinancialProjection).where(
                 FinancialProjection.niche_id == niche_id
             )
         )
-        for row in existing.scalars().all():
-            await self.db.delete(row)
+        await self.db.flush()
 
         # Insert new projections
         for scenario, weeks in forecast.items():
