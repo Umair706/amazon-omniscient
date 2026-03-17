@@ -616,6 +616,23 @@ class ScraperService:
                 except Exception:
                     pass
 
+                # ── Extract top reviews from the product page ──
+                page_reviews: list[dict] = []
+                try:
+                    review_containers = page.locator(
+                        '#cm-cr-dp-review-list div[data-hook="review"], '
+                        '#reviewsMedley div[data-hook="review"], '
+                        'div[id^="customer_review-"]'
+                    )
+                    rev_count = await review_containers.count()
+                    for ri in range(min(rev_count, 10)):
+                        rdiv = review_containers.nth(ri)
+                        rev = await self._extract_single_review(rdiv, asin)
+                        if rev and rev.get("body"):
+                            page_reviews.append(rev)
+                except Exception as e:
+                    logger.debug("Product page review extraction failed for %s: %s", asin, e)
+
                 result = {
                     "asin": asin,
                     "title": title,
@@ -639,6 +656,7 @@ class ScraperService:
                     "subscribe_save": subscribe_save,
                     "is_fba": None,  # Will be enriched from search or SP-API
                     "last_scraped_at": datetime.utcnow().isoformat(),
+                    "page_reviews": page_reviews,
                 }
 
                 logger.info("Scraped product page for ASIN %s", asin)
@@ -666,7 +684,121 @@ class ScraperService:
         )
 
     # ------------------------------------------------------------------
-    # 3. Reviews scraper
+    # 3. Single review extraction (shared helper)
+    # ------------------------------------------------------------------
+
+    async def _extract_single_review(self, div, asin: str) -> dict | None:
+        """Extract a single review from a review div element.
+
+        Reusable across product-page top reviews and dedicated review pages.
+        """
+        review_id = await div.get_attribute("id")
+
+        # Rating
+        review_rating: int | None = None
+        try:
+            star_el = div.locator(
+                'i[data-hook="review-star-rating"] span.a-icon-alt, '
+                'i[data-hook="cmps-review-star-rating"] span.a-icon-alt'
+            ).first
+            if await star_el.count():
+                star_text = await star_el.inner_text()
+                parsed = self._safe_float(star_text)
+                review_rating = int(parsed) if parsed is not None else None
+        except Exception:
+            pass
+
+        # Title
+        review_title: str | None = None
+        try:
+            title_el = div.locator(
+                'a[data-hook="review-title"] span:not(.a-icon-alt), '
+                'span[data-hook="review-title"] span:not(.a-icon-alt)'
+            ).first
+            if await title_el.count():
+                review_title = (await title_el.inner_text()).strip()
+        except Exception:
+            pass
+
+        # Body
+        review_body: str | None = None
+        try:
+            body_el = div.locator('span[data-hook="review-body"] span').first
+            if await body_el.count():
+                review_body = (await body_el.inner_text()).strip()
+        except Exception:
+            pass
+
+        # Date
+        review_date: str | None = None
+        try:
+            date_el = div.locator('span[data-hook="review-date"]').first
+            if await date_el.count():
+                date_text = (await date_el.inner_text()).strip()
+                date_match = re.search(
+                    r"on\s+(\w+\s+\d{1,2},\s+\d{4})",
+                    date_text,
+                )
+                if date_match:
+                    try:
+                        parsed_date = datetime.strptime(
+                            date_match.group(1), "%B %d, %Y"
+                        )
+                        review_date = parsed_date.date().isoformat()
+                    except ValueError:
+                        review_date = date_match.group(1)
+        except Exception:
+            pass
+
+        # Verified purchase
+        verified_purchase = False
+        try:
+            vp_el = div.locator('span[data-hook="avp-badge"]')
+            verified_purchase = (await vp_el.count()) > 0
+        except Exception:
+            pass
+
+        # Helpful votes
+        helpful_votes: int = 0
+        try:
+            helpful_el = div.locator('span[data-hook="helpful-vote-statement"]').first
+            if await helpful_el.count():
+                helpful_text = await helpful_el.inner_text()
+                if "one" in helpful_text.lower():
+                    helpful_votes = 1
+                else:
+                    helpful_votes = self._safe_int(helpful_text) or 0
+        except Exception:
+            pass
+
+        # Vine voice
+        is_vine = False
+        try:
+            vine_el = div.locator(
+                'span[data-hook="vine-review-badge"], '
+                'span.a-color-link:has-text("Vine")'
+            )
+            is_vine = (await vine_el.count()) > 0
+        except Exception:
+            pass
+
+        if not review_body and not review_title:
+            return None
+
+        return {
+            "asin": asin,
+            "review_id": review_id,
+            "rating": review_rating,
+            "title": review_title,
+            "body": review_body,
+            "review_date": review_date,
+            "verified_purchase": verified_purchase,
+            "helpful_votes": helpful_votes,
+            "is_vine": is_vine,
+        }
+
+    # ------------------------------------------------------------------
+    # 4. Reviews scraper
     # ------------------------------------------------------------------
 
     async def scrape_reviews(
@@ -758,104 +890,9 @@ class ScraperService:
 
                     for i in range(count):
                         div = review_divs.nth(i)
-
-                        # Review ID
-                        review_id = await div.get_attribute("id")
-
-                        # Rating
-                        review_rating: int | None = None
-                        try:
-                            star_el = div.locator('i[data-hook="review-star-rating"] span.a-icon-alt, i[data-hook="cmps-review-star-rating"] span.a-icon-alt').first
-                            if await star_el.count():
-                                star_text = await star_el.inner_text()
-                                parsed = self._safe_float(star_text)
-                                review_rating = int(parsed) if parsed is not None else None
-                        except Exception:
-                            pass
-
-                        # Title
-                        review_title: str | None = None
-                        try:
-                            title_el = div.locator('a[data-hook="review-title"] span:not(.a-icon-alt), span[data-hook="review-title"] span:not(.a-icon-alt)').first
-                            if await title_el.count():
-                                review_title = (await title_el.inner_text()).strip()
-                        except Exception:
-                            pass
-
-                        # Body
-                        review_body: str | None = None
-                        try:
-                            body_el = div.locator('span[data-hook="review-body"] span').first
-                            if await body_el.count():
-                                review_body = (await body_el.inner_text()).strip()
-                        except Exception:
-                            pass
-
-                        # Date
-                        review_date: str | None = None
-                        try:
-                            date_el = div.locator('span[data-hook="review-date"]').first
-                            if await date_el.count():
-                                date_text = (await date_el.inner_text()).strip()
-                                # Pattern: "Reviewed in the United States on January 15, 2024"
-                                date_match = re.search(
-                                    r"on\s+(\w+\s+\d{1,2},\s+\d{4})",
-                                    date_text,
-                                )
-                                if date_match:
-                                    try:
-                                        parsed_date = datetime.strptime(
-                                            date_match.group(1), "%B %d, %Y"
-                                        )
-                                        review_date = parsed_date.date().isoformat()
-                                    except ValueError:
-                                        review_date = date_match.group(1)
-                        except Exception:
-                            pass
-
-                        # Verified purchase
-                        verified_purchase = False
-                        try:
-                            vp_el = div.locator('span[data-hook="avp-badge"]')
-                            verified_purchase = (await vp_el.count()) > 0
-                        except Exception:
-                            pass
-
-                        # Helpful votes
-                        helpful_votes: int | None = 0
-                        try:
-                            helpful_el = div.locator('span[data-hook="helpful-vote-statement"]').first
-                            if await helpful_el.count():
-                                helpful_text = await helpful_el.inner_text()
-                                # "42 people found this helpful" or "One person found this helpful"
-                                if "one" in helpful_text.lower():
-                                    helpful_votes = 1
-                                else:
-                                    helpful_votes = self._safe_int(helpful_text) or 0
-                        except Exception:
-                            pass
-
-                        # Vine voice
-                        is_vine = False
-                        try:
-                            vine_el = div.locator('span[data-hook="vine-review-badge"], span.a-color-link:has-text("Vine")')
-                            is_vine = (await vine_el.count()) > 0
-                        except Exception:
-                            pass
-
-                        all_reviews.append(
-                            {
-                                "asin": asin,
-                                "review_id": review_id,
-                                "rating": review_rating,
-                                "title": review_title,
-                                "body": review_body,
-                                "review_date": review_date,
-                                "verified_purchase": verified_purchase,
-                                "helpful_votes": helpful_votes,
-                                "is_vine": is_vine,
-                            }
-                        )
+                        rev = await self._extract_single_review(div, asin)
+                        if rev:
+                            all_reviews.append(rev)
 
                     # Random delay between review pages
                     if page_num < max_pages:

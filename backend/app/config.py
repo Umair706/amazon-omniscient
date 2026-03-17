@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # ── Alibaba / 1688 ─────────────────────────────────────────────────
     ALIBABA_APP_KEY: str = ""
     ALIBABA_APP_SECRET: str = ""
+    ALIBABA_1688_EMAIL: str = ""
+    ALIBABA_1688_PASSWORD: str = ""
+
+    # ── Amazon Login (optional, for authenticated review scraping) ────
+    AMAZON_EMAIL: str = ""
+    AMAZON_PASSWORD: str = ""
 
     # ── Freightos ──────────────────────────────────────────────────────
     FREIGHTOS_API_KEY: str = ""

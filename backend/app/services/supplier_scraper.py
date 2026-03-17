@@ -50,8 +50,9 @@ _CARD_SELECTORS = [
 class SupplierScraper:
     """Scrapes 1688.com search results and product pages for supplier data via Playwright."""
 
-    def __init__(self, proxy_manager: ProxyManager | None = None):
+    def __init__(self, proxy_manager: ProxyManager | None = None, cookie_manager=None):
         self.proxy_manager = proxy_manager
+        self.cookie_manager = cookie_manager
 
     # ------------------------------------------------------------------
     # Helper methods
@@ -216,7 +217,13 @@ class SupplierScraper:
 
     async def _new_page(self, browser: Browser) -> Page:
         """Create a new page with randomised fingerprint, locale set to zh-CN for 1688."""
+        # Load saved cookies/storage state if available
+        storage_state = None
+        if self.cookie_manager:
+            storage_state = self.cookie_manager.get_storage_state("1688")
+
         context = await browser.new_context(
+            storage_state=storage_state,
             user_agent=self._get_random_user_agent(),
             viewport={"width": random.randint(1280, 1920), "height": random.randint(800, 1080)},
             locale="zh-CN",
@@ -326,6 +333,13 @@ class SupplierScraper:
                         await self._random_delay(1.0, 2.0)
                         continue
                     break
+
+                # Save updated cookies after successful page load
+                if self.cookie_manager and card_selector:
+                    try:
+                        await self.cookie_manager.save_storage_state(page.context, "1688")
+                    except Exception:
+                        pass
 
                 cards = page.locator(card_selector)
                 count = await cards.count()

@@ -326,48 +326,52 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
 
-        # ── Step 2c: Scrape reviews for top products ─────────────────
-        task.update_state(state="PROGRESS", meta={"step": "review_scraping", "progress": 32})
+        # ── Step 2c: Extract reviews from product page data ─────────
+        # Reviews are embedded in product detail pages (top reviews section),
+        # extracted during scrape_product_page(). No separate page loads needed.
+        task.update_state(state="PROGRESS", meta={"step": "review_extraction", "progress": 32})
         from app.models.review import Review as ReviewModel
-        from app.services.scraper_service import ScraperService as ReviewScraper
-        review_scraper = ReviewScraper()
-        top_asins = [p.get("asin") for p in detailed_products[:10] if p.get("asin")]
         reviews_scraped = 0
-        for asin in top_asins:
-            try:
-                # Find product in DB
-                p_stmt = select(Product).where(Product.asin == asin)
-                p_result = await db.execute(p_stmt)
-                product_obj = p_result.scalar_one_or_none()
-                if not product_obj:
-                    continue
+        for detail in detailed_products[:10]:
+            asin = detail.get("asin")
+            page_reviews = detail.get("page_reviews", [])
+            if not page_reviews or not asin:
+                continue
 
-                # Check if reviews already exist
-                r_count = await db.execute(
-                    select(ReviewModel.id).where(ReviewModel.product_id == product_obj.id).limit(1)
-                )
-                if r_count.scalar_one_or_none():
-                    continue  # Already have reviews for this product
+            # Find product in DB
+            p_stmt = select(Product).where(Product.asin == asin)
+            product_obj = (await db.execute(p_stmt)).scalar_one_or_none()
+            if not product_obj:
+                continue
 
-                # Scrape reviews (1 page = ~10 reviews per product, all stars)
-                reviews_data = await review_scraper.scrape_reviews(asin, filter_star="all_stars", max_pages=1)
-                for review_data in reviews_data:
-                    review_obj = ReviewModel(
-                        product_id=product_obj.id,
-                        reviewer_name=review_data.get("reviewer_name", "Anonymous"),
-                        rating=review_data.get("rating", 0),
-                        title=review_data.get("title", ""),
-                        body=review_data.get("body", ""),
-                        review_date=review_data.get("date"),
-                        verified_purchase=review_data.get("verified", False),
-                        helpful_votes=review_data.get("helpful_votes", 0),
+            for review_data in page_reviews:
+                # Check for duplicate by review_id
+                if review_data.get("review_id"):
+                    existing = await db.execute(
+                        select(ReviewModel.id).where(
+                            ReviewModel.review_id == review_data["review_id"]
+                        ).limit(1)
                     )
-                    db.add(review_obj)
-                    reviews_scraped += 1
-                await db.flush()
-            except Exception as e:
-                logger.warning("Review scraping failed for %s: %s", asin, e)
-        logger.info("Scraped %d reviews for %d products", reviews_scraped, len(top_asins))
+                    if existing.scalar_one_or_none():
+                        continue
+
+                review_obj = ReviewModel(
+                    product_id=product_obj.id,
+                    asin=asin,
+                    review_id=review_data.get("review_id"),
+                    rating=review_data.get("rating", 0),
+                    title=review_data.get("title", ""),
+                    body=review_data.get("body", ""),
+                    review_date=review_data.get("review_date"),
+                    verified_purchase=review_data.get("verified_purchase", False),
+                    helpful_votes=review_data.get("helpful_votes", 0),
+                    is_vine=review_data.get("is_vine", False),
+                )
+                db.add(review_obj)
+                reviews_scraped += 1
+            await db.flush()
+
+        logger.info("Extracted %d reviews from product pages", reviews_scraped)
 
         # ── Step 3: Competitor analysis ────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "competitor_analysis", "progress": 35})
@@ -507,8 +511,25 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         # ── Step 6a: Supplier scraping from 1688 ──────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_scraping", "progress": 55})
+        from app.core.cookie_manager import CookieManager
         from app.services.supplier_scraper import SupplierScraper
-        supplier_scraper = SupplierScraper()
+
+        cookie_manager = CookieManager()
+
+        # Attempt 1688 login if credentials are configured
+        settings = Settings()
+        if settings.ALIBABA_1688_EMAIL and settings.ALIBABA_1688_PASSWORD:
+            from app.services.alibaba_login import AlibabaLoginService
+            login_svc = AlibabaLoginService(cookie_manager)
+            try:
+                await login_svc.ensure_logged_in(
+                    settings.ALIBABA_1688_EMAIL,
+                    settings.ALIBABA_1688_PASSWORD,
+                )
+            except Exception as e:
+                logger.warning("1688 login failed: %s", e)
+
+        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager)
 
         scraped_suppliers: list[dict] = []
         try:

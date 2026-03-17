@@ -45,6 +45,7 @@ services:
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q default,analysis,tracking,scraping
     volumes:
       - ./backend:/app
+      - cookie_data:/app/data/cookies
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping --timeout 10 2>/dev/null | grep -q OK || exit 1"]
       interval: 30s
@@ -116,3 +117,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  cookie_data:
