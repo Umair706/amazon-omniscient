@@ -1,5 +1,72 @@
 # TODO — Code Review Findings
 
+## Recommended Fix Order
+
+```mermaid
+flowchart LR
+    subgraph "Phase 1 — Stability"
+        A["DB engine leak<br/>+ task timeouts"] --> B["Pipeline atomicity"]
+        B --> C["Missing DB indexes"]
+    end
+
+    subgraph "Phase 2 — Correctness"
+        C --> D["Niche eager loading"]
+        D --> E["Idempotency +<br/>duplicate guards"]
+        E --> F["LLM retry logic"]
+    end
+
+    subgraph "Phase 3 — Security"
+        F --> G["Authentication<br/>+ CORS"]
+        G --> H["Rate limiting +<br/>prompt sanitization"]
+    end
+
+    subgraph "Phase 4 — Quality"
+        H --> I["API pagination"]
+        I --> J["Alembic migrations"]
+        J --> K["Test coverage +<br/>monitoring"]
+    end
+
+    style A fill:#ef4444,color:#fff
+    style B fill:#ef4444,color:#fff
+    style C fill:#f59e0b,color:#fff
+    style D fill:#f59e0b,color:#fff
+    style E fill:#f59e0b,color:#fff
+    style F fill:#f59e0b,color:#fff
+    style G fill:#ef4444,color:#fff
+    style H fill:#f97316,color:#fff
+    style I fill:#f59e0b,color:#fff
+    style J fill:#f97316,color:#fff
+    style K fill:#6b7280,color:#fff
+```
+
+## Impact Map
+
+```mermaid
+quadrantChart
+    title Issue Severity vs Effort
+    x-axis Low Effort --> High Effort
+    y-axis Low Impact --> High Impact
+    quadrant-1 Do First
+    quadrant-2 Plan Carefully
+    quadrant-3 Nice to Have
+    quadrant-4 Quick Wins
+    DB engine leak: [0.3, 0.95]
+    Task timeouts: [0.2, 0.85]
+    Missing indexes: [0.15, 0.7]
+    Pipeline atomicity: [0.7, 0.9]
+    Authentication: [0.6, 0.85]
+    Niche eager loading: [0.25, 0.65]
+    Idempotency: [0.5, 0.7]
+    LLM retry: [0.3, 0.55]
+    API pagination: [0.35, 0.5]
+    Rate limiting: [0.4, 0.45]
+    Test coverage: [0.85, 0.6]
+    Monitoring: [0.75, 0.5]
+    FX rate: [0.15, 0.3]
+    Magic numbers: [0.2, 0.15]
+    Logging: [0.3, 0.2]
+```
+
 ## CRITICAL
 
 - [ ] **DB session/engine leak** — `tasks.py` creates `create_async_engine()` + `async_sessionmaker()` inside every task invocation; engines accumulate and never close

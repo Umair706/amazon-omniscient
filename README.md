@@ -29,33 +29,75 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph Client
+        FE["Next.js 14 Frontend<br/>:3000"]
+    end
+
+    subgraph Backend
+        API["FastAPI Backend<br/>:8000"]
+        CW["Celery Worker<br/>concurrency=4"]
+        CB["Celery Beat<br/>Scheduler"]
+    end
+
+    subgraph Data
+        PG["PostgreSQL 16<br/>+ TimescaleDB<br/>:5432"]
+        RD["Redis 7<br/>Cache + Broker<br/>:6379"]
+    end
+
+    subgraph External Services
+        AMZ["Amazon<br/>Product Pages"]
+        ALI["1688.com<br/>Supplier Pages"]
+        SPAPI["Amazon SP-API"]
+        LLM["LLM Provider<br/>Qwen / Claude / GPT"]
+        PX["Proxy Service<br/>BrightData / SmartProxy"]
+    end
+
+    FE -->|REST API| API
+    API --> PG
+    API --> RD
+    API -->|dispatch tasks| RD
+    RD -->|consume tasks| CW
+    CB -->|schedule tasks| RD
+    CW --> PG
+    CW -->|scrape| AMZ
+    CW -->|scrape| ALI
+    CW -->|catalog + fees| SPAPI
+    CW -->|analysis| LLM
+    CW -->|rotate IPs| PX
+
+    style FE fill:#3b82f6,color:#fff
+    style API fill:#10b981,color:#fff
+    style CW fill:#f59e0b,color:#fff
+    style CB fill:#f59e0b,color:#fff
+    style PG fill:#6366f1,color:#fff
+    style RD fill:#ef4444,color:#fff
 ```
-                    +------------------+
-                    |   Next.js 14     |
-                    |   Frontend       |
-                    |   (port 3000)    |
-                    +--------+---------+
-                             |
-                             | REST API
-                             v
-                    +------------------+
-                    |   FastAPI        |
-                    |   Backend        |
-                    |   (port 8000)    |
-                    +--+----------+----+
-                       |          |
-              +--------+          +--------+
-              v                            v
-    +---------+--------+         +---------+--------+
-    |  PostgreSQL 16   |         |    Redis 7       |
-    |  + TimescaleDB   |         |  Cache + Broker  |
-    |  (port 5432)     |         |  (port 6379)     |
-    +------------------+         +---------+--------+
-                                           |
-                                  +--------+--------+
-                                  |  Celery Workers  |
-                                  |  + Beat Schedule |
-                                  +-----------------+
+
+### Service Communication
+
+```mermaid
+graph LR
+    subgraph Docker Network
+        FE["Frontend :3000"] -->|HTTP| BE["Backend :8000"]
+        BE -->|async queries| DB["PostgreSQL :5432"]
+        BE -->|cache / pub| Redis["Redis :6379"]
+        Worker["Celery Worker"] -->|async queries| DB
+        Worker -->|results| Redis
+        Beat["Celery Beat"] -->|schedule| Redis
+        Redis -->|task queue| Worker
+    end
+
+    subgraph Volumes
+        PGD["pgdata"]
+        RDD["redisdata"]
+        CKD["cookie_data"]
+    end
+
+    DB --- PGD
+    Redis --- RDD
+    Worker --- CKD
 ```
 
 ## Tech Stack
@@ -318,41 +360,158 @@ How Omniscient compares to popular Amazon seller tools:
 
 ## How the Analysis Pipeline Works
 
+```mermaid
+flowchart TD
+    START(["Keyword Input"]) --> S1
+
+    subgraph Scraping["Phase 1 — Data Collection"]
+        S1["1. Scrape Amazon Search Results<br/>3 pages → 60 products"]
+        S2["2. Scrape Product Detail Pages<br/>Top 20 ASINs"]
+        S2c["2c. Extract Reviews<br/>From product page HTML"]
+        S1 --> S2 --> S2c
+    end
+
+    subgraph Analysis["Phase 2 — AI Analysis"]
+        S3["3. Competitor Analysis<br/>Listing quality + vulnerabilities"]
+        S4["4. Review Intelligence<br/>LLM sentiment + pain points"]
+        S4b["4b. Niche Intelligence Report<br/>Market trends + opportunities"]
+        S4c["4c. Product Blueprint<br/>Complaint-driven design"]
+        S5["5. Product Spec + Ideas<br/>LLM-generated specs"]
+        S2c --> S3 --> S4 --> S4b --> S4c --> S5
+    end
+
+    subgraph Sourcing["Phase 3 — Supplier + Costs"]
+        S6a["6a. 1688.com Supplier Scraping<br/>Factory prices, MOQ, ratings"]
+        S6aii["6a-ii. Translate Suppliers<br/>Chinese → English via LLM"]
+        S6aiii["6a-iii. Supplier Matching<br/>Match suppliers to products"]
+        S6b["6b. Landed Cost Calculation<br/>FOB + shipping + tariffs + FBA"]
+        S5 --> S6a --> S6aii --> S6aiii --> S6b
+    end
+
+    subgraph Strategy["Phase 4 — Strategy + Financials"]
+        S7["7. Omniscient Scoring<br/>9 sub-scores + 9 hard filters"]
+        S8["8. PPC Strategy<br/>Keywords + bids + budget"]
+        S9["9. Review Strategy<br/>Vine + organic roadmap"]
+        S10["10. Financial Projections<br/>52-week bull/base/bear"]
+        S11["11. Marketing Plan<br/>90-day launch playbook"]
+        S12["12. Financial Report<br/>P&L + scenario analysis"]
+        S6b --> S7 --> S8 --> S9 --> S10 --> S11 --> S12
+    end
+
+    S12 --> S13["13. Save Recommendation<br/>Omniscient Score + full brief"]
+    S13 --> DONE(["Analysis Complete"])
+
+    style START fill:#3b82f6,color:#fff
+    style DONE fill:#10b981,color:#fff
+    style Scraping fill:#fef3c7,stroke:#f59e0b
+    style Analysis fill:#dbeafe,stroke:#3b82f6
+    style Sourcing fill:#fce7f3,stroke:#ec4899
+    style Strategy fill:#d1fae5,stroke:#10b981
 ```
-Keyword Input
-    |
-    v
- 1. Scrape Amazon search results (top 3 pages)
-    |
-    v
- 2. Scrape product detail pages for each result
-    |
-    v
- 3. Competitor analysis (listing quality, vulnerabilities)
-    |
-    v
- 4. LLM review analysis (sentiment, pain points, opportunities)
-    |
-    v
- 5. Product blueprint (complaint-driven product design)
-    |
-    v
- 6. 1688.com supplier scraping + landed cost calculation
-    |
-    v
- 7. PPC keyword portfolio + budget planning
-    |
-    v
- 8. Review strategy (Vine enrollment, organic velocity)
-    |
-    v
- 9. 52-week financial projections (bull / base / bear)
-    |
-    v
-10. Consolidated financial report + FBA fee breakdown
-    |
-    v
-11. Omniscient Score (0-100) + full recommendation brief
+
+### Periodic Background Tasks
+
+```mermaid
+flowchart LR
+    subgraph "Every 6 Hours"
+        T1["track_bsr_prices_all"] --> T1a["Per-niche BSR + price snapshot<br/>→ TimescaleDB hypertables"]
+    end
+
+    subgraph "Daily 2:30 AM UTC"
+        T2["refresh_all_competitors"] --> T2a["Re-score listing quality<br/>+ vulnerability detection"]
+    end
+
+    subgraph "Weekly Sunday 3 AM"
+        T3["cleanup_old_data"] --> T3a["Delete BSR/price history<br/>> 90 days old"]
+    end
+```
+
+---
+
+## Data Model
+
+```mermaid
+erDiagram
+    Niche ||--o{ Product : "has products"
+    Niche ||--o{ Competitor : "has competitors"
+    Niche ||--o{ Keyword : "organic keywords"
+    Niche ||--o{ PPCKeyword : "ppc keywords"
+    Niche ||--o{ Supplier : "has suppliers"
+    Niche ||--o{ ReviewPainPoint : "pain points"
+    Niche ||--o{ FinancialProjection : "projections"
+    Niche ||--o{ Recommendation : "recommendations"
+    Niche ||--o{ LandedCostCalculation : "cost calculations"
+    Niche ||--o| Niche : "parent sub-niche"
+
+    Product ||--o{ BSRHistory : "BSR time-series"
+    Product ||--o{ PriceHistory : "price time-series"
+    Product ||--o{ Review : "reviews"
+    Product ||--o{ Competitor : "competitor entries"
+    Product ||--o{ ProductSupplierMatch : "supplier matches"
+
+    Supplier ||--o{ LandedCostCalculation : "cost calculations"
+    Supplier ||--o{ ProductSupplierMatch : "product matches"
+
+    Niche {
+        int id PK
+        string keyword
+        string status
+        float omniscient_score
+        string confidence_tier
+        json sub_niche_metadata
+    }
+
+    Product {
+        int id PK
+        string asin UK
+        int niche_id FK
+        string title
+        float price
+        int bsr
+        float rating
+        int review_count
+    }
+
+    Recommendation {
+        int id PK
+        int niche_id FK
+        float omniscient_score
+        string confidence_tier
+        json product_spec
+        json ppc_strategy
+        json financial_summary
+        json product_blueprint
+        json review_intelligence
+    }
+
+    BSRHistory {
+        timestamp time PK
+        int product_id PK
+        int bsr
+        bool is_subcategory
+    }
+
+    PriceHistory {
+        timestamp time PK
+        int product_id PK
+        float price
+        bool has_coupon
+    }
+```
+
+### Scoring Breakdown
+
+```mermaid
+pie title "Omniscient Score Weights"
+    "Demand" : 15
+    "Competition" : 15
+    "Margin" : 15
+    "Revenue" : 10
+    "Trend" : 10
+    "Review Feasibility" : 10
+    "Supplier" : 10
+    "PPC Viability" : 10
+    "Launch Feasibility" : 5
 ```
 
 ---

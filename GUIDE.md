@@ -262,6 +262,73 @@ OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
 | Anthropic Claude | Medium ($1-3/analysis) | Highest | Fast | Data sent to Anthropic | Easy (API key) |
 | OpenAI GPT | Medium ($1-2/analysis) | High | Fast | Data sent to OpenAI | Easy (API key) |
 
+### LLM Provider Selection Flow
+
+```mermaid
+flowchart TD
+    START(["Choose LLM Provider"]) --> Q1{"Need full<br/>data privacy?"}
+
+    Q1 -->|Yes| Q2{"Have a<br/>GPU?"}
+    Q1 -->|No| Q3{"Budget<br/>priority?"}
+
+    Q2 -->|Yes, 16GB+ VRAM| VLLM["vLLM<br/>LLM_PROVIDER=local<br/>Best local throughput"]
+    Q2 -->|No / Apple Silicon| OLLAMA["Ollama<br/>LLM_PROVIDER=ollama<br/>Easy local setup"]
+
+    Q3 -->|Lowest cost| QWEN["Qwen via DashScope<br/>LLM_PROVIDER=qwen<br/>~$0.50/analysis"]
+    Q3 -->|Best quality| CLAUDE["Anthropic Claude<br/>LLM_PROVIDER=anthropic<br/>~$1-3/analysis"]
+    Q3 -->|Balanced| GPT["OpenAI GPT<br/>LLM_PROVIDER=openai<br/>~$1-2/analysis"]
+
+    style START fill:#3b82f6,color:#fff
+    style QWEN fill:#10b981,color:#fff
+    style CLAUDE fill:#8b5cf6,color:#fff
+    style GPT fill:#06b6d4,color:#fff
+    style OLLAMA fill:#f59e0b,color:#fff
+    style VLLM fill:#ef4444,color:#fff
+```
+
+### LLM Integration Architecture
+
+```mermaid
+graph TB
+    subgraph "LLM Abstraction Layer"
+        BASE["BaseLLMClient<br/>(abstract)"]
+        BASE --> QWEN["QwenClient"]
+        BASE --> ANTH["AnthropicClient"]
+        BASE --> OAI["OpenAIClient"]
+    end
+
+    subgraph "Services Using LLM"
+        RA["ReviewAnalyzer"]
+        NI["NicheIntelligence"]
+        PB["ProductBlueprint"]
+        SG["SpecGenerator"]
+        SM["SupplierMatch"]
+        PPC["PPCService"]
+        RS["ReviewStrategy"]
+        MK["Marketing"]
+        FR["FinancialReport"]
+    end
+
+    RA --> BASE
+    NI --> BASE
+    PB --> BASE
+    SG --> BASE
+    SM --> BASE
+    PPC --> BASE
+    RS --> BASE
+    MK --> BASE
+    FR --> BASE
+
+    QWEN -->|API| DS["DashScope API"]
+    ANTH -->|API| AC["Anthropic API"]
+    OAI -->|API| OA["OpenAI API /<br/>Ollama / vLLM"]
+
+    style BASE fill:#6366f1,color:#fff
+    style QWEN fill:#10b981,color:#fff
+    style ANTH fill:#8b5cf6,color:#fff
+    style OAI fill:#06b6d4,color:#fff
+```
+
 ---
 
 ## 2. Amazon SP-API Setup (Private Developer)
@@ -434,6 +501,39 @@ PROXY_USERNAME=spxxxxxxxx
 PROXY_PASSWORD=xxxxxxxx
 ```
 
+### Proxy System Architecture
+
+```mermaid
+flowchart TD
+    SCRAPER["ScraperService /<br/>SupplierScraper"] --> PM["ProxyManager"]
+
+    PM --> Q{"PROXY_PROVIDER?"}
+
+    Q -->|none| DIRECT["Direct Connection<br/>No proxy"]
+    Q -->|free| FREE["Free Proxies<br/>proxyscrape.com API"]
+    Q -->|brightdata| BD["BrightData<br/>Residential Proxy"]
+    Q -->|smartproxy| SP["SmartProxy<br/>Residential Proxy"]
+
+    FREE --> ROTATE["Auto-Rotation<br/>+ Failure Tracking"]
+    ROTATE --> BL["Blacklist Failed IPs"]
+    ROTATE --> FALL["Fallback to Direct<br/>if API unavailable"]
+
+    BD --> SESSION["Session-Based Rotation<br/>username-session-{rand}"]
+    SP --> SESSION
+
+    DIRECT --> PW["Playwright Browser"]
+    FREE --> PW
+    BD --> PW
+    SP --> PW
+
+    PW --> AMZ["Amazon.com"]
+    PW --> ALI["1688.com"]
+
+    style SCRAPER fill:#3b82f6,color:#fff
+    style PM fill:#f59e0b,color:#fff
+    style PW fill:#10b981,color:#fff
+```
+
 ### Without a Proxy
 
 If you don't configure a proxy:
@@ -473,6 +573,76 @@ FREIGHTOS_API_KEY=xxxxxxxx
 ```
 
 **Without these APIs:** Omniscient uses hardcoded freight rate estimates ($4-6/kg sea freight, $8-12/kg air freight) and estimated supplier pricing based on category averages. The Supplier sub-score will be less accurate but functional.
+
+### End-to-End Data Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant Redis
+    participant Worker as Celery Worker
+    participant DB as PostgreSQL
+    participant AMZ as Amazon
+    participant ALI as 1688.com
+    participant LLM as LLM Provider
+
+    User->>FE: Enter keyword
+    FE->>API: POST /jobs/analyze
+    API->>DB: Create Niche (status=pending)
+    API->>Redis: Dispatch run_full_analysis task
+    API-->>FE: Return job_id
+
+    loop Poll every 2s
+        FE->>API: GET /jobs/{id}/status
+        API-->>FE: {progress: N%, status}
+    end
+
+    Redis->>Worker: Consume task
+
+    rect rgb(255, 243, 224)
+        Note over Worker,AMZ: Phase 1 — Scraping
+        Worker->>AMZ: Scrape search results (3 pages)
+        AMZ-->>Worker: 60 products
+        Worker->>DB: Save products
+        Worker->>AMZ: Scrape top 20 detail pages
+        AMZ-->>Worker: Enriched data + reviews
+        Worker->>DB: Save reviews + BSR/price history
+    end
+
+    rect rgb(219, 234, 254)
+        Note over Worker,LLM: Phase 2 — AI Analysis
+        Worker->>LLM: Analyze reviews
+        LLM-->>Worker: Pain points + sentiment
+        Worker->>LLM: Generate blueprint + specs
+        LLM-->>Worker: Product design
+        Worker->>DB: Save competitors + pain points
+    end
+
+    rect rgb(252, 231, 243)
+        Note over Worker,ALI: Phase 3 — Suppliers
+        Worker->>ALI: Scrape suppliers
+        ALI-->>Worker: Factory prices + MOQ
+        Worker->>LLM: Translate + match suppliers
+        Worker->>DB: Save suppliers + matches
+    end
+
+    rect rgb(209, 250, 229)
+        Note over Worker,LLM: Phase 4 — Strategy
+        Worker->>LLM: PPC + review + marketing strategy
+        LLM-->>Worker: Full strategies
+        Worker->>DB: Save projections + recommendation
+    end
+
+    Worker->>DB: Update niche status=completed
+    Worker->>Redis: Store result
+
+    FE->>API: GET /recommendations/{id}
+    API->>DB: Load full recommendation
+    API-->>FE: Complete opportunity brief
+    FE-->>User: Display 5-tab report
+```
 
 ---
 

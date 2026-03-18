@@ -61,6 +61,49 @@ This will:
 - Start a **Celery worker** (4 concurrent threads)
 - Start **Celery beat** (scheduled tasks)
 
+#### Startup Sequence
+
+```mermaid
+sequenceDiagram
+    participant DC as docker compose up
+    participant DB as PostgreSQL + TimescaleDB
+    participant Redis
+    participant BE as Backend (FastAPI)
+    participant CW as Celery Worker
+    participant CB as Celery Beat
+    participant FE as Frontend (Next.js)
+
+    DC->>DB: Start container
+    DC->>Redis: Start container
+
+    loop Health Check (every 10s)
+        DB->>DB: pg_isready
+    end
+    Note over DB: healthy ✓
+
+    loop Health Check (every 10s)
+        Redis->>Redis: redis-cli ping
+    end
+    Note over Redis: healthy ✓
+
+    DC->>BE: Start (depends_on: db + redis healthy)
+    BE->>DB: Connect (asyncpg)
+    BE->>Redis: Connect (cache)
+    Note over BE: Serving on :8000
+
+    DC->>CW: Start (depends_on: db + redis healthy)
+    CW->>Redis: Subscribe to queues
+    Note over CW: 4 workers ready
+
+    DC->>CB: Start (depends_on: db + redis healthy)
+    CB->>Redis: Register beat schedule
+    Note over CB: Scheduler active
+
+    DC->>FE: Start (depends_on: backend)
+    FE->>BE: Verify connection
+    Note over FE: Serving on :3000
+```
+
 ### 3. Run the database migration
 
 In a separate terminal:
@@ -104,6 +147,38 @@ docker compose exec backend alembic upgrade head
 ## Option B: Local Development (No Docker for app code)
 
 Use Docker only for Postgres and Redis; run backend and frontend directly for faster iteration.
+
+```mermaid
+graph TB
+    subgraph "Docker (infrastructure only)"
+        DB["PostgreSQL + TimescaleDB<br/>:5432"]
+        Redis["Redis<br/>:6379"]
+    end
+
+    subgraph "Local Processes"
+        BE["uvicorn app.main:app --reload<br/>:8000"]
+        CW["celery worker<br/>Terminal 2"]
+        CB["celery beat<br/>Terminal 3"]
+        FE["npm run dev<br/>:3000"]
+    end
+
+    subgraph "Optional Local LLM"
+        OL["Ollama<br/>:11434"]
+    end
+
+    FE -->|API calls| BE
+    BE --> DB
+    BE --> Redis
+    CW --> DB
+    CW --> Redis
+    CB --> Redis
+    CW -.->|if configured| OL
+
+    style DB fill:#6366f1,color:#fff
+    style Redis fill:#ef4444,color:#fff
+    style BE fill:#10b981,color:#fff
+    style FE fill:#3b82f6,color:#fff
+```
 
 ### 1. Start infrastructure
 
