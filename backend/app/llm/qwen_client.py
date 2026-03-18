@@ -30,11 +30,17 @@ class QwenClient(BaseLLMClient):
         prompt: str,
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        system_message: str | None = None,
     ) -> str:
         try:
+            messages = []
+            if system_message:
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": prompt})
+
             response = await self.client.chat.completions.create(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )

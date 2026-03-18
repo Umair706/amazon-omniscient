@@ -27,13 +27,18 @@ class AnthropicClient(BaseLLMClient):
         prompt: str,
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        system_message: str | None = None,
     ) -> str:
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            kwargs = {
+                "model": self.model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            if system_message:
+                kwargs["system"] = system_message
+
+            response = await self.client.messages.create(**kwargs)
             if not response.content:
                 raise LLMError("Anthropic returned empty response")
             return response.content[0].text

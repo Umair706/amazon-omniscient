@@ -2,7 +2,7 @@
 
 import logging
 
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class NicheIntelligenceService:
             if c.get("vulnerability") in ("high", "critical")
         )
 
-        prompt = f"""You are an Amazon FBA product research analyst. Analyze this niche and write a comprehensive market overview.
+        prompt = f"""Analyze this Amazon niche and write an honest, data-driven market intelligence assessment. Do not default to "opportunity exists" — if the niche is saturated, say so plainly.
 
 Niche: {niche_keyword}
 Products analyzed: {len(products)}
@@ -67,18 +67,29 @@ Top products:
 Average listing quality: {avg_listing_quality}/100
 High vulnerability competitors: {high_vuln_count}
 
+ASSESSMENT GUIDELINES:
+- If avg reviews > 500 and avg rating > 4.3, this is a mature/saturated market. Say so.
+- If the top 3 products have 5K+ reviews each, acknowledge the review moat is likely insurmountable without 6-12+ months and significant capital.
+- Include realistic capital requirements: inventory (2x MOQ for safety stock), PPC budget (first 90 days at 50-70% ACOS), Vine costs, professional photography/listing, and working capital buffer.
+- Timeline to profitability should be realistic: most new PL products take 4-8 months to reach consistent daily sales, and 6-12 months to recover launch investment.
+- entry_barriers should include financial barriers (capital required), not just competitive barriers.
+- opportunity_windows should only list genuine, actionable opportunities supported by the data. Empty array is acceptable if none exist.
+
 Write a market intelligence report as JSON:
 {{
-    "market_narrative": "<2-3 paragraphs analyzing the competitive landscape, demand signals, and market maturity>",
-    "market_size_assessment": "<estimate of market size based on BSR and pricing data>",
-    "trend_analysis": "<whether the niche is growing, stable, or declining based on available signals>",
-    "competitive_dynamics": "<who dominates, what strategies work, where are the gaps>",
-    "entry_barriers": ["<top 3-5 barriers to entry>"],
-    "opportunity_windows": ["<top 3-5 specific opportunities for a new entrant>"],
-    "key_takeaway": "<one decisive sentence>"
+    "market_narrative": "<2-3 paragraphs. Be direct about market maturity. Include whether this is a market a new entrant can realistically compete in. Cite specific data points.>",
+    "market_maturity": "<emerging|growing|mature|saturated|declining>",
+    "market_size_assessment": "<estimate based on BSR and pricing data. Include confidence level.>",
+    "trend_analysis": "<growing/stable/declining based on available signals. If insufficient data to determine trend, say so.>",
+    "competitive_dynamics": "<who dominates, what strategies work. If top players are entrenched, say so.>",
+    "entry_barriers": ["<barrier with specific numbers — e.g., 'Review moat: avg competitor has 800+ reviews, requiring 6-12 months to reach competitive level'>"],
+    "opportunity_windows": ["<specific, actionable opportunity supported by the data — or empty if none>"],
+    "realistic_capital_required": "<estimated total capital needed for launch through break-even, including inventory, PPC, Vine, listing, and buffer>",
+    "realistic_timeline_to_profitability": "<months to monthly break-even, accounting for PPC ramp and review building>",
+    "key_takeaway": "<one decisive sentence — be blunt about whether this is worth pursuing>"
 }}"""
 
-        return await self.llm.generate_json(prompt, max_tokens=4096)
+        return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
 
     async def generate_product_overviews(
         self,
@@ -132,23 +143,31 @@ Write a market intelligence report as JSON:
                 f"  Image count: {p.get('image_count') or 'N/A'}\n\n"
             )
 
-        prompt = f"""Analyze each Amazon product as a competitor. For each product, assess its competitive position.
+        prompt = f"""Assess each Amazon product as a competitor honestly. Do not underestimate entrenched players.
 
 Products:
 {products_text}
 
+ASSESSMENT RULES:
+- A product with 10K+ reviews and 4.5+ stars is a FORTRESS. Call it what it is — a new entrant cannot realistically displace it. threat_level must be "high".
+- A product with 1K+ reviews and 4.0+ stars is ESTABLISHED. Displacing it requires 6-12+ months and significant differentiation. threat_level should be "high" unless listing quality is poor.
+- Products with <100 reviews and <4.0 stars are genuinely vulnerable. These are the realistic targets.
+- vulnerability_to_exploit must be something that's actually exploitable in practice (poor listing quality, no A+ content, outdated images) — not aspirational ("could offer better quality" without evidence).
+- Do NOT suggest that high review count products can be beaten by "just having better listing quality." Reviews are the #1 conversion factor on Amazon.
+
 For each product return a JSON object with:
 - asin: the product ASIN
-- overview: 2-3 sentence competitive assessment
+- overview: 2-3 sentence honest competitive assessment. If it's a dominant player, say so.
 - strengths: array of 2-3 key strengths
-- weaknesses: array of 2-3 key weaknesses
-- threat_level: "low", "medium", or "high" (how hard would it be to beat this product)
+- weaknesses: array of 2-3 key weaknesses (if the product has high reviews and high rating, "none significant" is a valid weakness entry)
+- threat_level: "low", "medium", or "high" (be realistic — most established products are "high")
 - what_they_do_well: one specific thing to learn from
-- vulnerability_to_exploit: one specific gap a new product could target
+- vulnerability_to_exploit: one specific, actionable gap — or "none identified" if the product is well-defended
+- realistic_displacement_difficulty: "<easy|moderate|hard|near_impossible>"
 
 Return as a JSON array."""
 
-        result = await self.llm.generate_json(prompt, max_tokens=8192)
+        result = await self.llm.generate_json(prompt, max_tokens=8192, system_message=EXPERT_SYSTEM_PROMPT)
         if isinstance(result, dict):
             # LLM may wrap array in an object
             for key in ("products", "product_overviews", "overviews", "competitors", "items"):

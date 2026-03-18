@@ -3,7 +3,7 @@
 import logging
 import math
 
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +301,7 @@ class ReviewStrategyService:
         timeline: dict,
     ) -> dict:
         """Generate LLM-powered review strategy recommendations."""
-        prompt = f"""Create a review acquisition strategy for a new Amazon product launch in the "{niche_keyword}" niche.
+        prompt = f"""Create a review acquisition strategy for a new Amazon product launch in the "{niche_keyword}" niche. Be realistic about costs and conversion rates.
 
 DATA:
 - Target reviews needed: {threshold['threshold']}
@@ -310,32 +310,50 @@ DATA:
 - Organic velocity: {velocity['reviews_per_month']} reviews/month
 - Fastest timeline: {timeline['strategies']['vine_plus_enhanced']['weeks_to_target']} weeks
 
+REVIEW ACQUISITION REALITY:
+- Vine costs ~$200 enrollment fee + product cost per unit (~${vine_plan.get('costs', {}).get('product_cost_total', 0) / max(vine_plan.get('vine_units', 1), 1):.2f}/unit) + FBA fees. Review conversion from Vine is ~70%, NOT 100%. Some Vine reviewers never leave reviews.
+- Organic review rate is 1-2% of orders. For a product selling {velocity.get('monthly_sales', 0)} units/month, that's {velocity['reviews_per_month']} reviews/month. This is slow and there's no shortcut.
+- Do NOT suggest any tactic that risks TOS violation: no review manipulation, no asking for positive reviews, no offering incentives for reviews, no review exchange groups.
+- Product inserts can only ask for feedback — they cannot ask for reviews, offer discounts for reviews, or direct customers to leave positive reviews.
+- "Request a Review" button adds ~10-15% more reviews at best, not a game-changer.
+
 Return a JSON object:
 {{
     "week_by_week_plan": [
         {{
             "week": "<week range>",
-            "target_review_count": <cumulative target>,
-            "actions": ["<specific action>"],
-            "expected_new_reviews": <count>
+            "target_review_count": <cumulative target — be conservative>,
+            "actions": ["<specific, TOS-compliant action>"],
+            "expected_new_reviews": <realistic count based on velocity data>,
+            "cost_this_period": <estimated cost>
         }}
     ],
+    "vine_reality": {{
+        "units_to_enroll": {vine_plan['vine_units']},
+        "expected_reviews": <{vine_plan['vine_units']} * 0.70 = ~{round(vine_plan['vine_units'] * 0.70)} reviews, NOT {vine_plan['vine_units']}>,
+        "total_vine_cost": <enrollment + product cost + FBA fees>,
+        "expected_avg_vine_rating": "<typically 3.5-4.0 — Vine reviewers are honest, often harsher than organic>",
+        "timeline": "<Vine reviews typically arrive over 2-4 weeks, not all at once>"
+    }},
     "product_insert_strategy": {{
         "recommended": <true|false>,
-        "message_theme": "<what the insert should communicate>",
-        "compliance_notes": ["<Amazon TOS compliance reminders>"]
+        "message_theme": "<what the insert should communicate — focus on customer support, NOT review solicitation>",
+        "compliance_notes": ["<specific Amazon TOS rules that must be followed>"],
+        "expected_impact": "<realistic — inserts add maybe 0.5-1% review rate improvement>"
     }},
     "early_reviewer_tactics": [
-        "<legitimate tactic to encourage reviews>"
+        "<only TOS-compliant tactics. Be explicit about what IS and ISN'T allowed>"
     ],
     "review_quality_tips": [
-        "<how to get higher quality/more detailed reviews>"
+        "<how to get higher quality reviews through product quality, not manipulation>"
     ],
     "negative_review_mitigation": [
-        "<how to handle/prevent negative reviews>"
+        "<product quality and customer service approaches — no review suppression tactics>"
     ],
-    "total_estimated_cost": <total cost of review strategy>,
-    "risk_assessment": "<low|medium|high risk of review strategy failing>"
+    "total_estimated_cost": <total cost including Vine + inserts + any other spend>,
+    "cost_per_review": <total cost / expected total reviews>,
+    "risk_assessment": "<low|medium|high risk of strategy failing to reach target>",
+    "honest_timeline": "<realistic weeks/months to reach review threshold — no optimistic scenarios>"
 }}"""
 
-        return await self.llm.generate_json(prompt, max_tokens=4096)
+        return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)

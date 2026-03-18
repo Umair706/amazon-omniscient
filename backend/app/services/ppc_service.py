@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import LLMError
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 from app.models.keyword import NicheKeyword, PPCKeyword
 
 logger = logging.getLogger(__name__)
@@ -288,7 +288,7 @@ class PPCService:
         if not self.llm:
             return {"error": "LLM client required"}
 
-        prompt = f"""Create a detailed Amazon PPC launch strategy for the "{niche_keyword}" niche.
+        prompt = f"""Create a realistic Amazon PPC launch strategy for the "{niche_keyword}" niche. This is a ZERO-REVIEW listing launching into an established market.
 
 KEYWORD PORTFOLIO:
 - Exact match keywords: {len(keyword_portfolio.get('exact_match', []))}
@@ -305,6 +305,12 @@ ACOS TARGETS:
 - Break-even ACOS: {break_even_acos.get('break_even_acos', 0)}%
 - Target ACOS: {break_even_acos.get('target_acos', 0)}%
 
+PPC REALITY FOR NEW LISTINGS:
+- Expect 50-70% ACOS for the first 90 days on a zero-review listing. This is NORMAL and expected. Conversion rates for 0-review listings are typically 3-8% vs 12-20% for established listings.
+- Do NOT suggest complex campaign structures for launch. Start simple (1 auto + 1-2 manual exact) and optimize from actual data. Complex structures waste budget on a listing that doesn't convert yet.
+- Include a clear BUDGET BURN WARNING: how much money the seller should expect to lose on PPC before the listing becomes efficient.
+- Include explicit KILL CRITERIA: at what cumulative spend or sustained ACOS should the seller cut losses and pivot.
+
 Return a JSON object:
 {{
     "campaign_structure": [
@@ -313,16 +319,17 @@ Return a JSON object:
             "campaign_type": "<auto|manual_exact|manual_phrase|manual_broad|product_targeting>",
             "match_types": ["<exact|phrase|broad>"],
             "budget_daily": <daily budget>,
-            "bid_strategy": "<description>",
+            "bid_strategy": "<specific bid approach>",
             "keywords_count": <number>,
-            "purpose": "<why this campaign>"
+            "purpose": "<why this campaign>",
+            "launch_priority": "<launch_day_1|add_week_2|add_after_10_reviews>"
         }}
     ],
     "bid_strategy": {{
-        "initial_bid_multiplier": <multiplier vs suggested bid>,
-        "top_of_search_boost_pct": <percentage boost for top of search>,
+        "initial_bid_multiplier": <multiplier vs suggested bid — typically 1.0-1.2x for launch>,
+        "top_of_search_boost_pct": <percentage boost — be conservative, top-of-search is expensive>,
         "product_page_boost_pct": <percentage boost for product pages>,
-        "bid_adjustment_frequency": "<how often to adjust>"
+        "bid_adjustment_frequency": "<how often to adjust — weekly minimum, daily is noise>"
     }},
     "negative_keywords": [
         "<keywords to add as negatives from day 1>"
@@ -330,18 +337,31 @@ Return a JSON object:
     "optimization_schedule": [
         {{
             "week": "<week range>",
-            "actions": ["<specific optimization action>"]
+            "actions": ["<specific optimization action>"],
+            "expected_acos": "<realistic ACOS range for this period>"
+        }}
+    ],
+    "budget_burn_warning": {{
+        "expected_loss_first_30_days": <estimated PPC loss in dollars>,
+        "expected_loss_first_90_days": <estimated cumulative PPC loss>,
+        "when_ppc_becomes_profitable": "<realistic timeline — typically after 15-30 reviews>"
+    }},
+    "kill_criteria": [
+        {{
+            "metric": "<what to measure — e.g., cumulative spend, 14-day ACOS, conversion rate>",
+            "threshold": "<specific number>",
+            "action": "<what to do when threshold is hit>"
         }}
     ],
     "key_metrics_to_track": [
-        "<metric and target>"
+        "<metric and realistic target for a new listing>"
     ],
     "common_mistakes_to_avoid": [
-        "<mistake>"
+        "<mistake specific to new listing launches>"
     ]
 }}"""
 
-        return await self.llm.generate_json(prompt, max_tokens=4096)
+        return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
 
     @staticmethod
     def _empty_portfolio() -> dict:

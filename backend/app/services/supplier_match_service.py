@@ -2,7 +2,7 @@
 
 import logging
 
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 from app.services.supplier_scraper import SupplierScraper
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ Rules:
         suppliers_text = "\n\n".join(listing_descriptions)
 
         prompt = f"""Compare this Amazon product with each 1688.com supplier listing below.
-Score how likely it is that each supplier listing is the SAME or nearly identical product (0-100).
+Score how likely it is that each supplier listing can produce a product matching the Amazon listing's quality and specifications (0-100).
 
 Amazon Product:
 - Title: {title}
@@ -179,20 +179,26 @@ Amazon Product:
 1688 Supplier Listings:
 {suppliers_text}
 
-Scoring guide:
-90-100: Same product (same materials, same design, same function)
-70-89: Very similar product (minor differences in size/color/variant)
-50-69: Same category but different design/quality
-0-49: Different product
+SCORING RULES — be conservative:
+90-100: Near-certain match — same product type, materials likely match, supplier has substantial transaction history (1000+ transactions). Visual and functional match.
+75-89: Likely match — same product type and similar design, but quality gap risk exists between listing photos and bulk production. Supplier has moderate transaction history.
+60-74: Possible match — same category but differences in design or materials likely. OR supplier has very low transaction count (<50) which increases quality uncertainty.
+40-59: Weak match — same general category but different execution. High risk of quality mismatch.
+0-39: Poor match — different product or high-risk supplier.
+
+CRITICAL SCORING ADJUSTMENTS:
+- A visual match does NOT mean same quality. 1688 photos often show best-case samples. Penalize score by 10-15 points if no independent quality verification is possible.
+- Suppliers with NO transaction history or very low transaction counts (<20) should be penalized 15-20 points regardless of visual match — they are unproven.
+- Very low prices relative to the Amazon product may indicate inferior materials. A supplier offering at 20% of Amazon retail suggests a different quality tier.
 
 Return a JSON array with one entry per supplier:
 [
-    {{"supplier_index": 1, "match_score": <0-100>, "match_reasoning": "<brief explanation>"}},
+    {{"supplier_index": 1, "match_score": <0-100>, "match_reasoning": "<brief explanation including quality risk assessment>", "quality_risk": "<low|medium|high>"}},
     ...
 ]"""
 
         try:
-            scores = await self.llm.generate_json(prompt, max_tokens=4096)
+            scores = await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
         except Exception as e:
             logger.warning("Batch match scoring failed: %s", e)
             return []

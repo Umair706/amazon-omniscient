@@ -9,7 +9,7 @@ Takes reviews across all competitors in a niche and produces:
 """
 
 import logging
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +111,17 @@ class ProductBlueprintService:
 
         reviews_text = "\n===\n\n".join(competitor_sections)
 
-        prompt = f"""Analyze customer reviews across multiple competing products in the "{niche_keyword}" niche on Amazon. Extract and categorize every complaint and identify what customers wish was better.
+        prompt = f"""Analyze customer reviews across multiple competing products in the "{niche_keyword}" niche on Amazon. Extract complaints that are actually actionable for a product developer.
 
 COMPETITOR REVIEWS:
 {reviews_text}
+
+CRITICAL ANALYSIS RULES:
+- SEPARATE product-level issues from user-error issues. A customer who can't figure out how to use a product is different from a product that's poorly designed. Classify each complaint.
+- FLAG complaints that stem from unrealistic customer expectations rather than real product defects (e.g., expecting a $15 product to match $50 quality, complaining about product doing exactly what it's designed to do).
+- FOCUS on complaints that are actually fixable at reasonable manufacturing cost. "The product exists" is not a fixable complaint.
+- Do NOT include shipping/seller/Amazon issues (late delivery, wrong item sent, etc.).
+- For severity: "critical" = primary function fails, "high" = significantly impairs core use, "medium" = degrades experience but product still works, "low" = cosmetic/preference.
 
 Return a JSON object with this EXACT structure:
 {{
@@ -123,12 +130,15 @@ Return a JSON object with this EXACT structure:
             "category": "<one of: design_flaws, quality_durability, missing_features, sizing_fit, packaging, value_perception, usability>",
             "complaints": [
                 {{
-                    "complaint": "<specific complaint in clear language>",
+                    "complaint": "<specific complaint — 'Handle breaks after 2-3 months of regular use' not 'poor quality'>",
                     "frequency": "<how many reviews across all competitors mention this>",
                     "severity": "<low|medium|high|critical>",
                     "affected_asins": ["<ASINs where this complaint appears>"],
                     "sample_quotes": ["<1-2 direct quotes from reviews>"],
-                    "customer_impact": "<how this affects the customer experience>"
+                    "customer_impact": "<how this affects the customer experience>",
+                    "is_product_defect": <true|false — false if user error or unrealistic expectation>,
+                    "fixable_in_manufacturing": <true|false>,
+                    "estimated_fix_complexity": "<simple|moderate|complex|requires_custom_tooling>"
                 }}
             ]
         }}
@@ -143,21 +153,20 @@ Return a JSON object with this EXACT structure:
     ],
     "unmet_needs": [
         {{
-            "need": "<something customers want but no competitor offers>",
-            "evidence": "<quotes or patterns supporting this>",
-            "potential_value": "<low|medium|high>"
+            "need": "<something customers want but no competitor offers — must have direct review evidence>",
+            "evidence": "<actual quotes or patterns supporting this>",
+            "potential_value": "<low|medium|high>",
+            "feasibility": "<easy|moderate|hard — can this realistically be manufactured?>"
         }}
+    ],
+    "unrealistic_expectations": [
+        "<complaints that reflect customer misunderstanding rather than product issues>"
     ]
 }}
 
-Rules:
-- Be specific. "Poor quality" is too vague — say "Handle breaks after 2-3 months of regular use".
-- Group truly similar complaints together but keep distinct issues separate.
-- Only include complaints with real evidence from the reviews.
-- Include ALL categories even if some have no complaints (empty complaints array).
-- Focus on product-level issues, not shipping/seller issues."""
+Include ALL categories even if some have no complaints (empty complaints array)."""
 
-        return await self.llm.generate_json(prompt, max_tokens=8192)
+        return await self.llm.generate_json(prompt, max_tokens=8192, system_message=EXPERT_SYSTEM_PROMPT)
 
     async def _build_blueprint(
         self,
@@ -182,7 +191,7 @@ Rules:
             for m in competitor_metadata[:15]
         )
 
-        prompt = f"""You are a product development strategist for Amazon private label products. Based on this complaint analysis for the "{niche_keyword}" niche, create an actionable product improvement blueprint.
+        prompt = f"""Based on this complaint analysis for the "{niche_keyword}" niche, create a product improvement blueprint grounded in manufacturing reality and honest cost assessment.
 
 COMPLAINT ANALYSIS:
 {complaint_analysis}
@@ -190,6 +199,14 @@ COMPLAINT ANALYSIS:
 COMPETITORS:
 {competitor_summary}
 {price_context}
+
+CRITICAL RULES FOR THIS BLUEPRINT:
+- Every improvement MUST include realistic COGS impact. Be specific: "adds $0.30-0.50/unit" not just "moderate."
+- Do NOT suggest improvements requiring custom tooling >$5K or adding >15% to unit cost unless explicitly flagged as high-investment.
+- Include manufacturing feasibility: can a standard Alibaba/1688 supplier do this, or does it require specialized capability?
+- supplier_talking_points must reflect how Chinese OEM negotiations actually work. Reference specific manufacturing processes (injection molding, die casting, CNC, etc.) where relevant. Use realistic language — Chinese suppliers respond to specific material grades, thickness specs, and testing standards, not vague quality requests.
+- MOQ implications: if an improvement requires a new mold or tooling, note the typical MOQ impact (usually 500-2000 units minimum).
+- target_rating should be conservative. A new product with zero reviews is unlikely to maintain 4.5+ unless it genuinely solves the top complaints. 4.0-4.3 is realistic for a well-executed first production run.
 
 Return a JSON object with this EXACT structure:
 {{
@@ -207,42 +224,46 @@ Return a JSON object with this EXACT structure:
     "improvement_priorities": [
         {{
             "rank": <1-N, highest priority first>,
-            "improvement": "<specific improvement to make>",
+            "improvement": "<specific improvement — 'use 304 stainless steel 1.2mm thickness' not 'improve quality'>",
             "addresses_complaint": "<which complaint this fixes>",
             "category": "<complaint category>",
-            "priority_score": <0-100, based on frequency × severity × feasibility × competitive gap>,
+            "priority_score": <0-100, based on frequency * severity * feasibility * competitive gap>,
             "frequency_score": <0-100>,
             "severity_score": <0-100>,
-            "feasibility_score": <0-100, how easy to implement in manufacturing>,
-            "competitive_gap_score": <0-100, how many competitors fail at this>,
-            "estimated_cost_impact": "<minimal|low|moderate|significant>",
-            "expected_review_uplift": "<how this should improve review scores>"
+            "feasibility_score": <0-100, how easy for a standard supplier to implement>,
+            "competitive_gap_score": <0-100>,
+            "estimated_cost_impact_usd": "<estimated per-unit cost increase, e.g. '+$0.30-0.50'>",
+            "requires_custom_tooling": <true|false>,
+            "expected_review_uplift": "<conservative estimate of rating improvement>"
         }}
     ],
     "product_blueprint": {{
-        "strategy_summary": "<2-3 sentence product strategy>",
-        "target_price_point": <recommended price>,
-        "target_rating": <realistic target rating, e.g. 4.5>,
+        "strategy_summary": "<2-3 sentence product strategy. Include total estimated COGS impact of all improvements.>",
+        "target_price_point": <recommended price — must leave 30%+ gross margin after all FBA fees>,
+        "target_rating": <realistic target, typically 4.0-4.3 for first production run>,
+        "estimated_total_cogs_increase": "<total per-unit cost increase from all improvements>",
         "must_have_improvements": [
             {{
-                "improvement": "<what to change>",
-                "why": "<why this matters — reference complaint data>",
-                "supplier_talking_point": "<what to tell your manufacturer>",
-                "cost_impact": "<minimal|low|moderate|significant>",
-                "competitors_failing": <how many competitors don't do this>
+                "improvement": "<what to change — specific materials, dimensions, or processes>",
+                "why": "<reference complaint data>",
+                "supplier_talking_point": "<specific request in manufacturing terms — e.g., 'We need 304 stainless steel, 1.2mm minimum wall thickness, with electropolishing finish. Please quote for 1000-unit and 3000-unit MOQ.'>",
+                "estimated_cost_per_unit": "<e.g., '+$0.40'>",
+                "competitors_failing": <how many competitors don't do this>,
+                "manufacturing_feasibility": "<standard capability|specialized supplier|custom tooling required>"
             }}
         ],
         "differentiators": [
             {{
-                "feature": "<unique feature no competitor has>",
-                "source": "<unmet need or innovation>",
-                "marketing_angle": "<how to promote this in your listing>",
-                "cost_impact": "<minimal|low|moderate|significant>"
+                "feature": "<unique feature — must be manufacturable>",
+                "source": "<unmet need from review evidence>",
+                "marketing_angle": "<how to promote in listing>",
+                "estimated_cost_per_unit": "<cost impact>",
+                "manufacturing_feasibility": "<standard|specialized|custom tooling>"
             }}
         ],
         "features_to_match": [
             {{
-                "feature": "<feature that top competitors do well>",
+                "feature": "<table stakes feature top competitors do well>",
                 "why": "<customers expect this as baseline>",
                 "benchmark_asin": "<ASIN that does this best>"
             }}
@@ -254,41 +275,35 @@ Return a JSON object with this EXACT structure:
             }}
         ],
         "packaging_recommendations": [
-            "<specific packaging improvements based on complaints>"
+            "<specific packaging improvements — include cost impact>"
         ],
         "quality_benchmarks": [
             {{
-                "benchmark": "<specific quality standard to meet>",
+                "benchmark": "<specific quality standard — e.g., 'Must pass 500-cycle hinge test without loosening'>",
                 "reason": "<complaint this prevents>",
-                "test_method": "<how to verify with supplier>"
+                "test_method": "<how to verify — e.g., 'Request SGS testing report for XX standard'>"
             }}
         ]
     }},
     "listing_angles": [
         {{
-            "angle": "<marketing angle for the listing>",
+            "angle": "<marketing angle that directly addresses a top competitor weakness>",
             "addresses": "<which competitor weakness this exploits>",
-            "suggested_bullet": "<example bullet point copy>"
+            "suggested_bullet": "<bullet point copy that converts — address buyer objections, not features>"
         }}
     ],
     "risk_warnings": [
         {{
-            "risk": "<potential risk with this product approach>",
-            "mitigation": "<how to mitigate>"
+            "risk": "<potential risk — include probability estimate>",
+            "mitigation": "<specific mitigation step>",
+            "cost_of_mitigation": "<estimated cost>"
         }}
     ]
 }}
 
-Rules:
-- Rank improvement_priorities by priority_score descending (most impactful first).
-- Be specific and actionable — "use thicker stainless steel" not "improve quality".
-- supplier_talking_points should be things you can actually say to a Chinese manufacturer.
-- Every recommendation must trace back to actual review data.
-- Keep must_have_improvements to 5-8 items max (the critical ones).
-- Keep differentiators to 3-5 items max (things that truly stand out).
-- listing_angles should be compelling A+ content / bullet point ideas."""
+Keep must_have_improvements to 5-8 items max. Keep differentiators to 3-5 max. Every recommendation must trace to actual review data."""
 
-        return await self.llm.generate_json(prompt, max_tokens=8192)
+        return await self.llm.generate_json(prompt, max_tokens=8192, system_message=EXPERT_SYSTEM_PROMPT)
 
     @staticmethod
     def _empty_blueprint() -> dict:

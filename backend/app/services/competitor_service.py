@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.bsr_regression import bsr_estimator
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 from app.models.competitor import Competitor
 from app.models.product import Product
 
@@ -426,7 +426,7 @@ class CompetitorService:
                 f"Vuln={c.get('vulnerabilities', {}).get('vulnerability_level', '?')}"
             )
 
-        prompt = f"""Analyze this competitive landscape for the Amazon niche "{niche_keyword}":
+        prompt = f"""Analyze this competitive landscape for the Amazon niche "{niche_keyword}". Provide an honest entry assessment — do not sugarcoat.
 
 MARKET OVERVIEW:
 - Total competitors: {landscape.get('total_competitors', 0)}
@@ -442,31 +442,50 @@ COMPETITORS:
 OPPORTUNITY AREAS:
 {landscape.get('opportunity_areas', [])}
 
+ENTRY ASSESSMENT RULES:
+- If avg competitor has 1K+ reviews and 4.3+ rating, a new entrant needs minimum 6-12 months and $15K+ total investment (inventory + PPC + Vine + working capital) to become competitive. State this clearly.
+- "avoid" recommendations should not be softened. If the market is a fortress, say "avoid" and explain why.
+- estimated_months_to_page_1 should be for mid-tail keywords (not main keyword, not ultra-long-tail). Typical range is 4-8 months with consistent PPC and review velocity.
+- recommended_launch_budget must include: first inventory order (MOQ * landed cost), 90-day PPC budget (at 50-70% ACOS), Vine enrollment, professional photography/listing, and 20% contingency buffer.
+- minimum_reviews_needed is the number to be competitive, not to launch. To be competitive typically means reaching the 30th percentile of competitor review counts.
+
 Return a JSON object:
 {{
-    "market_assessment": "<1-2 sentence market summary>",
+    "market_assessment": "<1-2 sentence blunt market summary. If saturated, say so.>",
     "entry_recommendation": "<enter|cautious|avoid>",
-    "entry_reason": "<why enter or avoid>",
-    "competitive_strategy": "<recommended competitive positioning>",
+    "entry_reason": "<specific, data-backed reason. Include the numbers.>",
+    "entry_difficulty_honest": "<easy|moderate|hard|very_hard|near_impossible>",
+    "competitive_strategy": "<recommended positioning — must be specific to this niche's competitive dynamics>",
     "price_recommendation": {{
         "target_price": <recommended price>,
-        "reasoning": "<why this price>"
+        "reasoning": "<why this price — must leave 30%+ gross margin after all FBA fees>",
+        "margin_estimate": "<estimated gross margin % at this price>"
     }},
     "key_differentiators": [
-        "<how to differentiate from competitors>"
+        "<specific, actionable differentiation — not 'better quality' but specific improvements>"
     ],
     "weakest_competitors": [
-        "<ASINs of most beatable competitors and why>"
+        "<ASINs of genuinely beatable competitors with specific reasons>"
     ],
     "biggest_threats": [
-        "<ASINs of strongest competitors and why>"
+        "<ASINs of strongest competitors — these are the ones you're really competing against>"
     ],
-    "estimated_months_to_page_1": <realistic estimate>,
-    "minimum_reviews_needed": <reviews needed to compete>,
-    "recommended_launch_budget": <estimated launch budget USD>
+    "estimated_months_to_page_1": <realistic estimate — typically 4-8 for mid-tail keywords>,
+    "minimum_reviews_needed": <reviews to reach 30th percentile of competitor review counts>,
+    "recommended_launch_budget": <total capital needed through break-even — be specific>,
+    "launch_budget_breakdown": {{
+        "inventory_first_order": <MOQ * estimated landed cost>,
+        "ppc_90_day": <90 days of PPC at realistic ACOS>,
+        "vine_and_reviews": <Vine enrollment + product cost>,
+        "listing_and_photography": <professional listing creation>,
+        "contingency_buffer": <20% of above>
+    }},
+    "what_could_go_wrong": [
+        "<top 3 realistic failure scenarios for a new entrant in this niche>"
+    ]
 }}"""
 
-        return await self.llm.generate_json(prompt, max_tokens=4096)
+        return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
 
     # ------------------------------------------------------------------
     # 6. Review Velocity Gap analysis

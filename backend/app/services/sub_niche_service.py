@@ -5,6 +5,8 @@ import math
 import re
 from collections import Counter
 
+from app.llm.base_client import EXPERT_SYSTEM_PROMPT
+
 logger = logging.getLogger(__name__)
 
 # Stop words to exclude from title diversity analysis
@@ -112,17 +114,21 @@ class SubNicheService:
 
         products_text = "\n".join(product_lines)
 
-        prompt = f"""You are an Amazon product research analyst. The user searched for "{keyword}" and got products spanning multiple categories.
-
-Group these products into 3-6 coherent sub-niches. Each sub-niche should contain products that compete directly with each other (similar type, similar price range, similar use case).
+        prompt = f"""The user searched for "{keyword}" and got products spanning multiple categories. Group these into 3-6 coherent sub-niches based on actual competitive sets — products that a buyer would compare against each other.
 
 PRODUCTS:
 {products_text}
 
+GROUPING RULES:
+- Group by actual competitive set: products a buyer would compare against each other when shopping. Same use case, similar price tier, similar form factor.
+- Do NOT group by superficial similarity (e.g., don't group all "stainless steel" items together if they serve different purposes).
+- Price tier is a strong signal: a $5 product and a $50 product in the same category are NOT in the same competitive set.
+- Each sub-niche should represent a distinct buying decision.
+
 Return a JSON array. Each element:
 {{
     "label": "<Short descriptive name, e.g. 'Gold Chain Necklaces'>",
-    "description": "<1-2 sentence description of this sub-niche>",
+    "description": "<1-2 sentence description of this sub-niche and what makes it a distinct competitive set>",
     "asin_list": ["<ASIN1>", "<ASIN2>", ...],
     "avg_price": <average price of products in this group>,
     "product_count": <number of products>
@@ -136,7 +142,7 @@ Rules:
 - Return ONLY the JSON array, no other text"""
 
         try:
-            result = await self.llm.generate_json(prompt, max_tokens=4096)
+            result = await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
 
             # Validate and clean up the result
             if not isinstance(result, list):
