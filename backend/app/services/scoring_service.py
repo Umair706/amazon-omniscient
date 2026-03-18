@@ -9,6 +9,9 @@ class ScoringService:
     """
     Computes the Omniscient Score (0-100) for a niche/product opportunity.
 
+    Supports marketplace-specific thresholds. AU market has lower volume
+    thresholds since it's ~8% of US market size.
+
     9 weighted sub-scores:
     1. Demand Score (15%) — BSR, search volume, sales velocity
     2. Competition Score (15%) — listing quality, review moat, seller count
@@ -20,16 +23,16 @@ class ScoringService:
     8. PPC Viability (10%) — CPC, break-even ACOS, competition density
     9. Launch Feasibility (5%) — capital required, time to break-even
 
-    9 hard disqualification filters:
-    - Avg selling price < $15 or > $70
-    - Review moat > 2000 (median competitor reviews)
-    - BSR > 50000 (too low demand)
-    - Pre-PPC margin < 25%
-    - Market dominated by Amazon (>30% of top 10)
+    9 hard disqualification filters (marketplace-adjusted):
+    - Avg selling price outside target range
+    - Review moat threshold
+    - BSR threshold (demand)
+    - Pre-PPC margin minimum
+    - Market dominated by Amazon
     - Hazmat/restricted category
     - IP/patent risk indicators
     - Seasonal-only demand (unless allowed)
-    - Review velocity trap (>5 reviews per 100 sales — likely grey-hat)
+    - Review velocity trap
     """
 
     # Sub-score weights
@@ -43,6 +46,30 @@ class ScoringService:
         "supplier": 0.10,
         "ppc_viability": 0.10,
         "launch_feasibility": 0.05,
+    }
+
+    # Marketplace-specific hard filter thresholds
+    # AU has: wider price range (AUD), lower review moat (smaller market),
+    # higher BSR threshold (fewer sellers), same margin requirement
+    MARKETPLACE_THRESHOLDS = {
+        "US": {
+            "price_min": 15,
+            "price_max": 70,
+            "review_moat_max": 2000,
+            "bsr_max": 50000,
+            "margin_min": 25,
+            "amazon_dominance_max": 30,
+            "review_velocity_max": 5.0,
+        },
+        "AU": {
+            "price_min": 20,   # AUD — slightly higher floor due to currency
+            "price_max": 100,  # AUD — higher ceiling
+            "review_moat_max": 500,  # AU has far fewer reviews per product
+            "bsr_max": 20000,  # AU catalog is smaller, BSR ranks are lower
+            "margin_min": 25,  # Same margin requirement
+            "amazon_dominance_max": 30,
+            "review_velocity_max": 3.0,  # Tighter in smaller market
+        },
     }
 
     def compute_score(self, metrics: dict) -> dict:
@@ -112,53 +139,66 @@ class ScoringService:
 
     @staticmethod
     def _score_demand(m: dict) -> float:
-        """Search volume, BSR, estimated monthly sales."""
+        """Search volume, BSR, estimated monthly sales.
+
+        Thresholds scale by marketplace. AU search volumes and sales
+        are ~8% of US, so thresholds are proportionally lower.
+        """
         score = 0
         sv = m.get("search_volume", 0)
         bsr = m.get("avg_bsr", 99999)
         monthly_sales = m.get("estimated_monthly_sales", 0)
+        marketplace = m.get("marketplace", "US")
 
-        # Search volume (40 pts)
-        if sv >= 10000:
-            score += 40
-        elif sv >= 5000:
-            score += 32
-        elif sv >= 2000:
-            score += 24
-        elif sv >= 1000:
-            score += 16
-        elif sv >= 500:
-            score += 8
-        else:
-            score += 2
+        # Market scale factor for demand thresholds
+        scale = 0.08 if marketplace == "AU" else 1.0
+
+        # Search volume (40 pts) — scaled by market size
+        sv_tiers = [
+            (10000 * scale, 40),
+            (5000 * scale, 32),
+            (2000 * scale, 24),
+            (1000 * scale, 16),
+            (500 * scale, 8),
+        ]
+        sv_score = 2
+        for threshold, pts in sv_tiers:
+            if sv >= threshold:
+                sv_score = pts
+                break
+        score += sv_score
 
         # BSR (30 pts — lower is better)
-        if bsr <= 1000:
-            score += 30
-        elif bsr <= 5000:
-            score += 25
-        elif bsr <= 10000:
-            score += 20
-        elif bsr <= 25000:
-            score += 14
-        elif bsr <= 50000:
-            score += 8
-        else:
-            score += 2
+        # AU has smaller catalog so BSR thresholds are proportionally lower
+        bsr_scale = 0.4 if marketplace == "AU" else 1.0  # AU BSR ranks tend to top out lower
+        bsr_tiers = [
+            (1000 * bsr_scale, 30),
+            (5000 * bsr_scale, 25),
+            (10000 * bsr_scale, 20),
+            (25000 * bsr_scale, 14),
+            (50000 * bsr_scale, 8),
+        ]
+        bsr_score = 2
+        for threshold, pts in bsr_tiers:
+            if bsr <= threshold:
+                bsr_score = pts
+                break
+        score += bsr_score
 
-        # Monthly sales (30 pts)
-        if monthly_sales >= 1000:
-            score += 30
-        elif monthly_sales >= 500:
-            score += 24
-        elif monthly_sales >= 300:
-            score += 18
-        elif monthly_sales >= 100:
-            score += 12
-        elif monthly_sales >= 50:
-            score += 6
-        else:
-            score += 2
+        # Monthly sales (30 pts) — scaled by market size
+        sales_tiers = [
+            (1000 * scale, 30),
+            (500 * scale, 24),
+            (300 * scale, 18),
+            (100 * scale, 12),
+            (50 * scale, 6),
+        ]
+        sales_score = 2
+        for threshold, pts in sales_tiers:
+            if monthly_sales >= threshold:
+                sales_score = pts
+                break
+        score += sales_score
 
         return min(100, score)
 
@@ -166,6 +206,7 @@ class ScoringService:
     def _score_competition(m: dict) -> float:
         """Listing quality, review moat, number of strong sellers."""
         score = 100  # Start high, deduct for strong competition
+        marketplace = m.get("marketplace", "US")
 
         avg_listing_quality = m.get("avg_listing_quality", 50)
         median_reviews = m.get("median_competitor_reviews", 0)
@@ -180,15 +221,17 @@ class ScoringService:
             score -= 5
 
         # Review moat (deduct for high review counts)
-        if median_reviews >= 2000:
+        # AU market has far fewer reviews, so thresholds are lower
+        review_scale = 0.25 if marketplace == "AU" else 1.0
+        if median_reviews >= 2000 * review_scale:
             score -= 40
-        elif median_reviews >= 1000:
+        elif median_reviews >= 1000 * review_scale:
             score -= 30
-        elif median_reviews >= 500:
+        elif median_reviews >= 500 * review_scale:
             score -= 20
-        elif median_reviews >= 200:
+        elif median_reviews >= 200 * review_scale:
             score -= 10
-        elif median_reviews >= 50:
+        elif median_reviews >= 50 * review_scale:
             score -= 5
 
         # Strong sellers (Amazon, big brands)
@@ -459,52 +502,69 @@ class ScoringService:
     # Hard disqualification filters
     # ------------------------------------------------------------------
     def _apply_hard_filters(self, m: dict) -> list[dict]:
-        """Apply 9 hard filters. Each returns pass/fail with reason."""
+        """Apply 9 hard filters. Each returns pass/fail with reason.
+
+        Thresholds are marketplace-aware — AU market has adjusted values
+        (lower review moat, different price range in AUD, adjusted BSR).
+        """
         allow_seasonal = m.get("allow_seasonal", False)
+        marketplace = m.get("marketplace", "US")
+        thresholds = self.MARKETPLACE_THRESHOLDS.get(
+            marketplace, self.MARKETPLACE_THRESHOLDS["US"]
+        )
         filters = []
+
+        # Determine currency symbol for display
+        currency_sym = "A$" if marketplace == "AU" else "$"
 
         # 1. Price range
         avg_price = m.get("avg_price", 0)
+        price_min = thresholds["price_min"]
+        price_max = thresholds["price_max"]
         filters.append({
             "filter": "price_range",
-            "passed": 15 <= avg_price <= 70,
-            "reason": f"Avg price ${avg_price:.2f} outside $15-$70 range",
+            "passed": price_min <= avg_price <= price_max,
+            "reason": f"Avg price {currency_sym}{avg_price:.2f} outside {currency_sym}{price_min}-{currency_sym}{price_max} range",
             "value": avg_price,
         })
 
         # 2. Review moat
         median_reviews = m.get("median_competitor_reviews", 0)
+        review_max = thresholds["review_moat_max"]
         filters.append({
             "filter": "review_moat",
-            "passed": median_reviews <= 2000,
-            "reason": f"Median competitor reviews ({median_reviews}) exceeds 2000",
+            "passed": median_reviews <= review_max,
+            "reason": f"Median competitor reviews ({median_reviews}) exceeds {review_max}",
             "value": median_reviews,
         })
 
         # 3. BSR (demand)
         avg_bsr = m.get("avg_bsr", 99999)
+        bsr_max = thresholds["bsr_max"]
         filters.append({
             "filter": "bsr_demand",
-            "passed": avg_bsr <= 50000,
-            "reason": f"Avg BSR ({avg_bsr}) exceeds 50000 (low demand)",
+            "passed": avg_bsr <= bsr_max,
+            "reason": f"Avg BSR ({avg_bsr}) exceeds {bsr_max} (low demand)",
             "value": avg_bsr,
         })
 
         # 4. Margin
         pre_ppc_margin = m.get("pre_ppc_margin_pct", 0)
+        margin_min = thresholds["margin_min"]
         filters.append({
             "filter": "minimum_margin",
-            "passed": pre_ppc_margin >= 25,
-            "reason": f"Pre-PPC margin ({pre_ppc_margin:.1f}%) below 25% minimum",
+            "passed": pre_ppc_margin >= margin_min,
+            "reason": f"Pre-PPC margin ({pre_ppc_margin:.1f}%) below {margin_min}% minimum",
             "value": pre_ppc_margin,
         })
 
         # 5. Amazon dominance
         amazon_pct = m.get("amazon_seller_pct", 0)
+        dominance_max = thresholds["amazon_dominance_max"]
         filters.append({
             "filter": "amazon_dominance",
-            "passed": amazon_pct <= 30,
-            "reason": f"Amazon sells {amazon_pct:.0f}% of top listings (>30% threshold)",
+            "passed": amazon_pct <= dominance_max,
+            "reason": f"Amazon sells {amazon_pct:.0f}% of top listings (>{dominance_max}% threshold)",
             "value": amazon_pct,
         })
 
@@ -536,18 +596,16 @@ class ScoringService:
         })
 
         # 9. Review velocity trap
-        # A niche where competitors gain >5 reviews per 100 sales/month
-        # suggests grey-hat review tactics or heavy Vine manipulation,
-        # making it very hard for organic entrants to compete on reviews.
         avg_review_velocity_gap = m.get("avg_review_velocity_gap_ratio", None)
+        velocity_max = thresholds["review_velocity_max"]
         if avg_review_velocity_gap is not None:
-            is_trap = avg_review_velocity_gap > 5.0
+            is_trap = avg_review_velocity_gap > velocity_max
             filters.append({
                 "filter": "review_velocity_trap",
                 "passed": not is_trap,
                 "reason": (
                     f"Review velocity gap ratio ({avg_review_velocity_gap:.1f}%) "
-                    f"exceeds 5% — likely grey-hat review tactics"
+                    f"exceeds {velocity_max}% — likely grey-hat review tactics"
                 ),
                 "value": avg_review_velocity_gap,
             })

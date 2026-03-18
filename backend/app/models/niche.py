@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ARRAY, BigInteger, Boolean, ForeignKey, Integer, JSON, Numeric, String, Text
+from sqlalchemy import ARRAY, BigInteger, Boolean, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, TIMESTAMPTZ
@@ -21,11 +21,15 @@ if TYPE_CHECKING:
 
 class Niche(TimestampMixin, Base):
     __tablename__ = "niches"
+    __table_args__ = (
+        UniqueConstraint("primary_keyword", "marketplace", name="uq_niches_keyword_marketplace"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    primary_keyword: Mapped[str] = mapped_column(
-        String(255), nullable=False, unique=True
+    primary_keyword: Mapped[str] = mapped_column(String(255), nullable=False)
+    marketplace: Mapped[str] = mapped_column(
+        String(10), nullable=False, server_default="US"
     )
     status: Mapped[str | None] = mapped_column(
         String(20), server_default="pending"

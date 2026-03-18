@@ -160,21 +160,81 @@ class ProductDimensions:
 # FBA Fee Calculator
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# AU-specific fee tables (AUD)
+# ---------------------------------------------------------------------------
+
+# AU fulfillment fees are generally higher than US, using AUD.
+# Small Standard tiers (weight in ounces, fee in AUD)
+_AU_SMALL_STANDARD_FEES: list[tuple[float, float]] = [
+    (2, 4.20),
+    (4, 4.45),
+    (6, 4.70),
+    (8, 4.95),
+    (10, 5.15),
+    (12, 5.35),
+    (14, 5.55),
+    (16, 5.75),
+]
+
+_AU_LARGE_STANDARD_FEES: list[tuple[float, float]] = [
+    (4, 6.20),
+    (8, 6.70),
+    (12, 7.05),
+    (16, 7.40),
+    (24, 7.95),
+    (32, 8.45),
+    (40, 9.15),
+    (48, 9.70),
+    # Above 3 lb: $9.70 + $0.55 per additional 0.5 lb
+]
+
+_AU_OVERSIZE_FEE_PARAMS: dict[SizeTier, tuple[float, float, float]] = {
+    SizeTier.SMALL_OVERSIZE:   (12.50, 0.55, 1.0),
+    SizeTier.LARGE_OVERSIZE:   (24.50, 0.55, 1.0),
+    SizeTier.SPECIAL_OVERSIZE: (115.00, 1.10, 90.0),
+}
+
+_AU_STORAGE_STANDARD = {"off_peak": 1.10, "peak": 3.10}
+_AU_STORAGE_OVERSIZE = {"off_peak": 0.70, "peak": 1.80}
+
+# AU referral fees (same structure, mostly 15% like US but some differences)
+_AU_REFERRAL_FEES: dict[str, dict] = {
+    "default":                     {"rate": 0.15, "min_referral": 0.50},
+    "electronics_accessories":     {"rate": 0.08, "min_referral": 0.50},
+    "personal_computers":          {"rate": 0.06, "min_referral": 0.50},
+    "consumer_electronics":        {"rate": 0.08, "min_referral": 0.50},
+    "grocery_and_gourmet":         {"rate": 0.08, "min_referral": 0.50},
+    "health_and_personal_care":    {"rate": 0.08, "min_referral": 0.50},
+    "clothing_and_accessories":    {"rate": 0.15, "min_referral": 0.50},
+    "shoes_handbags_sunglasses":   {"rate": 0.15, "min_referral": 0.50},
+    "jewelry":                     {"rate": 0.20, "min_referral": 0.50},
+    "watches":                     {"rate": 0.15, "min_referral": 0.50},
+    "sports_and_outdoors":         {"rate": 0.15, "min_referral": 0.50},
+    "toys_and_games":              {"rate": 0.15, "min_referral": 0.50},
+    "baby_products":               {"rate": 0.08, "min_referral": 0.50},
+    "beauty":                      {"rate": 0.08, "min_referral": 0.50},
+    "pet_supplies":                {"rate": 0.15, "min_referral": 0.50},
+    "home":                        {"rate": 0.15, "min_referral": 0.50},
+    "kitchen":                     {"rate": 0.15, "min_referral": 0.50},
+}
+
+# AU GST rate
+_AU_GST_RATE = 0.10
+
+
 class FBAFeeCalculator:
     """
-    Comprehensive Amazon FBA fee calculator for the US marketplace.
+    Amazon FBA fee calculator with multi-marketplace support.
 
-    Implements the 2024/2025 fee schedule including:
-      - Size-tier classification
-      - Fulfillment (pick & pack / shipping) fees
-      - Monthly inventory storage fees (standard and peak season)
-      - Referral fees by product category
-      - Variable closing fees (media items)
-      - Returns processing fees (apparel / shoes / jewelry)
+    Supports US (2024/2025 schedule) and AU fee tables.
+    Implements size-tier classification, fulfillment fees, referral fees,
+    monthly storage fees, variable closing fees, and returns processing fees.
 
     Usage::
 
-        calc = FBAFeeCalculator()
+        calc = FBAFeeCalculator(marketplace="AU")
         result = calc.calculate_all_fees(
             selling_price=29.99,
             length=10, width=8, height=3,
@@ -184,6 +244,9 @@ class FBAFeeCalculator:
         )
         print(result)
     """
+
+    def __init__(self, marketplace: str = "US"):
+        self._marketplace = marketplace.strip().upper()
 
     # ---- helpers ----------------------------------------------------------
 
@@ -323,14 +386,29 @@ class FBAFeeCalculator:
         ship_wt = self._shipping_weight_lb(dims, is_oversize)
         ship_wt_oz = ship_wt * 16.0
 
+        if self._marketplace == "AU":
+            small_table = _AU_SMALL_STANDARD_FEES
+            large_table = _AU_LARGE_STANDARD_FEES
+            oversize_params = _AU_OVERSIZE_FEE_PARAMS
+            large_base = 9.70
+            large_increment = 0.55
+        else:
+            small_table = _SMALL_STANDARD_FEES
+            large_table = _LARGE_STANDARD_FEES
+            oversize_params = _OVERSIZE_FEE_PARAMS
+            large_base = 7.47
+            large_increment = 0.42
+
         if tier == SizeTier.SMALL_STANDARD:
-            return self._lookup_standard_fee(_SMALL_STANDARD_FEES, ship_wt_oz)
+            return self._lookup_standard_fee(small_table, ship_wt_oz)
 
         if tier == SizeTier.LARGE_STANDARD:
-            return self._calc_large_standard_fee(ship_wt_oz)
+            return self._calc_large_standard_fee(
+                ship_wt_oz, large_table, large_base, large_increment
+            )
 
         # Oversize tiers
-        base_fee, per_lb, first_lb = _OVERSIZE_FEE_PARAMS[tier]
+        base_fee, per_lb, first_lb = oversize_params[tier]
         extra_lb = max(0.0, ship_wt - first_lb)
         fee = base_fee + per_lb * math.ceil(extra_lb)
         return round(fee, 2)
@@ -349,21 +427,28 @@ class FBAFeeCalculator:
         return table[-1][1]
 
     @staticmethod
-    def _calc_large_standard_fee(weight_oz: float) -> float:
+    def _calc_large_standard_fee(
+        weight_oz: float,
+        table: list[tuple[float, float]] | None = None,
+        base_fee: float = 7.47,
+        increment: float = 0.42,
+    ) -> float:
         """
         Calculate large-standard fulfillment fee.
 
-        Uses the tiered table up to 3 lb (48 oz), then adds $0.42
+        Uses the tiered table up to 3 lb (48 oz), then adds increment
         per additional half-pound above 3 lb, up to the 20 lb maximum.
         """
-        for max_oz, fee in _LARGE_STANDARD_FEES:
+        if table is None:
+            table = _LARGE_STANDARD_FEES
+        for max_oz, fee in table:
             if weight_oz <= max_oz:
                 return fee
 
-        # Above 3 lb (48 oz): base of $7.47 + $0.42 per 0.5 lb increment
+        # Above 3 lb (48 oz): base + increment per 0.5 lb
         extra_oz = weight_oz - 48.0
         extra_half_lbs = math.ceil(extra_oz / 8.0)  # 0.5 lb = 8 oz
-        fee = 7.47 + 0.42 * extra_half_lbs
+        fee = base_fee + increment * extra_half_lbs
         return round(fee, 2)
 
     # ---- storage fees -----------------------------------------------------
@@ -404,7 +489,10 @@ class FBAFeeCalculator:
         is_oversize = tier not in (SizeTier.SMALL_STANDARD, SizeTier.LARGE_STANDARD)
 
         cubic_ft = dims.cubic_feet
-        rate_table = _STORAGE_OVERSIZE if is_oversize else _STORAGE_STANDARD
+        if self._marketplace == "AU":
+            rate_table = _AU_STORAGE_OVERSIZE if is_oversize else _AU_STORAGE_STANDARD
+        else:
+            rate_table = _STORAGE_OVERSIZE if is_oversize else _STORAGE_STANDARD
         rate = rate_table["peak"] if peak_season else rate_table["off_peak"]
 
         total = rate * cubic_ft * units * months
@@ -432,7 +520,8 @@ class FBAFeeCalculator:
         float
             Referral fee in USD, rounded to two decimal places.
         """
-        cat_info = _REFERRAL_FEES.get(category, _REFERRAL_FEES["default"])
+        ref_table = _AU_REFERRAL_FEES if self._marketplace == "AU" else _REFERRAL_FEES
+        cat_info = ref_table.get(category, ref_table["default"])
         rate = cat_info["rate"]
         min_ref = cat_info["min_referral"]
 
@@ -591,6 +680,10 @@ class FBAFeeCalculator:
         closing_fee = self._variable_closing_fee(category)
         returns_fee = self._returns_processing_fee(category)
 
+        # GST for AU marketplace (applied on selling price, included in total)
+        gst_rate = _AU_GST_RATE if self._marketplace == "AU" else 0.0
+        gst_amount = round(selling_price * gst_rate / (1 + gst_rate), 2) if gst_rate > 0 else 0.0
+
         # Totals
         total_off = round(
             fulfillment_fee + referral_fee + storage_off + closing_fee + returns_fee,
@@ -601,19 +694,27 @@ class FBAFeeCalculator:
             2,
         )
 
-        return {
+        result = {
             "size_tier": tier.value,
             "fulfillment_fee": fulfillment_fee,
             "referral_fee": referral_fee,
             "referral_fee_pct": referral_fee_pct,
             "monthly_storage_fee": storage_off,
             "monthly_storage_fee_peak": storage_peak,
+            "monthly_storage_per_unit": storage_off,
             "variable_closing_fee": closing_fee,
             "returns_processing_fee": returns_fee,
             "total_fba_fees_per_unit": total_off,
             "total_fba_fees_per_unit_peak": total_peak,
             "product_dimensions": dims.as_dict(),
+            "marketplace": self._marketplace,
         }
+
+        if gst_amount > 0:
+            result["gst_rate"] = gst_rate
+            result["gst_per_unit"] = gst_amount
+
+        return result
 
     # ---- convenience / bulk -----------------------------------------------
 
@@ -693,7 +794,7 @@ class FBAFeeCalculator:
 # Module-level convenience
 # ---------------------------------------------------------------------------
 
-# Pre-instantiated calculator for quick imports
+# Pre-instantiated calculator for quick imports (US by default)
 calculator = FBAFeeCalculator()
 
 
@@ -705,9 +806,11 @@ def calculate_fba_fees(
     weight_lb: float,
     category: str = "default",
     monthly_units: int = 100,
+    marketplace: str = "US",
 ) -> Dict:
     """Module-level shortcut for ``FBAFeeCalculator.calculate_all_fees``."""
-    return calculator.calculate_all_fees(
+    calc = FBAFeeCalculator(marketplace=marketplace) if marketplace != "US" else calculator
+    return calc.calculate_all_fees(
         selling_price=selling_price,
         length=length,
         width=width,

@@ -43,19 +43,23 @@ async def create_niche(
     The niche is stored immediately with the primary keyword.  A background
     analysis job should be triggered separately via ``POST /api/jobs/analyze-niche``.
     """
-    # Check for duplicate keyword
+    # Check for duplicate keyword+marketplace combo
     existing = await db.execute(
-        select(Niche).where(Niche.primary_keyword == payload.keyword)
+        select(Niche).where(
+            Niche.primary_keyword == payload.keyword,
+            Niche.marketplace == payload.marketplace,
+        )
     )
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"A niche with keyword '{payload.keyword}' already exists",
+            detail=f"A niche with keyword '{payload.keyword}' already exists for marketplace {payload.marketplace}",
         )
 
     niche = Niche(
         name=payload.keyword,
         primary_keyword=payload.keyword,
+        marketplace=payload.marketplace,
     )
     db.add(niche)
     await db.flush()
@@ -73,6 +77,7 @@ async def list_niches(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
     search: str | None = Query(None, description="Search by keyword or name"),
+    marketplace: str | None = Query(None, description="Filter by marketplace code (e.g. US, AU)"),
     min_score: float | None = Query(None, ge=0, le=100, description="Minimum opportunity score"),
     confidence_tier: str | None = Query(None, description="Filter by confidence tier (e.g. HIGH, MEDIUM, LOW, FAIL)"),
     status: str | None = Query(None, description="Filter by status (e.g. pending, analyzing, completed, failed)"),
@@ -83,6 +88,8 @@ async def list_niches(
     """Return a paginated list of niche summaries ordered by most recent first."""
     # Build filter conditions
     conditions: list = []
+    if marketplace is not None:
+        conditions.append(Niche.marketplace == marketplace.strip().upper())
     if search is not None:
         conditions.append(
             or_(

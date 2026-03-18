@@ -276,6 +276,7 @@ export default function SettingsPage() {
               onChange={(e) => setDefaultMarketplace(e.target.value)}
             >
               <option value="US">United States (US)</option>
+              <option value="AU">Australia (AU)</option>
               <option value="UK">United Kingdom (UK)</option>
               <option value="DE">Germany (DE)</option>
               <option value="CA">Canada (CA)</option>

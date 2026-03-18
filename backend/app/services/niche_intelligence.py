@@ -51,7 +51,12 @@ class NicheIntelligenceService:
             if c.get("vulnerability") in ("high", "critical")
         )
 
-        prompt = f"""Analyze this Amazon niche and write an honest, data-driven market intelligence assessment. Do not default to "opportunity exists" — if the niche is saturated, say so plainly.
+        # Inject marketplace context for non-US markets
+        marketplace = metrics.get("marketplace", "US")
+        from app.core.marketplace import get_marketplace_prompt_context
+        mp_context = get_marketplace_prompt_context(marketplace)
+
+        prompt = f"""{mp_context}Analyze this Amazon niche and write an honest, data-driven market intelligence assessment. Do not default to "opportunity exists" — if the niche is saturated, say so plainly.
 
 Niche: {niche_keyword}
 Products analyzed: {len(products)}

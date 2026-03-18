@@ -14,7 +14,7 @@ from app.core.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
-# SP-API endpoints
+# SP-API endpoints (default; overridden per marketplace)
 SP_API_BASE = "https://sellingpartnerapi-na.amazon.com"
 TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 
@@ -30,6 +30,8 @@ class SPAPIService:
     3. Get product fees estimate
     4. Get BSR/sales rank
     5. Search catalog items
+
+    Supports multiple marketplaces via the marketplace parameter.
     """
 
     def __init__(
@@ -39,7 +41,8 @@ class SPAPIService:
         refresh_token: str,
         aws_access_key: str | None = None,
         aws_secret_key: str | None = None,
-        marketplace_id: str = "ATVPDKIKX0DER",  # US marketplace
+        marketplace_id: str | None = None,
+        marketplace: str = "US",
         rate_limiter: RateLimiter | None = None,
     ):
         self.client_id = client_id
@@ -47,8 +50,13 @@ class SPAPIService:
         self.refresh_token = refresh_token
         self.aws_access_key = aws_access_key
         self.aws_secret_key = aws_secret_key
-        self.marketplace_id = marketplace_id
         self.rate_limiter = rate_limiter
+
+        # Load marketplace config for endpoint and marketplace_id
+        from app.core.marketplace import get_marketplace
+        mp = get_marketplace(marketplace)
+        self.marketplace_id = marketplace_id or mp.marketplace_id
+        self._sp_api_base = mp.sp_api_endpoint
 
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
@@ -111,7 +119,7 @@ class SPAPIService:
             "User-Agent": "Omniscient/1.0 (Language=Python)",
         }
 
-        url = f"{SP_API_BASE}{path}"
+        url = f"{self._sp_api_base}{path}"
 
         try:
             response = await self._http_client.request(

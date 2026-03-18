@@ -30,7 +30,11 @@ _MAX_RETRIES = 3
 class ScraperService:
     """Scrapes Amazon search results, product pages, and reviews via Playwright."""
 
-    def __init__(self, proxy_manager: ProxyManager | None = None):
+    def __init__(
+        self,
+        proxy_manager: ProxyManager | None = None,
+        marketplace: str = "US",
+    ):
         if proxy_manager is None:
             from app.config import Settings
 
@@ -43,6 +47,10 @@ class ScraperService:
                 password=settings.PROXY_PASSWORD,
             )
         self.proxy_manager = proxy_manager
+
+        # Load marketplace config for domain, locale, timezone
+        from app.core.marketplace import get_marketplace
+        self._marketplace = get_marketplace(marketplace)
 
     # ------------------------------------------------------------------
     # Helper methods
@@ -130,8 +138,8 @@ class ScraperService:
         context = await browser.new_context(
             user_agent=self._get_random_user_agent(),
             viewport={"width": random.randint(1280, 1920), "height": random.randint(800, 1080)},
-            locale="en-US",
-            timezone_id="America/New_York",
+            locale=self._marketplace.locale,
+            timezone_id=self._marketplace.timezone,
             java_script_enabled=True,
             ignore_https_errors=True,
         )
@@ -172,7 +180,7 @@ class ScraperService:
 
                 for page_num in range(1, pages + 1):
                     url = (
-                        f"https://www.amazon.com/s?k={quote_plus(keyword)}"
+                        f"https://www.{self._marketplace.domain}/s?k={quote_plus(keyword)}"
                         f"&page={page_num}"
                     )
                     logger.info("Scraping search page %d/%d for '%s' (attempt %d)", page_num, pages, keyword, attempt)
@@ -404,7 +412,7 @@ class ScraperService:
                 browser = await self._launch_browser(pw)
                 page = await self._new_page(browser)
 
-                url = f"https://www.amazon.com/dp/{asin}"
+                url = f"https://www.{self._marketplace.domain}/dp/{asin}"
                 logger.info("Scraping product page %s (attempt %d)", asin, attempt)
 
                 await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
@@ -838,7 +846,7 @@ class ScraperService:
 
                 for page_num in range(1, max_pages + 1):
                     url = (
-                        f"https://www.amazon.com/product-reviews/{asin}"
+                        f"https://www.{self._marketplace.domain}/product-reviews/{asin}"
                         f"?filterByStar={filter_star}"
                         f"&pageNumber={page_num}"
                     )

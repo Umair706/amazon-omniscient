@@ -40,7 +40,12 @@ class MarketingService:
         Integrates PPC, review, and marketing strategies into a
         unified execution plan.
         """
-        prompt = f"""Create a realistic 12-week Amazon product launch playbook for a product in the "{niche_keyword}" niche. No hockey-stick projections.
+        # Inject marketplace context
+        marketplace = financial_summary.get("marketplace", "US") if financial_summary else "US"
+        from app.core.marketplace import get_marketplace_prompt_context
+        mp_context = get_marketplace_prompt_context(marketplace)
+
+        prompt = f"""{mp_context}Create a realistic 12-week Amazon product launch playbook for a product in the "{niche_keyword}" niche. No hockey-stick projections.
 
 PRODUCT:
 - Price: ${product_spec.get('target_price', 0)}

@@ -53,6 +53,11 @@ class AnalyzeKeywordRequest(BaseModel):
     keyword: str = Field(
         min_length=1, max_length=255, description="Niche keyword to analyze"
     )
+    marketplace: str = Field(
+        default="US",
+        max_length=10,
+        description="Amazon marketplace code (e.g. US, AU)",
+    )
     force: bool = Field(
         default=False, description="Force re-analysis if niche already exists"
     )
@@ -78,24 +83,26 @@ async def trigger_keyword_analysis(
 ) -> JobStatusResponse:
     """Trigger analysis from a keyword. Creates the niche if it doesn't exist."""
     keyword = payload.keyword.strip()
+    marketplace = payload.marketplace.strip().upper()
 
-    # Check if niche already exists
+    # Check if niche already exists for this marketplace
     result = await db.execute(
-        select(Niche).where(Niche.primary_keyword == keyword)
+        select(Niche).where(
+            Niche.primary_keyword == keyword,
+            Niche.marketplace == marketplace,
+        )
     )
     niche = result.scalar_one_or_none()
 
     if niche is not None and not payload.force:
-        # Niche exists — check if already analyzed (opportunity_score is set
-        # only after the scoring step completes successfully).
         if niche.opportunity_score is not None:
             raise HTTPException(
                 status_code=409,
-                detail=f"Niche '{keyword}' already analyzed. Use force=true to re-analyze.",
+                detail=f"Niche '{keyword}' ({marketplace}) already analyzed. Use force=true to re-analyze.",
             )
 
     if niche is None:
-        niche = Niche(name=keyword, primary_keyword=keyword)
+        niche = Niche(name=keyword, primary_keyword=keyword, marketplace=marketplace)
         db.add(niche)
         await db.flush()
         await db.refresh(niche)
@@ -104,6 +111,7 @@ async def trigger_keyword_analysis(
     task = run_full_analysis.delay(
         niche_id=niche.id,
         keyword=niche.primary_keyword,
+        marketplace=marketplace,
         options={"force": payload.force},
     )
 
@@ -157,6 +165,7 @@ async def trigger_niche_analysis(
     task = run_full_analysis.delay(
         niche_id=payload.niche_id,
         keyword=niche.primary_keyword,
+        marketplace=niche.marketplace or "US",
         options={"force": payload.force},
     )
 
@@ -185,10 +194,14 @@ async def trigger_discovery(
 ) -> JobStatusResponse:
     """Run discovery phase only — returns sub-niche options if keyword is broad."""
     keyword = payload.keyword.strip()
+    marketplace = payload.marketplace.strip().upper()
 
-    # Check if niche already exists
+    # Check if niche already exists for this marketplace
     result = await db.execute(
-        select(Niche).where(Niche.primary_keyword == keyword)
+        select(Niche).where(
+            Niche.primary_keyword == keyword,
+            Niche.marketplace == marketplace,
+        )
     )
     niche = result.scalar_one_or_none()
 
@@ -196,11 +209,11 @@ async def trigger_discovery(
         if niche.opportunity_score is not None:
             raise HTTPException(
                 status_code=409,
-                detail=f"Niche '{keyword}' already analyzed. Use force=true to re-analyze.",
+                detail=f"Niche '{keyword}' ({marketplace}) already analyzed. Use force=true to re-analyze.",
             )
 
     if niche is None:
-        niche = Niche(name=keyword, primary_keyword=keyword)
+        niche = Niche(name=keyword, primary_keyword=keyword, marketplace=marketplace)
         db.add(niche)
         await db.flush()
         await db.refresh(niche)
@@ -209,6 +222,7 @@ async def trigger_discovery(
     task = run_discovery.delay(
         niche_id=niche.id,
         keyword=niche.primary_keyword,
+        marketplace=marketplace,
         options={"force": payload.force},
     )
 
@@ -260,6 +274,7 @@ async def trigger_sub_niche_analysis(
         child_niche = Niche(
             name=payload.sub_niche_label,
             primary_keyword=child_keyword,
+            marketplace=parent_niche.marketplace or "US",
             parent_niche_id=payload.parent_niche_id,
             sub_niche_label=payload.sub_niche_label,
         )
@@ -271,6 +286,7 @@ async def trigger_sub_niche_analysis(
     task = run_full_analysis.delay(
         niche_id=child_niche.id,
         keyword=parent_niche.primary_keyword,
+        marketplace=parent_niche.marketplace or "US",
         options={"force": True},
         product_asins=payload.product_asins,
     )

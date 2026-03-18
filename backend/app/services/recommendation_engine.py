@@ -169,7 +169,12 @@ PRODUCT BLUEPRINT:
 - Top improvement priorities:
 {priority_lines}"""
 
-        prompt = f"""Generate an executive summary for this Amazon product opportunity analysis.
+        # Inject marketplace context
+        marketplace = metrics.get("marketplace", "US")
+        from app.core.marketplace import get_marketplace_prompt_context
+        mp_context = get_marketplace_prompt_context(marketplace)
+
+        prompt = f"""{mp_context}Generate an executive summary for this Amazon product opportunity analysis.
 
 OMNISCIENT SCORE: {score_result['omniscient_score']}/100 ({score_result['confidence_tier']})
 

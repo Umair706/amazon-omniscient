@@ -65,6 +65,7 @@ class NicheSummary(BaseModel):
     id: int
     name: str
     primary_keyword: str
+    marketplace: str = "US"
     monthly_search_volume: int | None = None
     avg_sale_price: Decimal | None = None
     opportunity_score: Decimal | None = None
@@ -82,6 +83,7 @@ class NicheResponse(BaseModel):
     id: int
     name: str
     primary_keyword: str
+    marketplace: str = "US"
     category_id: str | None = None
     monthly_search_volume: int | None = None
     avg_sale_price: Decimal | None = None

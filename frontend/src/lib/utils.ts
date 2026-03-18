@@ -5,13 +5,22 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number | string | null | undefined): string {
-  if (value == null) return "$0.00";
+const MARKETPLACE_CURRENCY: Record<string, { currency: string; locale: string; symbol: string }> = {
+  US: { currency: "USD", locale: "en-US", symbol: "$" },
+  AU: { currency: "AUD", locale: "en-AU", symbol: "A$" },
+};
+
+export function formatCurrency(
+  value: number | string | null | undefined,
+  marketplace: string = "US",
+): string {
+  const config = MARKETPLACE_CURRENCY[marketplace] || MARKETPLACE_CURRENCY.US;
+  if (value == null) return `${config.symbol}0.00`;
   const num = typeof value === "string" ? parseFloat(value) : value;
-  if (isNaN(num)) return "$0.00";
-  return new Intl.NumberFormat("en-US", {
+  if (isNaN(num)) return `${config.symbol}0.00`;
+  return new Intl.NumberFormat(config.locale, {
     style: "currency",
-    currency: "USD",
+    currency: config.currency,
   }).format(num);
 }
 

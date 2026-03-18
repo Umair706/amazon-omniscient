@@ -66,7 +66,7 @@ def _get_llm_client():
 # 1. Full Niche Analysis Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
 @celery_app.task(bind=True, name="app.workers.tasks.run_full_analysis", max_retries=2)
-def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = None, product_asins: list[str] | None = None):
+def run_full_analysis(self, niche_id: int, keyword: str, marketplace: str = "US", options: dict | None = None, product_asins: list[str] | None = None):
     """
     Master analysis pipeline for a niche.
 
@@ -83,14 +83,16 @@ def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = 
 
     Parameters
     ----------
+    marketplace : str
+        Amazon marketplace code (e.g. "US", "AU").
     product_asins : list[str] | None
         If provided, skip scraping and filter to only these ASINs (sub-niche flow).
     """
     options = options or {}
-    logger.info("Starting full analysis for niche %d: %s", niche_id, keyword)
+    logger.info("Starting full analysis for niche %d: %s (marketplace=%s)", niche_id, keyword, marketplace)
 
     try:
-        return _run_async(_run_full_analysis_async(self, niche_id, keyword, options, product_asins=product_asins))
+        return _run_async(_run_full_analysis_async(self, niche_id, keyword, options, product_asins=product_asins, marketplace=marketplace))
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
@@ -101,7 +103,7 @@ def run_full_analysis(self, niche_id: int, keyword: str, options: dict | None = 
 # 1b. Discovery Phase (sub-niche detection)
 # ═══════════════════════════════════════════════════════════════════════════
 @celery_app.task(bind=True, name="app.workers.tasks.run_discovery", max_retries=2)
-def run_discovery(self, niche_id: int, keyword: str, options: dict | None = None):
+def run_discovery(self, niche_id: int, keyword: str, marketplace: str = "US", options: dict | None = None):
     """
     Phase A: Scrape products, detect heterogeneity, optionally cluster sub-niches.
 
@@ -112,17 +114,17 @@ def run_discovery(self, niche_id: int, keyword: str, options: dict | None = None
         If broad:  {"is_broad": true, "sub_niches": [...], "niche_id": N, "heterogeneity": {...}}
     """
     options = options or {}
-    logger.info("Starting discovery for niche %d: %s", niche_id, keyword)
+    logger.info("Starting discovery for niche %d: %s (marketplace=%s)", niche_id, keyword, marketplace)
 
     try:
-        return _run_async(_run_discovery_async(self, niche_id, keyword, options))
+        return _run_async(_run_discovery_async(self, niche_id, keyword, options, marketplace=marketplace))
     except Exception as exc:
         logger.exception("Discovery failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
         raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
 
 
-async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict):
+async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict, marketplace: str = "US"):
     """Async implementation of the discovery pipeline."""
     from app.models.niche import Niche
 
@@ -138,7 +140,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict)
 
         # ── Step 1: Scrape search results ──────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-        products_data = await _scrape_search_results(keyword)
+        products_data = await _scrape_search_results(keyword, marketplace=marketplace)
 
         if not products_data:
             await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -150,7 +152,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict)
 
         # ── Step 3: Scrape top product details ─────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
-        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20])
+        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], marketplace=marketplace)
 
         # Merge detail data back
         detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
@@ -214,7 +216,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict)
         }
 
 
-async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: dict, product_asins: list[str] | None = None):
+async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: dict, product_asins: list[str] | None = None, marketplace: str = "US"):
     """Async implementation of the full analysis pipeline."""
     from app.models.niche import Niche
     from app.models.product import Product
@@ -270,7 +272,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # ── Step 1: Scrape search results ──────────────────────────────
             task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-            products_data = await _scrape_search_results(keyword)
+            products_data = await _scrape_search_results(keyword, marketplace=marketplace)
 
             if not products_data:
                 await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -281,7 +283,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             product_ids = await _save_products(db, niche_id, products_data)
 
             # Scrape individual product pages for detailed data
-            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20])
+            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], marketplace=marketplace)
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
@@ -383,6 +385,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             products=products_data[:20],
             category=keyword,
         )
+        if competitor_landscape:
+            competitor_landscape["marketplace"] = marketplace
 
         # ── Step 4: Analyze reviews (top 10 products) ──────────────────
         task.update_state(state="PROGRESS", meta={"step": "review_analysis", "progress": 38})
@@ -570,12 +574,13 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
         from app.services.supplier_service import SupplierService
-        supplier_svc = SupplierService()
+        supplier_svc = SupplierService(marketplace=marketplace)
 
         metrics = _build_base_metrics(competitor_landscape, detailed_products)
+        metrics["marketplace"] = marketplace
         supplier_data = None
         try:
-            supplier_data = await _analyze_suppliers(db, niche_id, metrics)
+            supplier_data = await _analyze_suppliers(db, niche_id, metrics, marketplace=marketplace)
         except Exception as e:
             logger.warning("Supplier analysis failed: %s", e)
 
@@ -693,7 +698,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 12: Consolidated financial report ─────────────────
         task.update_state(state="PROGRESS", meta={"step": "financial_report", "progress": 90})
         from app.services.financial_report import FinancialReportService
-        fin_report_svc = FinancialReportService()
+        fin_report_svc = FinancialReportService(marketplace=marketplace)
 
         financial_report = None
         try:
@@ -859,9 +864,15 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
             logger.warning("Product %s not found in niche %d", asin, niche_id)
             return
 
-        # Scrape reviews
+        # Scrape reviews — determine marketplace from niche
+        from app.models.niche import Niche as NicheModel
+        niche_row = (await db.execute(
+            select(NicheModel).where(NicheModel.id == niche_id)
+        )).scalar_one_or_none()
+        niche_marketplace = niche_row.marketplace if niche_row else "US"
+
         from app.services.scraper_service import ScraperService
-        scraper = ScraperService()
+        scraper = ScraperService(marketplace=niche_marketplace)
 
         try:
             reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
@@ -1006,11 +1017,11 @@ async def _update_niche_status(niche_id: int, status: str, error: str | None = N
         await db.commit()
 
 
-async def _scrape_search_results(keyword: str) -> list[dict]:
+async def _scrape_search_results(keyword: str, marketplace: str = "US") -> list[dict]:
     """Scrape Amazon search results for a keyword."""
     from app.services.scraper_service import ScraperService
 
-    scraper = ScraperService()
+    scraper = ScraperService(marketplace=marketplace)
     try:
         return await scraper.scrape_search_results(keyword, pages=3)
     except Exception as e:
@@ -1068,13 +1079,13 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
 
 
 async def _scrape_product_details(
-    db: AsyncSession, niche_id: int, products_data: list[dict]
+    db: AsyncSession, niche_id: int, products_data: list[dict], marketplace: str = "US"
 ) -> list[dict]:
     """Scrape detailed product pages for enriched data and update DB rows."""
     from app.models.product import Product
     from app.services.scraper_service import ScraperService
 
-    scraper = ScraperService()
+    scraper = ScraperService(marketplace=marketplace)
     detailed = []
 
     for p in products_data[:20]:
@@ -1245,11 +1256,11 @@ def _build_competitor_metadata(detailed_products: list[dict]) -> list[dict]:
     ]
 
 
-async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict) -> dict | None:
+async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict, marketplace: str = "US") -> dict | None:
     """Run supplier analysis."""
     from app.services.supplier_service import SupplierService
 
-    svc = SupplierService()
+    svc = SupplierService(marketplace=marketplace)
     avg_price = metrics.get("avg_price", 30)
 
     # Estimate FOB unit cost: roughly 15% of selling price
@@ -1448,7 +1459,7 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
     # Compute estimated_monthly_sales from BSR using regression model
     if not metrics["estimated_monthly_sales"] and metrics["avg_bsr"]:
         from app.core.bsr_regression import BSRSalesEstimator
-        estimator = BSRSalesEstimator()
+        estimator = BSRSalesEstimator(marketplace=metrics.get("marketplace", "US"))
         metrics["estimated_monthly_sales"] = estimator.estimate_monthly_sales(
             bsr=int(metrics["avg_bsr"]),
             category=metrics.get("category", "default"),

@@ -426,7 +426,12 @@ class CompetitorService:
                 f"Vuln={c.get('vulnerabilities', {}).get('vulnerability_level', '?')}"
             )
 
-        prompt = f"""Analyze this competitive landscape for the Amazon niche "{niche_keyword}". Provide an honest entry assessment — do not sugarcoat.
+        # Inject marketplace context
+        marketplace = landscape.get("marketplace", "US")
+        from app.core.marketplace import get_marketplace_prompt_context
+        mp_context = get_marketplace_prompt_context(marketplace)
+
+        prompt = f"""{mp_context}Analyze this competitive landscape for the Amazon niche "{niche_keyword}". Provide an honest entry assessment — do not sugarcoat.
 
 MARKET OVERVIEW:
 - Total competitors: {landscape.get('total_competitors', 0)}

@@ -84,9 +84,13 @@ class FinancialReportService:
         1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
     ]
 
-    def __init__(self):
-        self._supplier_service = SupplierService()
-        self._fba_calculator = FBAFeeCalculator()
+    def __init__(self, marketplace: str = "US"):
+        self._marketplace = marketplace.strip().upper()
+        self._supplier_service = SupplierService(marketplace=self._marketplace)
+        self._fba_calculator = FBAFeeCalculator(marketplace=self._marketplace)
+
+        from app.core.marketplace import get_marketplace
+        self._mp_config = get_marketplace(self._marketplace)
 
     # ==================================================================
     # Main entry point
@@ -289,7 +293,10 @@ class FinancialReportService:
             ramp_penalty=ramp_penalty,
         )
 
-        return {
+        report = {
+            "marketplace": self._marketplace,
+            "currency": self._mp_config.currency,
+            "currency_symbol": self._mp_config.currency_symbol,
             "per_unit_economics": per_unit,
             "launch_capital": launch_capital,
             "cash_flow_timeline": cash_flow,
@@ -298,6 +305,15 @@ class FinancialReportService:
             "scenarios": scenarios,
             "key_metrics": key_metrics,
         }
+
+        if self._mp_config.gst_rate > 0:
+            report["gst_rate"] = self._mp_config.gst_rate
+            report["gst_note"] = (
+                f"{self._mp_config.name} GST of {self._mp_config.gst_rate*100:.0f}% "
+                f"is included in selling price. All figures are in {self._mp_config.currency}."
+            )
+
+        return report
 
     # ==================================================================
     # Section builders

@@ -94,9 +94,14 @@ class SupplierService:
         "air_express": ShippingQuote("air_express", 8.00, 3, 7, 10),
     }
 
-    def __init__(self, llm_client: BaseLLMClient | None = None):
+    def __init__(self, llm_client: BaseLLMClient | None = None, marketplace: str = "US"):
         self.llm = llm_client
         self._http_client = httpx.AsyncClient(timeout=30.0)
+        self._marketplace = marketplace.strip().upper()
+
+        # Load marketplace-specific duty/shipping from marketplace config
+        from app.core.marketplace import get_marketplace
+        self._mp_config = get_marketplace(self._marketplace)
 
     async def close(self):
         await self._http_client.aclose()
@@ -149,24 +154,34 @@ class SupplierService:
         fba_inbound_per_unit : float
             FBA inbound shipping per unit
         """
-        # Shipping
-        shipping_quote = self.SHIPPING_ESTIMATES.get(
-            shipping_method,
-            self.SHIPPING_ESTIMATES["sea_fcl_20ft"],
+        # Shipping — use marketplace-specific profile if available
+        mp_ship = self._mp_config.shipping_profile
+        shipping_methods_mp = {
+            "sea_lcl": mp_ship.sea_lcl_per_unit,
+            "sea_fcl_20ft": mp_ship.sea_fcl_20ft_per_unit,
+            "sea_fcl_40ft": mp_ship.sea_fcl_40ft_per_unit,
+            "air_standard": mp_ship.air_standard_per_unit,
+            "air_express": mp_ship.air_express_per_unit,
+        }
+        base_ship_cost = shipping_methods_mp.get(
+            shipping_method, mp_ship.sea_fcl_20ft_per_unit
         )
         # Adjust shipping by weight (base rate is for ~0.5kg)
         weight_factor = max(weight_kg / 0.5, 1.0)
-        shipping_per_unit = shipping_quote.cost_per_unit * weight_factor
+        shipping_per_unit = base_ship_cost * weight_factor
 
-        # Customs duty
-        duty_rate = self.DUTY_RATES.get(category.lower(), self.DUTY_RATES["default"])
+        # Customs duty — use marketplace duty profile
+        duty_profile = self._mp_config.duty_profile
+        duty_rate = duty_profile.category_rates.get(
+            category.lower(), duty_profile.default_duty_rate
+        )
         customs_duty = unit_cost * duty_rate
 
-        # Section 301 tariff (applies to China-origin goods)
+        # Tariff surcharge (Section 301 for US, none for AU under ChAFTA)
         s301_rate = 0.0
-        if origin_country.upper() == "CN":
-            s301_rate = self.SECTION_301_RATES.get(
-                section_301_list, self.SECTION_301_RATES["default"]
+        if origin_country.upper() == "CN" and duty_profile.surcharge_name:
+            s301_rate = duty_profile.surcharge_category_rates.get(
+                section_301_list, duty_profile.surcharge_default_rate
             )
         section_301_tariff = unit_cost * s301_rate
 
