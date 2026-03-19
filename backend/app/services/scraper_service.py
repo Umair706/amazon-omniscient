@@ -624,6 +624,281 @@ class ScraperService:
                 except Exception:
                     pass
 
+                # ── List Price / Strikethrough Price ──
+                list_price: float | None = None
+                try:
+                    for lp_sel in (
+                        "span.a-price[data-a-strike='true'] span.a-offscreen",
+                        "#listPrice",
+                        "#priceBlockStrikePriceRow .a-text-price span.a-offscreen",
+                        ".basisPrice span.a-offscreen",
+                    ):
+                        lp_text = await self._safe_text(page, lp_sel)
+                        if lp_text:
+                            list_price = self._safe_float(lp_text)
+                            if list_price and list_price > 0:
+                                break
+                except Exception:
+                    pass
+
+                # ── Product Dimensions & Weight from detail table ──
+                dimensions: str | None = None
+                weight: str | None = None
+                date_first_available: str | None = None
+                try:
+                    for detail_sel in (
+                        "#productDetails_techSpec_section_1",
+                        "#productDetails_detailBullets_sections1",
+                        "#detailBulletsWrapper_feature_div",
+                        "#productDetails_db_sections",
+                        "#prodDetails",
+                    ):
+                        detail_el = page.locator(detail_sel).first
+                        if await detail_el.count():
+                            detail_text = await detail_el.inner_text()
+                            if detail_text:
+                                # Dimensions
+                                dim_match = re.search(
+                                    r"(?:Product|Package|Item)\s*Dimensions?\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*([\d.]+\s*x\s*[\d.]+\s*x\s*[\d.]+\s*(?:inches|cm|in|Centimetres|centimeters)?)",
+                                    detail_text,
+                                    re.IGNORECASE,
+                                )
+                                if dim_match and not dimensions:
+                                    dimensions = dim_match.group(1).strip()
+
+                                # Weight
+                                weight_match = re.search(
+                                    r"(?:Item|Product)\s*Weight\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*([\d.]+\s*(?:pounds|ounces|lbs|oz|kg|g|Kilograms|Grams|kilograms|grams))",
+                                    detail_text,
+                                    re.IGNORECASE,
+                                )
+                                if weight_match and not weight:
+                                    weight = weight_match.group(1).strip()
+
+                                # Date First Available — multiple formats
+                                for date_re in (
+                                    r"Date\s+First\s+Available\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*(\d{1,2}\s+\w+\s+\d{4})",
+                                    r"Date\s+First\s+Available\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*(\w+\s+\d{1,2},?\s+\d{4})",
+                                ):
+                                    date_match = re.search(date_re, detail_text, re.IGNORECASE)
+                                    if date_match and not date_first_available:
+                                        date_first_available = date_match.group(1).strip()
+                                        break
+                except Exception:
+                    pass
+
+                # ── Star Distribution Histogram ──
+                star_distribution: dict | None = None
+                try:
+                    histogram_el = page.locator("#histogramTable")
+                    if await histogram_el.count():
+                        star_links = histogram_el.locator("a")
+                        link_count = await star_links.count()
+                        if link_count >= 5:
+                            star_distribution = {}
+                            for i in range(link_count):
+                                link_text = (await star_links.nth(i).inner_text()).strip()
+                                # Parse "5 star\n84%" or "5 star 84%"
+                                star_match = re.search(r"(\d)\s*star\D*?(\d+)\s*%", link_text, re.IGNORECASE)
+                                if star_match:
+                                    star_num = int(star_match.group(1))
+                                    pct = int(star_match.group(2))
+                                    star_distribution[f"{star_num}_star"] = pct
+                            # Fill any missing stars with 0
+                            for s in range(1, 6):
+                                star_distribution.setdefault(f"{s}_star", 0)
+                except Exception:
+                    pass
+
+                # ── Variation Count ──
+                variation_count: int | None = None
+                try:
+                    # Check for variation widget
+                    variation_el = page.locator("#twister_feature_div li, #variation_style_name li, #variation_color_name li, #variation_size_name li")
+                    vc = await variation_el.count()
+                    if vc > 0:
+                        variation_count = vc
+                    else:
+                        # Check inline dropdown options
+                        dropdown = page.locator("#twister_feature_div select option")
+                        dc = await dropdown.count()
+                        if dc > 1:  # First option is "Select"
+                            variation_count = dc - 1
+                except Exception:
+                    pass
+
+                # ── Category Breadcrumb Path ──
+                category_path: str | None = None
+                try:
+                    breadcrumb_el = page.locator(
+                        "#wayfinding-breadcrumbs_feature_div a, "
+                        "#wayfinding-breadcrumbs_container a, "
+                        ".a-breadcrumb a"
+                    )
+                    bc = await breadcrumb_el.count()
+                    if bc > 0:
+                        parts = []
+                        for i in range(min(bc, 8)):
+                            part_text = (await breadcrumb_el.nth(i).inner_text()).strip()
+                            if part_text and part_text not in ("", "‹", "›"):
+                                parts.append(part_text)
+                        if parts:
+                            category_path = " > ".join(parts)
+                except Exception:
+                    pass
+
+                # ── Number of Sellers / Offer Count ──
+                seller_count: int | None = None
+                try:
+                    offer_el = page.locator("#olp-upd-new a, #aod-offer-count, #olp_feature_div a, #usedAndNew a")
+                    if await offer_el.count():
+                        offer_text = await offer_el.first.inner_text()
+                        # Parse "New (5) from $X.XX" or "(5) New" or "5 offers"
+                        offer_match = re.search(r"(\d+)", offer_text)
+                        if offer_match:
+                            seller_count = int(offer_match.group(1))
+                except Exception:
+                    pass
+
+                # ── Frequently Bought Together ──
+                fbt_asins: list[str] = []
+                try:
+                    fbt_el = page.locator('#sims-fbt .a-link-normal[href*="/dp/"], #sims-fbt a[href*="/gp/product/"]')
+                    fbt_count = await fbt_el.count()
+                    seen = set()
+                    for i in range(min(fbt_count, 6)):
+                        href = await fbt_el.nth(i).get_attribute("href")
+                        if href:
+                            asin_match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", href)
+                            if asin_match and asin_match.group(1) != asin:
+                                fbt_asin = asin_match.group(1)
+                                if fbt_asin not in seen:
+                                    seen.add(fbt_asin)
+                                    fbt_asins.append(fbt_asin)
+                except Exception:
+                    pass
+
+                # ── Q&A Count ──
+                qa_count: int | None = None
+                try:
+                    qa_el = page.locator('#askATFLink span.a-size-base, a[href*="ask/questions/asin"] span')
+                    if await qa_el.count():
+                        qa_text = await qa_el.first.inner_text()
+                        qa_count = self._safe_int(qa_text)
+                except Exception:
+                    pass
+
+                # ── Deal Badge ──
+                deal_badge: str | None = None
+                try:
+                    for deal_sel, deal_type in (
+                        ("#dealBadge_feature_div", None),
+                        ("span.dealBadge", None),
+                        ("#dealprice_feature_div", "Deal"),
+                    ):
+                        deal_el = page.locator(deal_sel).first
+                        if await deal_el.count():
+                            deal_text = (await deal_el.inner_text()).strip()
+                            if "lightning" in deal_text.lower():
+                                deal_badge = "Lightning Deal"
+                            elif "deal of the day" in deal_text.lower():
+                                deal_badge = "Deal of the Day"
+                            elif deal_text:
+                                deal_badge = deal_type or deal_text[:50]
+                            break
+                except Exception:
+                    pass
+
+                # ── Amazon's Choice Keyword ──
+                amazons_choice_keyword: str | None = None
+                try:
+                    # Try direct keyword link
+                    ac_el = page.locator('#acBadge_feature_div .ac-keyword-link, span.ac-keyword-link')
+                    if await ac_el.count():
+                        amazons_choice_keyword = (await ac_el.first.inner_text()).strip().strip('"')
+                    else:
+                        # Try parsing from AC badge text or popover
+                        ac_badge = page.locator('#acBadge_feature_div')
+                        if await ac_badge.count():
+                            ac_text = (await ac_badge.inner_text()).strip()
+                            kw_match = re.search(r'for\s+"?([^"]+)"?', ac_text, re.IGNORECASE)
+                            if kw_match:
+                                amazons_choice_keyword = kw_match.group(1).strip()
+                            elif not ac_text:
+                                # Badge exists but no text — mark as present
+                                amazons_choice_keyword = "(badge present)"
+                except Exception:
+                    pass
+
+                # ── Review Attribute Tags (feature sentiment) ──
+                review_attributes: list[dict] | None = None
+                try:
+                    attr_els = page.locator('#cr-dp-summarization-attributes div[data-hook="cr-summarization-attribute"]')
+                    attr_count = await attr_els.count()
+                    if attr_count > 0:
+                        review_attributes = []
+                        for i in range(min(attr_count, 10)):
+                            attr_div = attr_els.nth(i)
+                            name_el = attr_div.locator("span.a-text-bold, span.cr-lighthouse-term").first
+                            pct_el = attr_div.locator("span.a-size-base:not(.a-text-bold), span.cr-lighthouse-term-text").first
+                            if await name_el.count() and await pct_el.count():
+                                attr_name = (await name_el.inner_text()).strip()
+                                attr_pct = (await pct_el.inner_text()).strip()
+                                sentiment = "positive"
+                                pct_num = self._safe_int(attr_pct.replace("%", ""))
+                                if pct_num and pct_num < 60:
+                                    sentiment = "mixed"
+                                if pct_num and pct_num < 40:
+                                    sentiment = "negative"
+                                review_attributes.append({
+                                    "attribute": attr_name,
+                                    "percentage": attr_pct,
+                                    "sentiment": sentiment,
+                                })
+                except Exception:
+                    pass
+
+                # ── Comparison Table ASINs ──
+                comparison_asins: list[str] = []
+                try:
+                    comp_links = page.locator('#HLCXComparisonTable a[href*="/dp/"], .comparison-table a[href*="/dp/"]')
+                    comp_count = await comp_links.count()
+                    seen_comp = set()
+                    for i in range(min(comp_count, 6)):
+                        href = await comp_links.nth(i).get_attribute("href")
+                        if href:
+                            comp_match = re.search(r"/dp/([A-Z0-9]{10})", href)
+                            if comp_match and comp_match.group(1) != asin:
+                                comp_asin = comp_match.group(1)
+                                if comp_asin not in seen_comp:
+                                    seen_comp.add(comp_asin)
+                                    comparison_asins.append(comp_asin)
+                except Exception:
+                    pass
+
+                # ── Stock level / availability ──
+                stock_level: int | None = None
+                stock_text: str | None = None
+                is_in_stock: bool = True
+                try:
+                    avail_el = page.locator("#availability").first
+                    if await avail_el.count():
+                        avail_text = (await avail_el.inner_text()).strip()
+                        stock_text = avail_text
+                        # "Only X left in stock"
+                        stock_match = re.search(r"Only\s+(\d+)\s+left", avail_text, re.IGNORECASE)
+                        if stock_match:
+                            stock_level = int(stock_match.group(1))
+                        # "Currently unavailable"
+                        if "currently unavailable" in avail_text.lower():
+                            is_in_stock = False
+                            stock_level = 0
+                        elif "out of stock" in avail_text.lower():
+                            is_in_stock = False
+                            stock_level = 0
+                except Exception:
+                    pass
+
                 # ── Extract top reviews from the product page ──
                 page_reviews: list[dict] = []
                 try:
@@ -663,6 +938,24 @@ class ScraperService:
                     "coupon": coupon,
                     "subscribe_save": subscribe_save,
                     "is_fba": None,  # Will be enriched from search or SP-API
+                    "stock_level": stock_level,
+                    "stock_text": stock_text,
+                    "is_in_stock": is_in_stock,
+                    # ── New enriched fields ──
+                    "list_price": list_price,
+                    "dimensions": dimensions,
+                    "weight": weight,
+                    "date_first_available": date_first_available,
+                    "star_distribution": star_distribution,
+                    "variation_count": variation_count,
+                    "category_path": category_path,
+                    "seller_count": seller_count,
+                    "fbt_asins": fbt_asins,
+                    "qa_count": qa_count,
+                    "deal_badge": deal_badge,
+                    "amazons_choice_keyword": amazons_choice_keyword,
+                    "review_attributes": review_attributes,
+                    "comparison_asins": comparison_asins,
                     "last_scraped_at": datetime.utcnow().isoformat(),
                     "page_reviews": page_reviews,
                 }
@@ -933,3 +1226,198 @@ class ScraperService:
         raise ScrapingError(
             f"Failed to scrape reviews for ASIN '{asin}' after {_MAX_RETRIES} attempts: {last_error}"
         )
+
+    # ------------------------------------------------------------------
+    # 5. Stock level scraper (lightweight)
+    # ------------------------------------------------------------------
+
+    async def scrape_stock_level(self, asin: str) -> dict:
+        """Scrape only the availability/stock level for an ASIN.
+
+        Much lighter than a full product page scrape — only extracts the
+        #availability element to get stock status.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            browser: Browser | None = None
+            pw = None
+            try:
+                pw = await async_playwright().start()
+                browser = await self._launch_browser(pw)
+                page = await self._new_page(browser)
+
+                url = f"https://www.{self._marketplace.domain}/dp/{asin}"
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                await self._random_delay(1.0, 2.0)
+
+                stock_level: int | None = None
+                stock_text: str | None = None
+                is_in_stock: bool = True
+
+                avail_el = page.locator("#availability").first
+                if await avail_el.count():
+                    avail_text = (await avail_el.inner_text()).strip()
+                    stock_text = avail_text
+                    stock_match = re.search(r"Only\s+(\d+)\s+left", avail_text, re.IGNORECASE)
+                    if stock_match:
+                        stock_level = int(stock_match.group(1))
+                    if "currently unavailable" in avail_text.lower():
+                        is_in_stock = False
+                        stock_level = 0
+                    elif "out of stock" in avail_text.lower():
+                        is_in_stock = False
+                        stock_level = 0
+
+                return {
+                    "asin": asin,
+                    "stock_level": stock_level,
+                    "stock_text": stock_text,
+                    "is_in_stock": is_in_stock,
+                }
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Stock scrape attempt %d/%d failed for %s: %s", attempt, _MAX_RETRIES, asin, exc)
+                if attempt < _MAX_RETRIES:
+                    await self._random_delay(1.0, 2.0)
+            finally:
+                if browser:
+                    await browser.close()
+                if pw:
+                    try:
+                        await pw.stop()
+                    except Exception:
+                        pass
+
+        raise ScrapingError(f"Failed to scrape stock for ASIN '{asin}' after {_MAX_RETRIES} attempts: {last_error}")
+
+    # ------------------------------------------------------------------
+    # 6. Amazon Autocomplete API (no Playwright needed)
+    # ------------------------------------------------------------------
+
+    async def fetch_autocomplete(self, prefix: str) -> list[str]:
+        """Fetch autocomplete suggestions from Amazon's suggestion API.
+
+        Uses httpx directly — this is a lightweight JSON endpoint with
+        minimal bot detection.
+        """
+        import httpx
+
+        domain = self._marketplace.domain
+        marketplace_id = self._marketplace.marketplace_id
+
+        url = (
+            f"https://completion.{domain}/api/2017/suggestions"
+            f"?mid={marketplace_id}&alias=aps&prefix={quote_plus(prefix)}"
+        )
+
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": self._get_random_user_agent()},
+                timeout=10.0,
+                verify=False,
+            ) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                suggestions = data.get("suggestions", [])
+                return [s.get("value", "") for s in suggestions if s.get("value")]
+        except Exception as e:
+            logger.warning("Autocomplete fetch failed for '%s': %s", prefix, e)
+            return []
+
+    # ------------------------------------------------------------------
+    # 7. SERP metadata scraper (result count + sponsored count)
+    # ------------------------------------------------------------------
+
+    async def scrape_serp_metadata(self, keyword: str) -> dict:
+        """Scrape page 1 of Amazon search results to extract metadata only.
+
+        Returns total_result_count, sponsored_count, and brand_count
+        without parsing individual product cards.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            browser: Browser | None = None
+            pw = None
+            try:
+                pw = await async_playwright().start()
+                browser = await self._launch_browser(pw)
+                page = await self._new_page(browser)
+
+                url = f"https://www.{self._marketplace.domain}/s?k={quote_plus(keyword)}"
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                await self._random_delay(1.5, 3.0)
+
+                # Total result count from header text
+                total_result_count: int = 0
+                try:
+                    result_header = await self._safe_text(
+                        page,
+                        'span[data-component-type="s-result-info-bar"] .a-text-bold, '
+                        '.s-desktop-toolbar .a-spacing-small span, '
+                        '#search h1 .a-color-state'
+                    )
+                    if result_header:
+                        # Parse "1-48 of over 2,000 results" or "1-48 of 347 results"
+                        count_match = re.search(r"of\s+(?:over\s+)?([\d,]+)", result_header)
+                        if count_match:
+                            total_result_count = int(count_match.group(1).replace(",", ""))
+                except Exception:
+                    pass
+
+                # Count sponsored results
+                sponsored_count: int = 0
+                try:
+                    sponsored_els = page.locator(
+                        'div[data-component-type="sp-sponsored-result"], '
+                        'div.AdHolder, '
+                        'span.a-color-secondary:has-text("Sponsored")'
+                    )
+                    sponsored_count = await sponsored_els.count()
+                except Exception:
+                    pass
+
+                # Count unique brands visible
+                brand_count: int = 0
+                try:
+                    brand_els = page.locator(
+                        'div.s-result-item span.a-size-base-plus.a-color-base, '
+                        'div.s-result-item .a-row .a-size-base'
+                    )
+                    bc = await brand_els.count()
+                    brands_seen = set()
+                    for i in range(min(bc, 48)):
+                        try:
+                            bt = (await brand_els.nth(i).inner_text()).strip().lower()
+                            if bt:
+                                brands_seen.add(bt)
+                        except Exception:
+                            continue
+                    brand_count = len(brands_seen)
+                except Exception:
+                    pass
+
+                return {
+                    "keyword": keyword,
+                    "total_result_count": total_result_count,
+                    "sponsored_count": sponsored_count,
+                    "brand_count": brand_count,
+                }
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning("SERP metadata attempt %d/%d failed for '%s': %s", attempt, _MAX_RETRIES, keyword, exc)
+                if attempt < _MAX_RETRIES:
+                    await self._random_delay(1.0, 2.0)
+            finally:
+                if browser:
+                    await browser.close()
+                if pw:
+                    try:
+                        await pw.stop()
+                    except Exception:
+                        pass
+
+        logger.warning("SERP metadata failed for '%s' after all retries: %s", keyword, last_error)
+        return {"keyword": keyword, "total_result_count": 0, "sponsored_count": 0, "brand_count": 0}

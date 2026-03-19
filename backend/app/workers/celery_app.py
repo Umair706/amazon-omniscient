@@ -33,6 +33,7 @@ celery_app.conf.update(
         "app.workers.tasks.track_bsr_prices": {"queue": "tracking"},
         "app.workers.tasks.scrape_reviews": {"queue": "scraping"},
         "app.workers.tasks.refresh_competitor_data": {"queue": "analysis"},
+        "app.workers.tasks.compute_velocity_snapshots": {"queue": "analysis"},
     },
     # Default queue for unrouted tasks
     task_default_queue="default",
@@ -52,6 +53,11 @@ celery_app.conf.update(
             "task": "app.workers.tasks.cleanup_old_data",
             "schedule": crontab(minute=0, hour=3, day_of_week=0),  # Sunday 3 AM
             "options": {"queue": "default"},
+        },
+        "compute-velocity-daily": {
+            "task": "app.workers.tasks.compute_velocity_snapshots",
+            "schedule": crontab(minute=30, hour=1),  # 1:30 AM UTC daily
+            "options": {"queue": "analysis"},
         },
     },
 )

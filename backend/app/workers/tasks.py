@@ -303,7 +303,13 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                     if detail.get("brand"):
                         p["brand"] = detail["brand"]
                     for key in ("bullet_count", "image_count", "has_video",
-                                "has_a_plus", "has_brand_story", "seller_id"):
+                                "has_a_plus", "has_brand_story", "seller_id",
+                                "dimensions", "weight", "date_first_available",
+                                "star_distribution", "variation_count",
+                                "category_path", "list_price", "seller_count",
+                                "fbt_asins", "qa_count", "deal_badge",
+                                "amazons_choice_keyword", "review_attributes",
+                                "comparison_asins"):
                         if detail.get(key) is not None:
                             p[key] = detail[key]
 
@@ -327,6 +333,25 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                     d["bsr"] = search["bsr"]
 
             task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
+
+        # ── Step 2b: Keyword research (autocomplete + SERP) ────────
+        task.update_state(state="PROGRESS", meta={"step": "keyword_research", "progress": 31})
+        keyword_research_summary = None
+        try:
+            from app.services.keyword_research import KeywordResearchService
+            kw_scraper = ScraperService(marketplace=marketplace)
+            kw_research_svc = KeywordResearchService(db, scraper=kw_scraper, marketplace=marketplace)
+            keyword_research_summary = await kw_research_svc.research_keywords(
+                niche_id=niche_id,
+                seed_keyword=keyword,
+            )
+            await db.flush()
+            logger.info(
+                "Keyword research complete: %d keywords discovered",
+                keyword_research_summary.get("total_keywords_discovered", 0),
+            )
+        except Exception as e:
+            logger.warning("Keyword research failed: %s", e)
 
         # ── Step 2c: Extract reviews from product page data ─────────
         # Reviews are embedded in product detail pages (top reviews section),
@@ -576,7 +601,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         from app.services.supplier_service import SupplierService
         supplier_svc = SupplierService(marketplace=marketplace)
 
-        metrics = _build_base_metrics(competitor_landscape, detailed_products)
+        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary)
         metrics["marketplace"] = marketplace
         supplier_data = None
         try:
@@ -801,7 +826,7 @@ def track_bsr_prices(niche_id: int):
 
 
 async def _track_bsr_niche_async(niche_id: int):
-    """Scrape current BSR & price for each product in the niche."""
+    """Scrape current BSR & price for each product in the niche, plus stock for low-stock items."""
     from app.models.product import Product
     from app.services.bsr_tracker import BSRTracker
 
@@ -812,6 +837,13 @@ async def _track_bsr_niche_async(niche_id: int):
         stmt = select(Product).where(Product.niche_id == niche_id)
         result = await db.execute(stmt)
         products = result.scalars().all()
+
+        # Determine marketplace from niche
+        from app.models.niche import Niche as NicheModel
+        niche_row = (await db.execute(
+            select(NicheModel.marketplace).where(NicheModel.id == niche_id)
+        )).scalar_one_or_none()
+        niche_marketplace = niche_row or "US"
 
         for product in products:
             try:
@@ -831,6 +863,29 @@ async def _track_bsr_niche_async(niche_id: int):
                         asin=product.asin,
                         price=float(product.current_price),
                     )
+
+                # Track stock level for products that showed low stock (<20)
+                if product.last_stock_level is not None and product.last_stock_level < 20:
+                    try:
+                        from app.services.scraper_service import ScraperService
+                        from app.services.sales_velocity_service import SalesVelocityService
+
+                        scraper = ScraperService(marketplace=niche_marketplace)
+                        stock_data = await scraper.scrape_stock_level(product.asin)
+
+                        velocity_svc = SalesVelocityService(db)
+                        await velocity_svc.record_stock_snapshot(
+                            product_id=product.id,
+                            asin=product.asin,
+                            stock_level=stock_data.get("stock_level"),
+                            stock_text=stock_data.get("stock_text"),
+                            is_in_stock=stock_data.get("is_in_stock", True),
+                        )
+                        # Update product last_stock_level
+                        if stock_data.get("stock_level") is not None:
+                            product.last_stock_level = stock_data["stock_level"]
+                    except Exception as stock_err:
+                        logger.debug("Stock tracking failed for %s: %s", product.asin, stock_err)
             except Exception as e:
                 logger.warning("Failed to track product %s: %s", product.asin, e)
 
@@ -1002,6 +1057,79 @@ async def _cleanup_async():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 6. Daily Sales Velocity Computation
+# ═══════════════════════════════════════════════════════════════════════════
+@celery_app.task(name="app.workers.tasks.compute_velocity_snapshots")
+def compute_velocity_snapshots():
+    """Compute daily velocity snapshots for all tracked products (daily beat task)."""
+    logger.info("Starting daily velocity computation")
+    _run_async(_compute_velocity_all_async())
+
+
+async def _compute_velocity_all_async():
+    """Compute velocity snapshots for all products in completed niches."""
+    from app.models.niche import Niche
+    from app.models.product import Product
+    from app.services.sales_velocity_service import SalesVelocityService
+
+    session_factory = _get_session_factory()
+    async with session_factory() as db:
+        # Get all completed niches
+        stmt = select(Niche.id, Niche.primary_keyword, Niche.marketplace).where(
+            Niche.status == "completed"
+        )
+        niches = (await db.execute(stmt)).all()
+
+        total_computed = 0
+        for niche_id, keyword, marketplace in niches:
+            product_stmt = select(Product).where(Product.niche_id == niche_id)
+            products = (await db.execute(product_stmt)).scalars().all()
+
+            velocity_svc = SalesVelocityService(db)
+            for product in products:
+                try:
+                    velocity_data = await velocity_svc.compute_daily_velocity(
+                        product_id=product.id,
+                        category=keyword,
+                        marketplace=marketplace or "US",
+                    )
+
+                    if velocity_data.get("estimated_daily_sales") is not None:
+                        await velocity_svc.save_velocity_snapshot(
+                            product_id=product.id,
+                            asin=product.asin,
+                            velocity_data=velocity_data,
+                        )
+
+                        # Update product with latest estimate
+                        product.estimated_daily_sales = round(velocity_data["estimated_daily_sales"])
+
+                        # Determine trend from recent snapshots
+                        timeseries = await velocity_svc.get_velocity_timeseries(product.id, days=7)
+                        if len(timeseries) >= 3:
+                            recent = [t["estimated_daily_sales"] for t in timeseries[-3:] if t["estimated_daily_sales"]]
+                            earlier = [t["estimated_daily_sales"] for t in timeseries[:3] if t["estimated_daily_sales"]]
+                            if recent and earlier:
+                                avg_recent = sum(recent) / len(recent)
+                                avg_earlier = sum(earlier) / len(earlier)
+                                if avg_earlier > 0:
+                                    change = (avg_recent - avg_earlier) / avg_earlier
+                                    if change > 0.1:
+                                        product.sales_velocity_trend = "increasing"
+                                    elif change < -0.1:
+                                        product.sales_velocity_trend = "decreasing"
+                                    else:
+                                        product.sales_velocity_trend = "stable"
+
+                        total_computed += 1
+                except Exception as e:
+                    logger.debug("Velocity computation failed for product %d: %s", product.id, e)
+
+        await db.commit()
+        logger.info("Velocity computation complete: %d snapshots created", total_computed)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Helper functions for the analysis pipeline
 # ═══════════════════════════════════════════════════════════════════════════
 async def _update_niche_status(niche_id: int, status: str, error: str | None = None):
@@ -1058,6 +1186,16 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
                 existing.review_count = p["review_count"]
             if p.get("image_url"):
                 existing.image_url = p["image_url"]
+            if p.get("position") is not None:
+                existing.search_position = p["position"]
+            if p.get("is_sponsored") is not None:
+                existing.is_sponsored = p["is_sponsored"]
+            if p.get("is_amazon_choice") is not None:
+                existing.is_amazon_choice = p["is_amazon_choice"]
+            if p.get("is_best_seller") is not None:
+                existing.is_best_seller = p["is_best_seller"]
+            if p.get("is_fba") is not None:
+                existing.is_fba = p["is_fba"]
             product_ids.append(existing.id)
         else:
             product = Product(
@@ -1069,6 +1207,11 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
                 rating=p.get("rating"),
                 review_count=p.get("review_count", 0),
                 image_url=p.get("image_url"),
+                search_position=p.get("position"),
+                is_sponsored=p.get("is_sponsored"),
+                is_amazon_choice=p.get("is_amazon_choice"),
+                is_best_seller=p.get("is_best_seller"),
+                is_fba=p.get("is_fba"),
             )
             db.add(product)
             await db.flush()
@@ -1133,6 +1276,58 @@ async def _scrape_product_details(
                             existing.last_scraped_at = dt.fromisoformat(detail["last_scraped_at"])
                         except (ValueError, TypeError):
                             pass
+                    # Save stock level
+                    if detail.get("stock_level") is not None:
+                        existing.last_stock_level = detail["stock_level"]
+
+                    # ── Save enriched product fields ──
+                    if detail.get("list_price") is not None:
+                        existing.list_price = detail["list_price"]
+                    if detail.get("date_first_available"):
+                        try:
+                            from dateutil.parser import parse as dateparse
+                            existing.date_first_available = dateparse(detail["date_first_available"]).date()
+                        except Exception:
+                            pass
+                    if detail.get("star_distribution"):
+                        existing.star_distribution = detail["star_distribution"]
+                    if detail.get("variation_count") is not None:
+                        existing.variation_count = detail["variation_count"]
+                    if detail.get("category_path"):
+                        existing.category_path = detail["category_path"]
+                    if detail.get("seller_count") is not None:
+                        existing.seller_count = detail["seller_count"]
+                    if detail.get("fbt_asins"):
+                        existing.fbt_asins = detail["fbt_asins"]
+                    if detail.get("qa_count") is not None:
+                        existing.qa_count = detail["qa_count"]
+                    if detail.get("deal_badge"):
+                        existing.deal_badge = detail["deal_badge"]
+                    if detail.get("amazons_choice_keyword"):
+                        existing.amazons_choice_keyword = detail["amazons_choice_keyword"]
+                    if detail.get("review_attributes"):
+                        existing.review_attributes = detail["review_attributes"]
+                    if detail.get("comparison_asins"):
+                        existing.comparison_asins = detail["comparison_asins"]
+                    if detail.get("weight"):
+                        existing.weight = detail["weight"]
+                    if detail.get("dimensions"):
+                        existing.product_dimensions = detail["dimensions"]
+                    # Record stock snapshot to history
+                    if detail.get("is_in_stock") is not None:
+                        try:
+                            from app.models.stock_history import StockHistory
+                            stock_entry = StockHistory(
+                                time=datetime.now(timezone.utc),
+                                product_id=existing.id,
+                                asin=asin,
+                                stock_level=detail.get("stock_level"),
+                                stock_text=detail.get("stock_text"),
+                                is_in_stock=detail.get("is_in_stock", True),
+                            )
+                            db.add(stock_entry)
+                        except Exception as stock_err:
+                            logger.debug("Stock history save failed for %s: %s", asin, stock_err)
         except Exception as e:
             logger.warning("Failed to scrape details for %s: %s", asin, e)
 
@@ -1398,7 +1593,7 @@ async def _save_suppliers(
     return supplier_ids
 
 
-def _build_base_metrics(competitor_landscape: dict | None, detailed_products: list[dict]) -> dict:
+def _build_base_metrics(competitor_landscape: dict | None, detailed_products: list[dict], keyword_research_summary: dict | None = None) -> dict:
     """Build base metrics dict from competitor data and scraped products."""
     metrics = {
         "avg_price": 0,
@@ -1417,6 +1612,24 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
         "avg_cpc": 1.5,
         "fba_fees": 5.0,
     }
+
+    # Use real keyword research data if available
+    if keyword_research_summary:
+        top_kws = keyword_research_summary.get("top_keywords", [])
+        if top_kws:
+            metrics["search_volume"] = top_kws[0].get("search_volume", 0)
+        else:
+            metrics["search_volume"] = keyword_research_summary.get("avg_search_volume", 0)
+        metrics["relevant_keyword_count"] = keyword_research_summary.get("total_keywords_discovered", 0)
+
+        # Estimate avg_cpc from volume tier distribution
+        tier_dist = keyword_research_summary.get("volume_tier_distribution", {})
+        if tier_dist.get("very_high", 0) > 0 or tier_dist.get("high", 0) > 0:
+            metrics["avg_cpc"] = 2.00
+        elif tier_dist.get("medium", 0) > 0:
+            metrics["avg_cpc"] = 1.40
+        else:
+            metrics["avg_cpc"] = 0.90
 
     if competitor_landscape:
         price_stats = competitor_landscape.get("price_stats", {})
@@ -1517,7 +1730,9 @@ def _enrich_metrics(
     metrics.setdefault("best_supplier_score", 70)
     metrics.setdefault("min_moq", 500)
     metrics.setdefault("break_even_week_base", 16)
-    metrics.setdefault("search_volume", 3000)
+    # Only fall back to 3000 if keyword research didn't populate search_volume
+    if not metrics.get("search_volume"):
+        metrics.setdefault("search_volume", 3000)
     metrics.setdefault("monthly_revenue_per_seller", 5000)
 
 

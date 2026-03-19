@@ -1,10 +1,11 @@
 """Product model — an individual Amazon ASIN."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, TIMESTAMPTZ
@@ -67,6 +68,29 @@ class Product(TimestampMixin, Base):
     product_dimensions: Mapped[str | None] = mapped_column(String(100))
 
     last_scraped_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
+
+    # Sales velocity
+    estimated_daily_sales: Mapped[int | None] = mapped_column(Integer)
+    sales_velocity_trend: Mapped[str | None] = mapped_column(String(20))
+    last_stock_level: Mapped[int | None] = mapped_column(Integer)
+
+    # Search position (organic rank in SERP)
+    search_position: Mapped[int | None] = mapped_column(Integer)
+
+    # Enriched product data
+    list_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    date_first_available: Mapped[date | None] = mapped_column(Date)
+    star_distribution: Mapped[dict | None] = mapped_column(JSONB)
+    variation_count: Mapped[int | None] = mapped_column(Integer)
+    category_path: Mapped[str | None] = mapped_column(Text)
+    seller_count: Mapped[int | None] = mapped_column(Integer)
+    fbt_asins: Mapped[list | None] = mapped_column(JSONB)
+    qa_count: Mapped[int | None] = mapped_column(Integer)
+    deal_badge: Mapped[str | None] = mapped_column(String(100))
+    amazons_choice_keyword: Mapped[str | None] = mapped_column(String(255))
+    review_attributes: Mapped[list | None] = mapped_column(JSONB)
+    comparison_asins: Mapped[list | None] = mapped_column(JSONB)
+    weight: Mapped[str | None] = mapped_column(String(100))
 
     # ----- Relationships -----
     niche: Mapped["Niche | None"] = relationship(back_populates="products")

@@ -22,7 +22,18 @@ class KeywordResponse(BaseModel):
     organic_result_count: int | None = None
     sponsored_result_count: int | None = None
     relevance_score: Decimal | None = None
+    source: str | None = None
+    autocomplete_depth: int | None = None
     last_updated_at: datetime | None = None
+
+
+class KeywordResearchSummary(BaseModel):
+    """Summary of a keyword research run."""
+
+    total_keywords_discovered: int
+    top_keywords: list[dict]
+    avg_search_volume: int
+    volume_tier_distribution: dict[str, int]
 
 
 class PPCKeywordResponse(BaseModel):

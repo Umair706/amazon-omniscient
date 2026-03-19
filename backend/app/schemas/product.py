@@ -1,6 +1,6 @@
 """Pydantic schemas for the Product model."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -70,6 +70,29 @@ class ProductResponse(BaseModel):
     product_dimensions: str | None = None
 
     last_scraped_at: datetime | None = None
+
+    # Sales velocity
+    estimated_daily_sales: int | None = None
+    sales_velocity_trend: str | None = None
+    last_stock_level: int | None = None
+
+    # Search position
+    search_position: int | None = None
+
+    # Enriched product data
+    list_price: Decimal | None = None
+    date_first_available: date | None = None
+    star_distribution: dict | None = None
+    variation_count: int | None = None
+    category_path: str | None = None
+    seller_count: int | None = None
+    fbt_asins: list[str] | None = None
+    qa_count: int | None = None
+    deal_badge: str | None = None
+    amazons_choice_keyword: str | None = None
+    review_attributes: list[dict] | None = None
+    comparison_asins: list[str] | None = None
+    weight: str | None = None
 
     # Timestamps
     created_at: datetime

@@ -14,6 +14,8 @@ from .price_history import PriceHistory
 from .product import Product
 from .recommendation import Recommendation
 from .review import Review, ReviewPainPoint
+from .sales_velocity import SalesVelocitySnapshot
+from .stock_history import StockHistory
 from .supplier import LandedCostCalculation, ProductSupplierMatch, Supplier
 from .user_settings import UserSettings
 
@@ -33,6 +35,8 @@ __all__ = [
     "Recommendation",
     "Review",
     "ReviewPainPoint",
+    "SalesVelocitySnapshot",
+    "StockHistory",
     "Supplier",
     "UserSettings",
 ]

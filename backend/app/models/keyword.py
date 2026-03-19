@@ -35,6 +35,8 @@ class NicheKeyword(Base):
     organic_result_count: Mapped[int | None] = mapped_column(Integer)
     sponsored_result_count: Mapped[int | None] = mapped_column(Integer)
     relevance_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    source: Mapped[str | None] = mapped_column(String(50))
+    autocomplete_depth: Mapped[int | None] = mapped_column(Integer)
     last_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 
     # ----- Relationships -----

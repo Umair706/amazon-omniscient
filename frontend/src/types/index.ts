@@ -108,6 +108,28 @@ export interface ProductDetail extends ProductSummary {
   product_weight_lbs: string | null;
   product_dimensions: string | null;
 
+  // Search position
+  search_position: number | null;
+
+  // Enriched product data
+  list_price: string | null;
+  date_first_available: string | null;
+  star_distribution: Record<string, number> | null;
+  variation_count: number | null;
+  category_path: string | null;
+  seller_count: number | null;
+  fbt_asins: string[] | null;
+  qa_count: number | null;
+  deal_badge: string | null;
+  amazons_choice_keyword: string | null;
+  review_attributes: Array<{
+    attribute: string;
+    percentage: string;
+    sentiment: string;
+  }> | null;
+  comparison_asins: string[] | null;
+  weight: string | null;
+
   last_scraped_at: string | null;
   created_at: string;
   updated_at: string | null;
@@ -263,6 +285,25 @@ export interface JobStatus {
   error: string | null;
   created_at: string;
   updated_at: string | null;
+}
+
+// ── Keyword ─────────────────────────────────────────────────────────
+
+export interface KeywordEntry {
+  id: number;
+  niche_id: number;
+  keyword: string;
+  search_volume: number | null;
+  search_volume_trend: string | null;
+  avg_cpc: string | null;
+  cpc_trend: string | null;
+  competition_level: string | null;
+  organic_result_count: number | null;
+  sponsored_result_count: number | null;
+  relevance_score: string | null;
+  source: string | null;
+  autocomplete_depth: number | null;
+  last_updated_at: string | null;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────

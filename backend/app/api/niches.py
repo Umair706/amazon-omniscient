@@ -19,7 +19,7 @@ from app.models.review import ReviewPainPoint
 from app.models.supplier import Supplier
 from app.schemas.competitor import CompetitorListResponse, CompetitorResponse
 from app.schemas.financial import FinancialProjectionResponse, ProjectionListResponse
-from app.schemas.keyword import KeywordResponse
+from app.schemas.keyword import KeywordResearchSummary, KeywordResponse
 from app.schemas.niche import NicheCreate, NicheListResponse, NicheResponse, NicheSummary
 from app.schemas.product import ProductListResponse, ProductResponse
 from app.schemas.review import ReviewPainPointResponse
@@ -379,3 +379,60 @@ async def list_niche_suppliers(
         items=[SupplierResponse.model_validate(s) for s in suppliers],
         total=total,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /niches/{niche_id}/keywords/research — Trigger keyword research
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{niche_id}/keywords/research", response_model=KeywordResearchSummary)
+async def trigger_keyword_research(
+    niche_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> KeywordResearchSummary:
+    """Trigger keyword research for a niche using autocomplete + SERP analysis."""
+    result = await db.execute(select(Niche).where(Niche.id == niche_id))
+    niche = result.scalar_one_or_none()
+    if niche is None:
+        raise HTTPException(status_code=404, detail=f"Niche {niche_id} not found")
+
+    from app.services.keyword_research import KeywordResearchService
+
+    marketplace = niche.marketplace or "US"
+    research_svc = KeywordResearchService(db, marketplace=marketplace)
+    summary = await research_svc.research_keywords(
+        niche_id=niche_id,
+        seed_keyword=niche.primary_keyword,
+    )
+    await db.commit()
+    return KeywordResearchSummary(**summary)
+
+
+# ---------------------------------------------------------------------------
+# GET /niches/{niche_id}/velocity — Niche-level sales velocity
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{niche_id}/velocity")
+async def get_niche_velocity(
+    niche_id: int,
+    days: int = Query(7, ge=1, le=90, description="Days to aggregate over"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return niche-level aggregated sales velocity data."""
+    niche_result = await db.execute(select(Niche).where(Niche.id == niche_id))
+    niche = niche_result.scalar_one_or_none()
+    if niche is None:
+        raise HTTPException(status_code=404, detail=f"Niche {niche_id} not found")
+
+    from app.services.sales_velocity_service import SalesVelocityService
+
+    velocity_svc = SalesVelocityService(db)
+    category = niche.primary_keyword
+    result = await velocity_svc.compute_niche_velocity(
+        niche_id=niche_id,
+        category=category,
+        days=days,
+    )
+    return result

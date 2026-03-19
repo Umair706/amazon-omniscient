@@ -164,3 +164,41 @@ async def get_price_history(
         items=[PriceHistoryPoint.model_validate(r) for r in rows],
         total=len(rows),
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /products/{asin}/velocity — Sales velocity time-series
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{asin}/velocity")
+async def get_product_velocity(
+    asin: str,
+    days: int = Query(30, ge=1, le=365, description="Days of velocity data to return"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return sales velocity time-series and current estimates for a product."""
+    normalised_asin = asin.strip().upper()
+
+    product_result = await db.execute(
+        select(Product).where(Product.asin == normalised_asin)
+    )
+    product = product_result.scalar_one_or_none()
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Product with ASIN '{normalised_asin}' not found",
+        )
+
+    from app.services.sales_velocity_service import SalesVelocityService
+
+    velocity_svc = SalesVelocityService(db)
+    timeseries = await velocity_svc.get_velocity_timeseries(product.id, days=days)
+
+    return {
+        "asin": normalised_asin,
+        "estimated_daily_sales": product.estimated_daily_sales,
+        "sales_velocity_trend": product.sales_velocity_trend,
+        "last_stock_level": product.last_stock_level,
+        "timeseries": timeseries,
+    }
