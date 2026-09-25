@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from urllib.parse import quote_plus
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from app.core.exceptions import ScrapingError
@@ -14,6 +15,20 @@ from app.scraping.block_detection import PageVerdict
 from app.scraping.session import MAX_ROTATIONS_PER_SESSION, BrowserSession
 
 logger = logging.getLogger(__name__)
+
+
+def build_proxy_manager_from_settings() -> ProxyManager:
+    """Return the ProxyManager described by the PROXY_* settings (env vars)."""
+    from app.config import Settings
+
+    settings = Settings()
+    return ProxyManager(
+        provider=settings.PROXY_PROVIDER or "none",
+        host=settings.PROXY_HOST,
+        port=settings.PROXY_PORT,
+        username=settings.PROXY_USERNAME,
+        password=settings.PROXY_PASSWORD,
+    )
 
 # fetch_autocomplete is a plain JSON call made outside the browser, so it has no
 # browser persona to borrow a user agent from.
@@ -89,18 +104,7 @@ class ScraperService:
         marketplace: str = "US",
         session: BrowserSession | None = None,
     ):
-        if proxy_manager is None:
-            from app.config import Settings
-
-            settings = Settings()
-            proxy_manager = ProxyManager(
-                provider=settings.PROXY_PROVIDER or "none",
-                host=settings.PROXY_HOST,
-                port=settings.PROXY_PORT,
-                username=settings.PROXY_USERNAME,
-                password=settings.PROXY_PASSWORD,
-            )
-        self.proxy_manager = proxy_manager
+        self.proxy_manager = proxy_manager or build_proxy_manager_from_settings()
 
         # Load marketplace config for domain, locale, timezone
         from app.core.marketplace import get_marketplace
@@ -130,18 +134,26 @@ class ScraperService:
                 self._session = None
 
     async def _load(self, url: str, expected_selector: str) -> tuple[Page, PageVerdict]:
-        """Load url through the session, rotating proxy + persona on a captcha or 5xx.
+        """Load url through the session, rotating proxy + persona on a captcha, 5xx or navigation error.
 
         Returns (page, verdict) where verdict is "ok" or "soft_block".
         The caller must close the page.
         """
         for _ in range(MAX_ROTATIONS_PER_SESSION + 1):
-            page, verdict = await self._session.load(url, expected_selector)
+            try:
+                page, verdict = await self._session.load(url, expected_selector)
+            except PlaywrightError as exc:
+                # WHY: a timeout or proxy/tunnel failure usually means this proxy is dead.
+                # A new one may work. session.load() already closed the tab.
+                logger.warning("Navigation failed loading %s (%s: %s) — rotating", url, type(exc).__name__, exc)
+                await self._rotate_session(url)
+                continue
             if verdict not in _ROTATE_ON_VERDICTS:
                 return page, verdict
             await page.close()
             logger.warning("Blocked (%s) loading %s — rotating", verdict, url)
             await self._rotate_session(url)
+        # NOTE: defensive guard only — rotate() raises at the cap before the loop can end.
         raise ScrapingError(f"Still blocked after {MAX_ROTATIONS_PER_SESSION} rotations: {url}")
 
     async def _rotate_session(self, url: str) -> None:

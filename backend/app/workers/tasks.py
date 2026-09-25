@@ -136,11 +136,9 @@ def _build_browser_session(marketplace: str) -> "BrowserSession":
     """Return an unopened BrowserSession for this marketplace, behind the proxy configured in settings."""
     from app.core.marketplace import get_marketplace
     from app.scraping.session import BrowserSession
-    from app.services.scraper_service import ScraperService
+    from app.services.scraper_service import build_proxy_manager_from_settings
 
-    # WHY: ScraperService already knows how to build the settings-configured ProxyManager.
-    proxy_manager = ScraperService(marketplace=marketplace).proxy_manager
-    return BrowserSession(get_marketplace(marketplace), proxy_manager)
+    return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -228,7 +226,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
     # WHY: one browser session for the whole run, so every page load shares the
     # same cookies and fingerprint instead of looking like a brand-new visitor.
     async with session_factory() as db, _build_browser_session(marketplace) as browser:
-        scraper = ScraperService(marketplace=marketplace, session=browser)
+        scraper = ScraperService(proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser)
 
         # Update status to discovering
         await db.execute(
@@ -327,7 +325,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     # SERPs), so every page load shares the same cookies and fingerprint. It is
     # opened even for the sub-niche flow because keyword research still scrapes.
     async with session_factory() as db, _build_browser_session(marketplace) as browser:
-        scraper = ScraperService(marketplace=marketplace, session=browser)
+        scraper = ScraperService(proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser)
 
         # Update status to analyzing
         await db.execute(
@@ -984,7 +982,9 @@ async def _track_bsr_niche_async(niche_id: int):
         # WHY: one browser session per niche, shared by every product page load.
         async with _build_browser_session(niche_marketplace) as browser:
             context = TrackingContext(
-                scraper=ScraperService(marketplace=niche_marketplace, session=browser),
+                scraper=ScraperService(
+                    proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                ),
                 tracker=BSRTracker(db),
                 velocity_svc=SalesVelocityService(db),
             )
@@ -1046,7 +1046,9 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
 
         try:
             async with _build_browser_session(niche_marketplace) as browser:
-                scraper = ScraperService(marketplace=niche_marketplace, session=browser)
+                scraper = ScraperService(
+                    proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                )
                 reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
         except Exception as e:
             logger.warning("Review scraping failed for %s: %s", asin, e)
