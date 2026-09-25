@@ -412,6 +412,12 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         )
         if competitor_landscape:
             competitor_landscape["marketplace"] = marketplace
+            try:
+                saved_competitors = await competitor_svc.persist_landscape(niche_id, competitor_landscape)
+                await db.flush()
+                logger.info("Persisted %d competitor rows for niche %d", saved_competitors, niche_id)
+            except Exception as e:
+                logger.warning("Persisting competitors failed: %s", e)
 
         # ── Step 4: Collect reviews + sentiment/pain-point analysis ─────
         task.update_state(state="PROGRESS", meta={"step": "review_analysis", "progress": 38})

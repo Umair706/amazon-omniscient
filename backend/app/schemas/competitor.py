@@ -46,6 +46,13 @@ class CompetitorResponse(BaseModel):
     vulnerability: str | None = None
     vulnerability_type: str | None = None
 
+    # Joined from Product for the UI
+    asin: str | None = None
+    title: str | None = None
+    review_count: int | None = None
+    rating: Decimal | None = None
+    vulnerabilities: list[str] = Field(default_factory=list)
+
     last_analyzed_at: datetime | None = None
 
 

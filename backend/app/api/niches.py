@@ -240,16 +240,22 @@ async def list_niche_competitors(
     total: int = count_result.scalar_one()
 
     result = await db.execute(
-        select(Competitor)
+        select(Competitor, Product)
+        .join(Product, Competitor.product_id == Product.id)
         .where(Competitor.niche_id == niche_id)
         .order_by(Competitor.organic_rank.asc().nullslast())
     )
-    competitors = result.scalars().all()
+    items = []
+    for competitor, product in result.all():
+        item = CompetitorResponse.model_validate(competitor)
+        item.asin = product.asin
+        item.title = product.title
+        item.review_count = product.review_count
+        item.rating = product.rating
+        item.vulnerabilities = [v for v in (competitor.vulnerability_type or "").split(",") if v]
+        items.append(item)
 
-    return CompetitorListResponse(
-        items=[CompetitorResponse.model_validate(c) for c in competitors],
-        total=total,
-    )
+    return CompetitorListResponse(items=items, total=total)
 
 
 # ---------------------------------------------------------------------------
