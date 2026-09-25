@@ -16,6 +16,7 @@ class ProductSummary(BaseModel):
     niche_id: int | None = None
     title: str | None = None
     brand: str | None = None
+    image_url: str | None = None
     current_price: Decimal | None = None
     current_bsr: int | None = None
     review_count: int | None = None
@@ -34,6 +35,7 @@ class ProductResponse(BaseModel):
     niche_id: int | None = None
     title: str | None = None
     brand: str | None = None
+    image_url: str | None = None
     category_id: str | None = None
 
     # Pricing & ranking

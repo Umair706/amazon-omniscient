@@ -14,6 +14,10 @@ from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+# The niches.last_error column is TEXT but we still cap what we store —
+# scraper/LLM exceptions can carry huge stack traces that would bloat the row.
+MAX_STORED_ERROR_CHARS = 2000
+
 
 # ---------------------------------------------------------------------------
 # Async DB session helper — Celery workers run in sync context, so we need
@@ -1133,7 +1137,7 @@ async def _update_niche_status(niche_id: int, status: str, error: str | None = N
     async with session_factory() as db:
         values = {"status": status}
         if error:
-            values["hard_filter_fail_reasons"] = [error]
+            values["last_error"] = error[:MAX_STORED_ERROR_CHARS]
         await db.execute(update(Niche).where(Niche.id == niche_id).values(**values))
         await db.commit()
 

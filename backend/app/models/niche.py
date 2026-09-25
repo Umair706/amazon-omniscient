@@ -40,18 +40,23 @@ class Niche(TimestampMixin, Base):
     avg_review_count: Mapped[int | None] = mapped_column(Integer)
     avg_bsr: Mapped[int | None] = mapped_column(Integer)
 
-    # Scores
+    # Scores — names match ScoringService.WEIGHTS keys
     opportunity_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     confidence_tier: Mapped[str | None] = mapped_column(String(20))
     demand_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     competition_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    revenue_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     margin_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    ad_profitability_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    review_achievability_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    supplier_reliability_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    sales_velocity_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    marketing_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    brand_building_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    trend_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    review_feasibility_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    supplier_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    ppc_viability_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    launch_feasibility_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+
+    # Market snapshot
+    avg_rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
+    estimated_monthly_sales: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
     # Flags & filters
     is_seasonal: Mapped[bool | None] = mapped_column(Boolean, server_default="false")
