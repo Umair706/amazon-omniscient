@@ -58,6 +58,11 @@ _SITE_AMAZON = "amazon"
 # never returns this verdict itself — it raises instead — so _load assigns it before recording.
 _TIMEOUT_VERDICT = "timeout"
 
+# Set on scrape_product_page's result when it was served from the page cache. Callers
+# (the pipeline's BSR/price/stock snapshot step) read this to avoid re-stamping an
+# up-to-24h-old value with today's timestamp.
+FROM_CACHE_KEY = "from_cache"
+
 # The buy box names the merchant. Older pages say "Ships from and sold by Amazon.com.au";
 # the 2026 layout (#merchantInfoFeature_feature_div) says "Shipper / Seller  Amazon AU".
 # Listings Amazon sells itself usually carry no seller-profile link, so seller_id alone misses them.
@@ -266,6 +271,20 @@ class ScraperService:
     def _search_url(self, keyword: str) -> str:
         return f"https://www.{self._marketplace.domain}/s?k={quote_plus(keyword)}"
 
+    async def _cached(self, kind: str, key: str) -> dict | list | None:
+        """Return the cached value for (kind, key), or None on a miss or when caching is off."""
+        if self._page_cache is None:
+            return None
+        cached = await self._page_cache.get(kind, key)
+        if cached is not None:
+            logger.info("%s %s served from cache", kind, key)
+        return cached
+
+    async def _store(self, kind: str, key: str, value: dict | list) -> None:
+        """Write value to the cache for (kind, key). No-op when caching is off."""
+        if self._page_cache is not None:
+            await self._page_cache.set(kind, key, value)
+
     # ------------------------------------------------------------------
     # Helper methods
     # ------------------------------------------------------------------
@@ -373,11 +392,9 @@ class ScraperService:
         ``Product`` model columns wherever possible.
         """
         cache_key = f"{self._marketplace.code}:{keyword}:{pages}"
-        if self._page_cache is not None:
-            cached = await self._page_cache.get("serp", cache_key)
-            if cached is not None:
-                logger.info("Search results for '%s' served from cache", keyword)
-                return cached
+        cached = await self._cached("serp", cache_key)
+        if cached is not None:
+            return cached
 
         all_results: list[dict] = []
         cards_seen = 0
@@ -396,8 +413,8 @@ class ScraperService:
                 all_results.extend(page_results)
 
         logger.info("Scraped %d results for '%s'", len(all_results), keyword)
-        if self._page_cache is not None and all_results:
-            await self._page_cache.set("serp", cache_key, all_results)
+        if all_results:
+            await self._store("serp", cache_key, all_results)
         return all_results
 
     async def _extract_search_page(
@@ -569,13 +586,16 @@ class ScraperService:
     # ------------------------------------------------------------------
 
     async def scrape_product_page(self, asin: str) -> dict:
-        """Scrape an Amazon product detail page and return a dict of fields."""
+        """Scrape an Amazon product detail page and return a dict of fields.
+
+        The result carries FROM_CACHE_KEY = True when served from the cache, so a
+        caller that records BSR/price/stock history can skip a cached (stale) read.
+        """
         cache_key = f"{self._marketplace.code}:{asin}"
-        if self._page_cache is not None:
-            cached = await self._page_cache.get("product", cache_key)
-            if cached is not None:
-                logger.info("Product page for %s served from cache", asin)
-                return cached
+        cached = await self._cached("product", cache_key)
+        if cached is not None:
+            cached[FROM_CACHE_KEY] = True
+            return cached
 
         logger.info("Scraping product page %s", asin)
         async with self._ensure_session():
@@ -588,8 +608,10 @@ class ScraperService:
                 await page.close()
 
         logger.info("Scraped product page for ASIN %s", asin)
-        if self._page_cache is not None:
-            await self._page_cache.set("product", cache_key, result)
+        # WHY only "ok": a soft-blocked page's fields are mostly None (title not
+        # found), so caching it would serve that near-empty result for 24h.
+        if verdict == "ok":
+            await self._store("product", cache_key, result)
         return result
 
     async def _read_sold_by_amazon(self, page: Page) -> bool:

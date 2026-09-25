@@ -3,6 +3,7 @@
 import pytest
 from playwright.async_api import Error as PlaywrightError
 
+import app.services.scraper_service as scraper_service_module
 from app.core.exceptions import ScrapingError
 from app.core.proxy_manager import ProxyManager
 from app.scraping.session import MAX_ROTATIONS_PER_SESSION
@@ -29,6 +30,9 @@ class FakeSession:
         self.script = list(script)
         self.rotations = 0
         self.pages: list[FakePage] = []
+        # WHY: _record_load_event reads this when telemetry is on; a fixed value is
+        # enough since these tests only care what verdict gets recorded, not the label.
+        self.proxy_label = "http://fake-proxy:8080"
 
     async def load(self, url, selector):
         step = self.script.pop(0)
@@ -84,3 +88,41 @@ async def test_blocked_every_time_raises_scraping_error_naming_the_url():
     with pytest.raises(ScrapingError, match="B0TEST0001"):
         await scraper_with(session)._load(URL, SELECTOR, "product")
     assert all(page.closed for page in session.pages)
+
+
+async def test_records_one_event_per_attempt(monkeypatch):
+    """A load that rotates once (captcha, then ok) records both verdicts, in order."""
+    recorded_verdicts = []
+
+    async def fake_record_scrape_event(_session_factory, **fields):
+        recorded_verdicts.append(fields["verdict"])
+
+    monkeypatch.setattr(scraper_service_module, "record_scrape_event", fake_record_scrape_event)
+
+    session = FakeSession(["captcha", "ok"])
+    scraper = ScraperService(
+        proxy_manager=ProxyManager(provider="none"), marketplace="US", session=session,
+        event_sink=object(),  # any truthy value — the fake above ignores it
+    )
+    await scraper._load(URL, SELECTOR, "product")
+
+    assert recorded_verdicts == ["captcha", "ok"]
+
+
+async def test_navigation_error_records_timeout_verdict(monkeypatch):
+    """A PlaywrightError (proxy/tunnel failure) is recorded as verdict 'timeout', not left out."""
+    recorded_verdicts = []
+
+    async def fake_record_scrape_event(_session_factory, **fields):
+        recorded_verdicts.append(fields["verdict"])
+
+    monkeypatch.setattr(scraper_service_module, "record_scrape_event", fake_record_scrape_event)
+
+    session = FakeSession([PROXY_DOWN, "ok"])
+    scraper = ScraperService(
+        proxy_manager=ProxyManager(provider="none"), marketplace="US", session=session,
+        event_sink=object(),
+    )
+    await scraper._load(URL, SELECTOR, "product")
+
+    assert recorded_verdicts == ["timeout", "ok"]

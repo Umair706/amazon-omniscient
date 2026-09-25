@@ -254,7 +254,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
     ):
         scraper = ScraperService(
             proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
-            page_cache=page_cache, event_sink=_get_session_factory(),
+            page_cache=page_cache, event_sink=session_factory,
         )
 
         # Update status to discovering
@@ -360,7 +360,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     ):
         scraper = ScraperService(
             proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
-            page_cache=page_cache, event_sink=_get_session_factory(),
+            page_cache=page_cache, event_sink=session_factory,
         )
 
         # Update status to analyzing
@@ -991,11 +991,14 @@ async def _track_bsr_niche_async(niche_id: int):
         products = (await db.execute(stmt)).scalars().all()
 
         # WHY: one browser session per niche, shared by every product page load.
-        async with _build_browser_session(niche_marketplace) as browser, _page_cache_for_run() as page_cache:
+        async with _build_browser_session(niche_marketplace) as browser:
             context = TrackingContext(
                 scraper=ScraperService(
                     proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
-                    page_cache=page_cache, event_sink=_get_session_factory(),
+                    # WHY page_cache=None: this scraper only calls scrape_rank_snapshot(),
+                    # which never reads the cache — a fresh BSR/price/stock read is the
+                    # whole point of the tracker, so it must never see a stale page.
+                    page_cache=None, event_sink=session_factory,
                 ),
                 tracker=BSRTracker(db),
                 velocity_svc=SalesVelocityService(db),
@@ -1057,10 +1060,12 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
         from app.services.scraper_service import ScraperService
 
         try:
-            async with _build_browser_session(niche_marketplace) as browser, _page_cache_for_run() as page_cache:
+            async with _build_browser_session(niche_marketplace) as browser:
                 scraper = ScraperService(
                     proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
-                    page_cache=page_cache, event_sink=_get_session_factory(),
+                    # WHY page_cache=None: scrape_reviews() never reads the cache, so
+                    # there is nothing here for a PageCache to do.
+                    page_cache=None, event_sink=session_factory,
                 )
                 reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
         except Exception as e:
@@ -1343,6 +1348,7 @@ async def _scrape_product_details(
 ) -> list[dict]:
     """Scrape detailed product pages for enriched data and update DB rows."""
     from app.models.product import Product
+    from app.services.scraper_service import FROM_CACHE_KEY
 
     detailed = []
 
@@ -1429,31 +1435,35 @@ async def _scrape_product_details(
                     if detail.get("dimensions"):
                         existing.product_dimensions = detail["dimensions"]
 
-                    # Record an initial BSR/price snapshot at analysis time so
-                    # the history chart has a starting point before the first
-                    # 6h tracker run.
-                    from app.services.bsr_tracker import BSRTracker
-                    await BSRTracker(db).record_product_snapshot(
-                        product_id=existing.id, asin=asin,
-                        bsr=detail.get("current_bsr"), category_name=detail.get("bsr_category"),
-                        subcategory_bsr=detail.get("current_subcategory_bsr"), subcategory_name=detail.get("subcategory_name"),
-                        price=detail.get("price"),
-                    )
-                    # Record stock snapshot to history
-                    if detail.get("is_in_stock") is not None:
-                        try:
-                            from app.models.stock_history import StockHistory
-                            stock_entry = StockHistory(
-                                time=datetime.now(timezone.utc),
-                                product_id=existing.id,
-                                asin=asin,
-                                stock_level=detail.get("stock_level"),
-                                stock_text=detail.get("stock_text"),
-                                is_in_stock=detail.get("is_in_stock", True),
-                            )
-                            db.add(stock_entry)
-                        except Exception as stock_err:
-                            logger.debug("Stock history save failed for %s: %s", asin, stock_err)
+                    # WHY: a cache hit returns a page that may be up to 24h old. Recording
+                    # it under today's timestamp would corrupt the BSR/price/stock history
+                    # the velocity and trend code reads, so only a live scrape gets one.
+                    if not detail.get(FROM_CACHE_KEY):
+                        # Record an initial BSR/price snapshot at analysis time so
+                        # the history chart has a starting point before the first
+                        # 6h tracker run.
+                        from app.services.bsr_tracker import BSRTracker
+                        await BSRTracker(db).record_product_snapshot(
+                            product_id=existing.id, asin=asin,
+                            bsr=detail.get("current_bsr"), category_name=detail.get("bsr_category"),
+                            subcategory_bsr=detail.get("current_subcategory_bsr"), subcategory_name=detail.get("subcategory_name"),
+                            price=detail.get("price"),
+                        )
+                        # Record stock snapshot to history
+                        if detail.get("is_in_stock") is not None:
+                            try:
+                                from app.models.stock_history import StockHistory
+                                stock_entry = StockHistory(
+                                    time=datetime.now(timezone.utc),
+                                    product_id=existing.id,
+                                    asin=asin,
+                                    stock_level=detail.get("stock_level"),
+                                    stock_text=detail.get("stock_text"),
+                                    is_in_stock=detail.get("is_in_stock", True),
+                                )
+                                db.add(stock_entry)
+                            except Exception as stock_err:
+                                logger.debug("Stock history save failed for %s: %s", asin, stock_err)
         except Exception as e:
             logger.warning("Failed to scrape details for %s: %s", asin, e)
 
