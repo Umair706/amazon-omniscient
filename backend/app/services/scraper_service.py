@@ -46,6 +46,23 @@ _AUTOCOMPLETE_TIMEOUT_SECONDS = 10.0
 # or error page never has them, which is how BrowserSession tells the two apart.
 _SEARCH_RESULT_SELECTOR = 'div[data-component-type="s-search-result"]'
 _PRODUCT_TITLE_SELECTOR = "#productTitle"
+
+# Review-count selectors. Their text can also be a star rating, so every
+# match goes through ScraperService.parse_review_count_text.
+_SERP_RATINGS_LINK_SELECTOR = 'a[aria-label*="ratings"]'
+_SERP_REVIEW_COUNT_SELECTORS = (
+    'a[href*="#customerReviews"]',
+    'span[data-component-type="s-client-side-analytics"] span.a-size-base.s-underline-text',
+    'a[href*="#customerReviews"] span.a-size-base',
+    'span.a-size-base.s-underline-text',
+    'a[data-hook="review-count"]',
+)
+# "#acrCustomerReviewCount" is the older template; the 2026 AU template only has the text span.
+_PRODUCT_REVIEW_COUNT_SELECTORS = ("#acrCustomerReviewCount", "#acrCustomerReviewText")
+_STAR_RATING_TEXT = re.compile(r"out of \d", re.IGNORECASE)
+# Amazon abbreviates big counts on search pages: "(6.6K)".
+_THOUSANDS_ABBREVIATION = re.compile(r"(\d+(?:\.\d+)?)\s*K\b", re.IGNORECASE)
+_ONE_THOUSAND = 1000
 _REVIEW_SELECTOR = 'div[data-hook="review"]'
 
 # Verdicts that mean Amazon is blocking this proxy + persona. A fresh identity may get through.
@@ -353,6 +370,38 @@ class ScraperService:
             pass
         return None
 
+    @classmethod
+    def parse_review_count_text(cls, text: str | None) -> int | None:
+        """Review count from text like "(38,907)" or "6,602 ratings". None for a star rating.
+
+        WHY: several review-count selectors also match the "4.6 out of 5 stars"
+        span, and reading the first number of that gave every product 4 reviews.
+        """
+        if not text or _STAR_RATING_TEXT.search(text):
+            return None
+        abbreviated = _THOUSANDS_ABBREVIATION.search(text)
+        if abbreviated:
+            return round(float(abbreviated.group(1)) * _ONE_THOUSAND)
+        count = cls._safe_int(text)
+        return count if count else None
+
+    async def _extract_serp_review_count(self, result_div) -> int | None:
+        """Review count for one search result, or None if no selector yields one."""
+        # WHY: the visible text is abbreviated ("(6.6K)"); the aria-label has
+        # the exact number ("6,602 ratings"), so it is tried first.
+        ratings_link = result_div.locator(_SERP_RATINGS_LINK_SELECTOR).first
+        if await ratings_link.count():
+            count = self.parse_review_count_text(await ratings_link.get_attribute("aria-label"))
+            if count is not None:
+                return count
+        for selector in _SERP_REVIEW_COUNT_SELECTORS:
+            element = result_div.locator(selector).first
+            if await element.count():
+                count = self.parse_review_count_text(await element.inner_text())
+                if count is not None:
+                    return count
+        return None
+
     @staticmethod
     def parse_bsr_text(details_text: str | None) -> dict:
         """Parse 'N in Category' pairs ('#' optional). First match is the main category, second the sub-category."""
@@ -499,25 +548,7 @@ class ScraperService:
         except Exception:
             pass
 
-        # Review count — try multiple selectors
-        review_count: int | None = None
-        for rc_sel in (
-            'span[data-component-type="s-client-side-analytics"] span.a-size-base.s-underline-text',
-            'a.a-link-normal .a-size-base',
-            'a[href*="#customerReviews"] span.a-size-base',
-            'span.a-size-base.s-underline-text',
-            'a[data-hook="review-count"]',
-            '.a-row.a-size-small span:last-child',
-        ):
-            try:
-                rc_el = div.locator(rc_sel).first
-                if await rc_el.count():
-                    val = self._safe_int(await rc_el.inner_text())
-                    if val is not None and val > 0:
-                        review_count = val
-                        break
-            except Exception:
-                continue
+        review_count = await self._extract_serp_review_count(div)
 
         # Sponsored
         is_sponsored = False
@@ -689,9 +720,10 @@ class ScraperService:
 
         # Review count
         review_count: int | None = None
-        rc_text = await self._safe_text(page, "#acrCustomerReviewCount")
-        if rc_text:
-            review_count = self._safe_int(rc_text)
+        for selector in _PRODUCT_REVIEW_COUNT_SELECTORS:
+            review_count = self.parse_review_count_text(await self._safe_text(page, selector))
+            if review_count is not None:
+                break
 
         # Brand
         brand = await self._safe_text(page, "#bylineInfo")
