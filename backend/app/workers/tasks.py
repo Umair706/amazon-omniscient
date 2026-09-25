@@ -18,6 +18,7 @@ from app.workers.celery_app import celery_app
 # Only imported for type hints — the real imports stay local to the
 # functions that use them (this file's existing lazy-import convention).
 if TYPE_CHECKING:
+    from app.scraping.session import BrowserSession
     from app.services.bsr_tracker import BSRTracker
     from app.services.sales_velocity_service import SalesVelocityService
     from app.services.scraper_service import ScraperService
@@ -131,6 +132,17 @@ def _get_llm_client():
         return None
 
 
+def _build_browser_session(marketplace: str) -> "BrowserSession":
+    """Return an unopened BrowserSession for this marketplace, behind the proxy configured in settings."""
+    from app.core.marketplace import get_marketplace
+    from app.scraping.session import BrowserSession
+    from app.services.scraper_service import ScraperService
+
+    # WHY: ScraperService already knows how to build the settings-configured ProxyManager.
+    proxy_manager = ScraperService(marketplace=marketplace).proxy_manager
+    return BrowserSession(get_marketplace(marketplace), proxy_manager)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Full Niche Analysis Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
@@ -208,11 +220,16 @@ def run_discovery(self, niche_id: int, keyword: str, marketplace: str = "US", op
 async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict, marketplace: str = "US"):
     """Async implementation of the discovery pipeline."""
     from app.models.niche import Niche
+    from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
     llm_client = _get_llm_client()
 
-    async with session_factory() as db:
+    # WHY: one browser session for the whole run, so every page load shares the
+    # same cookies and fingerprint instead of looking like a brand-new visitor.
+    async with session_factory() as db, _build_browser_session(marketplace) as browser:
+        scraper = ScraperService(marketplace=marketplace, session=browser)
+
         # Update status to discovering
         await db.execute(
             update(Niche).where(Niche.id == niche_id).values(status="discovering")
@@ -221,7 +238,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
         # ── Step 1: Scrape search results ──────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-        products_data = await _scrape_search_results(keyword, marketplace=marketplace)
+        products_data = await _scrape_search_results(scraper, keyword)
 
         if not products_data:
             await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -233,7 +250,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
         # ── Step 3: Scrape top product details ─────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
-        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], marketplace=marketplace)
+        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], scraper)
 
         # Merge detail data back
         detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
@@ -301,11 +318,17 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     """Async implementation of the full analysis pipeline."""
     from app.models.niche import Niche
     from app.models.product import Product
+    from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
     llm_client = _get_llm_client()
 
-    async with session_factory() as db:
+    # WHY: one browser session for the whole run (search, product pages, keyword
+    # SERPs), so every page load shares the same cookies and fingerprint. It is
+    # opened even for the sub-niche flow because keyword research still scrapes.
+    async with session_factory() as db, _build_browser_session(marketplace) as browser:
+        scraper = ScraperService(marketplace=marketplace, session=browser)
+
         # Update status to analyzing
         await db.execute(
             update(Niche).where(Niche.id == niche_id).values(status="analyzing")
@@ -358,7 +381,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # ── Step 1: Scrape search results ──────────────────────────────
             task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-            products_data = await _scrape_search_results(keyword, marketplace=marketplace)
+            products_data = await _scrape_search_results(scraper, keyword)
 
             if not products_data:
                 await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -369,7 +392,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             product_ids = await _save_products(db, niche_id, products_data)
 
             # Scrape individual product pages for detailed data
-            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], marketplace=marketplace)
+            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], scraper)
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
@@ -389,7 +412,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                     if detail.get("brand"):
                         p["brand"] = detail["brand"]
                     for key in ("bullet_count", "image_count", "has_video",
-                                "has_a_plus", "has_brand_story", "seller_id",
+                                "has_a_plus", "has_brand_story", "seller_id", "sold_by_amazon",
                                 "dimensions", "weight", "date_first_available",
                                 "star_distribution", "variation_count",
                                 "category_path", "list_price", "seller_count",
@@ -425,8 +448,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         keyword_research_summary = None
         try:
             from app.services.keyword_research import KeywordResearchService
-            kw_scraper = ScraperService(marketplace=marketplace)
-            kw_research_svc = KeywordResearchService(db, scraper=kw_scraper, marketplace=marketplace)
+            kw_research_svc = KeywordResearchService(db, scraper=scraper, marketplace=marketplace)
             keyword_research_summary = await kw_research_svc.research_keywords(
                 niche_id=niche_id,
                 seed_keyword=keyword,
@@ -959,23 +981,29 @@ async def _track_bsr_niche_async(niche_id: int):
         )
         products = (await db.execute(stmt)).scalars().all()
 
-        context = TrackingContext(
-            scraper=ScraperService(marketplace=niche_marketplace),
-            tracker=BSRTracker(db),
-            velocity_svc=SalesVelocityService(db),
-        )
-
-        for product in products:
-            try:
-                await _track_one_product(product, context)
-                # WHY: commit after each product, not once at the end — a hard
-                # time-limit kill mid-loop would otherwise lose every snapshot
-                # recorded so far for this niche.
-                await db.commit()
-            except Exception as e:
-                logger.warning("Failed to track product %s: %s", product.asin, e)
+        # WHY: one browser session per niche, shared by every product page load.
+        async with _build_browser_session(niche_marketplace) as browser:
+            context = TrackingContext(
+                scraper=ScraperService(marketplace=niche_marketplace, session=browser),
+                tracker=BSRTracker(db),
+                velocity_svc=SalesVelocityService(db),
+            )
+            await _track_products(db, products, context)
 
         logger.info("Tracked %d products in niche %d", len(products), niche_id)
+
+
+async def _track_products(db: AsyncSession, products: list, context: TrackingContext) -> None:
+    """Track each product in turn. One product failing does not stop the others."""
+    for product in products:
+        try:
+            await _track_one_product(product, context)
+            # WHY: commit after each product, not once at the end — a hard
+            # time-limit kill mid-loop would otherwise lose every snapshot
+            # recorded so far for this niche.
+            await db.commit()
+        except Exception as e:
+            logger.warning("Failed to track product %s: %s", product.asin, e)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1015,10 +1043,11 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
         niche_marketplace = niche_row.marketplace if niche_row else "US"
 
         from app.services.scraper_service import ScraperService
-        scraper = ScraperService(marketplace=niche_marketplace)
 
         try:
-            reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
+            async with _build_browser_session(niche_marketplace) as browser:
+                scraper = ScraperService(marketplace=niche_marketplace, session=browser)
+                reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
         except Exception as e:
             logger.warning("Review scraping failed for %s: %s", asin, e)
             return
@@ -1236,11 +1265,8 @@ async def _update_niche_status(niche_id: int, status: str, error: str | None = N
         await db.commit()
 
 
-async def _scrape_search_results(keyword: str, marketplace: str = "US") -> list[dict]:
-    """Scrape Amazon search results for a keyword."""
-    from app.services.scraper_service import ScraperService
-
-    scraper = ScraperService(marketplace=marketplace)
+async def _scrape_search_results(scraper: "ScraperService", keyword: str) -> list[dict]:
+    """Scrape Amazon search results for a keyword. Returns [] if scraping fails."""
     try:
         return await scraper.scrape_search_results(keyword, pages=3)
     except Exception as e:
@@ -1313,13 +1339,11 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
 
 
 async def _scrape_product_details(
-    db: AsyncSession, niche_id: int, products_data: list[dict], marketplace: str = "US"
+    db: AsyncSession, niche_id: int, products_data: list[dict], scraper: "ScraperService"
 ) -> list[dict]:
     """Scrape detailed product pages for enriched data and update DB rows."""
     from app.models.product import Product
-    from app.services.scraper_service import ScraperService
 
-    scraper = ScraperService(marketplace=marketplace)
     detailed = []
 
     for p in products_data[:20]:

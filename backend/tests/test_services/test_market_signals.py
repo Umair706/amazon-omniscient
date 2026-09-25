@@ -30,6 +30,14 @@ def test_amazon_seller_pct():
     assert amazon_seller_pct([], "ATVPDKIKX0DER") == 0.0
 
 
+def test_amazon_seller_pct_counts_sold_by_amazon_flag_without_seller_id():
+    products = [
+        {"asin": "A", "sold_by_amazon": True, "seller_id": None},
+        {"asin": "B", "sold_by_amazon": False, "seller_id": "A1XYZ"},
+    ]
+    assert amazon_seller_pct(products, "ATVPDKIKX0DER") == 50.0
+
+
 def test_average_review_velocity_gap_skips_products_without_dates_or_bsr():
     estimator = BSRSalesEstimator("US")
     fixed_today = date(2026, 9, 25)

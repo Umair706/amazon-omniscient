@@ -36,7 +36,12 @@ def amazon_seller_pct(products: list[dict], amazon_seller_id: str) -> float:
     """Percentage of products whose Buy Box seller is Amazon itself."""
     if not products:
         return 0.0
-    amazon_count = sum(1 for p in products if p.get("seller_id") == amazon_seller_id)
+    # WHY: listings Amazon sells itself usually have no seller-profile link, so
+    # seller_id is often empty for them. The scraped "sold by Amazon" flag catches those.
+    amazon_count = sum(
+        1 for p in products
+        if p.get("sold_by_amazon") or p.get("seller_id") == amazon_seller_id
+    )
     return round(amazon_count / len(products) * 100, 1)
 
 
