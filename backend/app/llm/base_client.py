@@ -14,12 +14,16 @@ RETRY_BACKOFF_SECONDS = 2.0
 
 # The concrete clients (QwenClient, OpenAIClient, AnthropicClient) catch every
 # exception their SDK raises — including transport errors from the underlying
-# httpx client — and re-wrap it as LLMError. That wrapping loses the original
-# exception type, so we can no longer tell "network blip" apart from "bad
-# request" by type alone. These substrings are how the underlying SDKs phrase
-# transient failures, so we match on the message instead.
+# httpx client — and re-wrap it as `LLMError(...) from e`. The wrapping keeps
+# the original SDK exception as `__cause__`, but some SDK exceptions carry a
+# fixed, generic message ("Request timed out.") that doesn't repeat the word
+# "timeout" the way our own error text does — so text-matching alone is not
+# reliable. These markers are a fallback for LLMError text that has no
+# __cause__ (e.g. hand-written errors); the real signal is the type check in
+# _transient_sdk_error_types() below.
 _RETRYABLE_LLM_ERROR_MARKERS = (
     "timeout",
+    "timed out",
     "rate limit",
     "overloaded",
     "connection",
@@ -28,9 +32,46 @@ _RETRYABLE_LLM_ERROR_MARKERS = (
 )
 
 
+def _transient_sdk_error_types() -> tuple[type[BaseException], ...]:
+    """SDK exception classes that mean 'try again'.
+
+    Imported lazily (inside the function, not at module level) so this file
+    has no hard dependency on the openai/anthropic packages being installed.
+    """
+    types: list[type[BaseException]] = [
+        httpx.TransportError,
+        httpx.HTTPStatusError,
+        asyncio.TimeoutError,
+    ]
+    try:
+        import openai
+
+        types += [
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.RateLimitError,
+            openai.InternalServerError,
+        ]
+    except ImportError:
+        pass
+    try:
+        import anthropic
+
+        types += [
+            anthropic.APITimeoutError,
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            anthropic.InternalServerError,
+        ]
+    except ImportError:
+        pass
+    return tuple(types)
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Return True if exc is a transport-class failure worth retrying."""
-    if isinstance(exc, (httpx.TransportError, httpx.HTTPStatusError, asyncio.TimeoutError)):
+    transient_types = _transient_sdk_error_types()
+    if isinstance(exc, transient_types) or isinstance(exc.__cause__, transient_types):
         return True
     if isinstance(exc, LLMError):
         message = str(exc).lower()
