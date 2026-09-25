@@ -13,6 +13,7 @@ from app.core.exceptions import ScrapingError
 from app.core.proxy_manager import ProxyManager
 from app.scraping.block_detection import PageVerdict
 from app.scraping.session import MAX_ROTATIONS_PER_SESSION, BrowserSession
+from app.services.review_text import parse_helpful_votes, parse_review_date
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,42 @@ _SOLD_BY_AMAZON_MARKERS = ("sold by amazon", "seller amazon")
 # How many brand labels on one search page we read when counting distinct brands.
 _MAX_BRAND_LABELS_SCANNED = 48
 
+# Review cards on the product page itself (the "Top reviews" section).
+_PAGE_REVIEW_CARD_SELECTOR = (
+    '#cm-cr-dp-review-list div[data-hook="review"], '
+    '#reviewsMedley div[data-hook="review"], '
+    'div[id^="customer_review-"]'
+)
+_MAX_PAGE_REVIEWS = 10
+
+# Selectors inside one review card, tried in order. Older pages use
+# "review-title" / "review-body"; the 2026 template (seen on amazon.com.au)
+# uses "reviewTitle" / "reviewRichContentContainer" instead. The rating,
+# date, badge and helpful-vote hooks did not change.
+_REVIEW_RATING_SELECTORS = (
+    'i[data-hook="review-star-rating"] span.a-icon-alt',
+    'i[data-hook="cmps-review-star-rating"] span.a-icon-alt',
+)
+_REVIEW_TITLE_SELECTORS = (
+    'a[data-hook="review-title"] span:not(.a-icon-alt)',
+    'span[data-hook="review-title"] span:not(.a-icon-alt)',
+    '[data-hook="reviewTitle"]',
+)
+# NOTE: "reviewRichContentContainer" sits inside "reviewText". The outer one
+# also holds hidden "Brief content visible..." helper text, so the inner one goes first.
+_REVIEW_BODY_SELECTORS = (
+    'span[data-hook="review-body"] span',
+    '[data-hook="reviewRichContentContainer"]',
+    '[data-hook="reviewText"]',
+)
+_REVIEW_DATE_SELECTORS = ('span[data-hook="review-date"]',)
+_REVIEW_HELPFUL_SELECTORS = ('span[data-hook="helpful-vote-statement"]',)
+_VERIFIED_PURCHASE_SELECTOR = 'span[data-hook="avp-badge"]'
+_VINE_BADGE_SELECTOR = 'span[data-hook="vine-review-badge"], span.a-color-link:has-text("Vine")'
+
+# Amazon sends /product-reviews/ to this sign-in page on some marketplaces (seen on AU in 2026).
+SIGNIN_PATH_MARKER = "/ap/signin"
+
 
 class ScraperService:
     """Scrapes Amazon search results, product pages, and reviews via Playwright."""
@@ -68,13 +105,19 @@ class ScraperService:
     # main pattern.
     _PARENTHETICAL_ASIDE = re.compile(r"\([^)]*\)")
 
-    # Amazon shows "#N in Category" for the main category and, when the
-    # product also sits in a narrower sub-category, a second "#N in
-    # Category" pair right after — on its own line in the details block's
-    # innerText(). The greedy character class naturally stops at the next
-    # "\n", "#", or the end of string, so category names can include
-    # digits, commas and slashes ("Arts, Crafts & Sewing", "3D Printing").
-    _BSR_PATTERN = re.compile(r"#([\d,]+)\s+in\s+([A-Za-z0-9 &',\-/]+)")
+    # Amazon shows "N in Category" for the main category and, when the
+    # product also sits in a narrower sub-category, a second pair right after.
+    # Older pages write "#N"; the 2026 template drops the "#" and, read with
+    # text_content(), puts no line break between the two pairs.
+    # WHY: category names can contain digits ("3D Printing"), so we cannot
+    # stop the category at the first digit. Instead the category is matched
+    # lazily and ends only where the next "<rank> in " pair starts, or at a
+    # line break, a "#", or the end of the text.
+    _BSR_PATTERN = re.compile(
+        r"#?(\d[\d,]*)\s+in\s+"
+        r"([A-Za-z0-9 &',\-/]+?)"
+        r"(?=\s*#?\d[\d,]*\s+in\s|\s*[\n#]|\s*$)"
+    )
 
     # Ordered by reliability — the first selector that yields a positive
     # price wins. Shared by the full product-page scrape and the
@@ -92,7 +135,14 @@ class ScraperService:
 
     # Amazon renders the product-details block (which holds the BSR text)
     # under different element ids depending on page template.
+    # WHY: the "Best Sellers Rank" row comes first. Reading the whole block
+    # with text_content() runs the sub-category into the next rows
+    # ("Garlic Presses ASIN B00HEZ888K ..."), so the whole blocks are only
+    # a fallback for layouts we have not seen.
     _DETAILS_SELECTORS = (
+        '#prodDetails tr:has(th:has-text("Best Sellers Rank")) td',
+        '#productDetails_detailBullets_sections1 tr:has(th:has-text("Best Sellers Rank")) td',
+        '#detailBulletsWrapper_feature_div li:has-text("Best Sellers Rank")',
         "#productDetails_detailBullets_sections1",
         "#detailBulletsWrapper_feature_div",
         "#productDetails_db_sections",
@@ -186,6 +236,21 @@ class ScraperService:
             return None
 
     @staticmethod
+    async def _safe_text_content(page: Page, selector: str) -> str | None:
+        """Return the text_content() of *selector*, or ``None`` if not found.
+
+        Unlike inner_text(), this includes text inside collapsed (hidden) sections.
+        """
+        try:
+            el = page.locator(selector).first
+            if await el.count() == 0:
+                return None
+            text = await el.text_content()
+            return text.strip() if text else None
+        except Exception:
+            return None
+
+    @staticmethod
     async def _safe_attr(page: Page, selector: str, attribute: str) -> str | None:
         """Return an element attribute value, or ``None`` if not found."""
         try:
@@ -224,7 +289,7 @@ class ScraperService:
 
     @staticmethod
     def parse_bsr_text(details_text: str | None) -> dict:
-        """Parse '#N in Category' pairs. First match is the main category, second the sub-category."""
+        """Parse 'N in Category' pairs ('#' optional). First match is the main category, second the sub-category."""
         empty = {"current_bsr": None, "bsr_category": None, "current_subcategory_bsr": None, "subcategory_name": None}
         if not details_text:
             return empty
@@ -547,23 +612,11 @@ class ScraperService:
         # Amazon reports both main-category BSR and sub-category BSR.
         # The sales velocity curves differ by ~10x between them, so we
         # must capture both and tag which is which.
-        bsr: int | None = None
-        bsr_category: str | None = None
-        subcategory_bsr: int | None = None
-        subcategory_name: str | None = None
-        try:
-            for sel in self._DETAILS_SELECTORS:
-                details_text = await self._safe_text(page, sel)
-                if details_text:
-                    parsed = self.parse_bsr_text(details_text)
-                    if parsed["current_bsr"] is not None:
-                        bsr = parsed["current_bsr"]
-                        bsr_category = parsed["bsr_category"]
-                        subcategory_bsr = parsed["current_subcategory_bsr"]
-                        subcategory_name = parsed["subcategory_name"]
-                        break
-        except Exception:
-            pass
+        parsed_bsr = await self._extract_bsr(page)
+        bsr = parsed_bsr["current_bsr"]
+        bsr_category = parsed_bsr["bsr_category"]
+        subcategory_bsr = parsed_bsr["current_subcategory_bsr"]
+        subcategory_name = parsed_bsr["subcategory_name"]
 
         # Bullet points
         bullet_points: list[str] = []
@@ -930,22 +983,7 @@ class ScraperService:
         except Exception:
             pass
 
-        # ── Extract top reviews from the product page ──
-        page_reviews: list[dict] = []
-        try:
-            review_containers = page.locator(
-                '#cm-cr-dp-review-list div[data-hook="review"], '
-                '#reviewsMedley div[data-hook="review"], '
-                'div[id^="customer_review-"]'
-            )
-            rev_count = await review_containers.count()
-            for ri in range(min(rev_count, 10)):
-                rdiv = review_containers.nth(ri)
-                rev = await self._extract_single_review(rdiv, asin)
-                if rev and rev.get("body"):
-                    page_reviews.append(rev)
-        except Exception as e:
-            logger.debug("Product page review extraction failed for %s: %s", asin, e)
+        page_reviews = await self._extract_page_reviews(page, asin)
 
         result = {
             "asin": asin,
@@ -997,115 +1035,66 @@ class ScraperService:
     # 3. Single review extraction (shared helper)
     # ------------------------------------------------------------------
 
+    async def _extract_page_reviews(self, page: Page, asin: str) -> list[dict]:
+        """Top reviews shown on the product page itself. Cards without a body are skipped."""
+        page_reviews: list[dict] = []
+        try:
+            cards = page.locator(_PAGE_REVIEW_CARD_SELECTOR)
+            card_count = await cards.count()
+            for index in range(min(card_count, _MAX_PAGE_REVIEWS)):
+                review = await self._extract_single_review(cards.nth(index), asin)
+                if review and review.get("body"):
+                    page_reviews.append(review)
+        except Exception as e:
+            logger.debug("Product page review extraction failed for %s: %s", asin, e)
+        return page_reviews
+
     async def _extract_single_review(self, div, asin: str) -> dict | None:
-        """Extract a single review from a review div element.
+        """Extract one review card into a review dict. None when the card has neither title nor body.
 
         Reusable across product-page top reviews and dedicated review pages.
         """
-        review_id = await div.get_attribute("id")
-
-        # Rating
-        review_rating: int | None = None
-        try:
-            star_el = div.locator(
-                'i[data-hook="review-star-rating"] span.a-icon-alt, '
-                'i[data-hook="cmps-review-star-rating"] span.a-icon-alt'
-            ).first
-            if await star_el.count():
-                star_text = await star_el.inner_text()
-                parsed = self._safe_float(star_text)
-                review_rating = int(parsed) if parsed is not None else None
-        except Exception:
-            pass
-
-        # Title
-        review_title: str | None = None
-        try:
-            title_el = div.locator(
-                'a[data-hook="review-title"] span:not(.a-icon-alt), '
-                'span[data-hook="review-title"] span:not(.a-icon-alt)'
-            ).first
-            if await title_el.count():
-                review_title = (await title_el.inner_text()).strip()
-        except Exception:
-            pass
-
-        # Body
-        review_body: str | None = None
-        try:
-            body_el = div.locator('span[data-hook="review-body"] span').first
-            if await body_el.count():
-                review_body = (await body_el.inner_text()).strip()
-        except Exception:
-            pass
-
-        # Date
-        review_date: str | None = None
-        try:
-            date_el = div.locator('span[data-hook="review-date"]').first
-            if await date_el.count():
-                date_text = (await date_el.inner_text()).strip()
-                date_match = re.search(
-                    r"on\s+(\w+\s+\d{1,2},\s+\d{4})",
-                    date_text,
-                )
-                if date_match:
-                    try:
-                        parsed_date = datetime.strptime(
-                            date_match.group(1), "%B %d, %Y"
-                        )
-                        review_date = parsed_date.date().isoformat()
-                    except ValueError:
-                        review_date = date_match.group(1)
-        except Exception:
-            pass
-
-        # Verified purchase
-        verified_purchase = False
-        try:
-            vp_el = div.locator('span[data-hook="avp-badge"]')
-            verified_purchase = (await vp_el.count()) > 0
-        except Exception:
-            pass
-
-        # Helpful votes
-        helpful_votes: int = 0
-        try:
-            helpful_el = div.locator('span[data-hook="helpful-vote-statement"]').first
-            if await helpful_el.count():
-                helpful_text = await helpful_el.inner_text()
-                if "one" in helpful_text.lower():
-                    helpful_votes = 1
-                else:
-                    helpful_votes = self._safe_int(helpful_text) or 0
-        except Exception:
-            pass
-
-        # Vine voice
-        is_vine = False
-        try:
-            vine_el = div.locator(
-                'span[data-hook="vine-review-badge"], '
-                'span.a-color-link:has-text("Vine")'
-            )
-            is_vine = (await vine_el.count()) > 0
-        except Exception:
-            pass
-
-        if not review_body and not review_title:
+        title = await self._first_inner_text(div, _REVIEW_TITLE_SELECTORS)
+        body = await self._first_inner_text(div, _REVIEW_BODY_SELECTORS)
+        if not body and not title:
             return None
-
+        rating = self._safe_float(await self._first_inner_text(div, _REVIEW_RATING_SELECTORS))
+        date_line = await self._first_inner_text(div, _REVIEW_DATE_SELECTORS)
+        helpful_line = await self._first_inner_text(div, _REVIEW_HELPFUL_SELECTORS)
         return {
             "asin": asin,
-            "review_id": review_id,
-            "rating": review_rating,
-            "title": review_title,
-            "body": review_body,
-            "review_date": review_date,
-            "verified_purchase": verified_purchase,
-            "helpful_votes": helpful_votes,
-            "is_vine": is_vine,
+            "review_id": await div.get_attribute("id"),
+            "rating": int(rating) if rating is not None else None,
+            "title": title,
+            "body": body,
+            "review_date": parse_review_date(date_line),
+            "verified_purchase": await self._contains(div, _VERIFIED_PURCHASE_SELECTOR),
+            "helpful_votes": parse_helpful_votes(helpful_line),
+            "is_vine": await self._contains(div, _VINE_BADGE_SELECTOR),
         }
+
+    @staticmethod
+    async def _first_inner_text(container, selectors: tuple[str, ...]) -> str | None:
+        """Visible text of the first selector (in the given order) that matches inside *container*."""
+        for selector in selectors:
+            try:
+                element = container.locator(selector).first
+                if await element.count() == 0:
+                    continue
+                text = (await element.inner_text()).strip()
+            except Exception:
+                continue
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    async def _contains(container, selector: str) -> bool:
+        """True when *selector* matches at least one element inside *container*."""
+        try:
+            return await container.locator(selector).count() > 0
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # 4. Reviews scraper
@@ -1155,6 +1144,11 @@ class ScraperService:
         logger.info("Scraping reviews for %s, page %d, filter=%s", asin, page_num, filter_star)
         page, verdict = await self._load(url, _REVIEW_SELECTOR)
         try:
+            # NOTE: a sign-in wall is not a block, so rotating would not help.
+            # Returning [] also stops pagination, so this warns once per call.
+            if SIGNIN_PATH_MARKER in page.url:
+                logger.warning("/product-reviews/ requires sign-in for this marketplace; skipping (%s)", asin)
+                return []
             if verdict == "soft_block":
                 logger.info("No more reviews found for %s at page %d", asin, page_num)
                 return []
@@ -1222,7 +1216,9 @@ class ScraperService:
         """Main + sub-category BSR from whichever product-details block the page uses."""
         parsed_bsr = self.parse_bsr_text(None)
         for sel in self._DETAILS_SELECTORS:
-            details_text = await self._safe_text(page, sel)
+            # WHY: the 2026 template keeps this block in a collapsed accordion,
+            # and inner_text() returns nothing for hidden nodes.
+            details_text = await self._safe_text_content(page, sel)
             if details_text:
                 parsed_bsr = self.parse_bsr_text(details_text)
                 if parsed_bsr["current_bsr"] is not None:
