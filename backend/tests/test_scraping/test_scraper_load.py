@@ -50,7 +50,7 @@ def scraper_with(session: FakeSession) -> ScraperService:
 
 async def test_ok_on_first_try_does_not_rotate():
     session = FakeSession(["ok"])
-    page, verdict = await scraper_with(session)._load(URL, SELECTOR)
+    page, verdict = await scraper_with(session)._load(URL, SELECTOR, "product")
     assert verdict == "ok"
     assert session.rotations == 0
     assert not page.closed
@@ -58,7 +58,7 @@ async def test_ok_on_first_try_does_not_rotate():
 
 async def test_captcha_then_ok_rotates_once_and_returns_the_second_page():
     session = FakeSession(["captcha", "ok"])
-    page, verdict = await scraper_with(session)._load(URL, SELECTOR)
+    page, verdict = await scraper_with(session)._load(URL, SELECTOR, "product")
     assert verdict == "ok"
     assert session.rotations == 1
     assert page is session.pages[1]
@@ -67,14 +67,14 @@ async def test_captcha_then_ok_rotates_once_and_returns_the_second_page():
 
 async def test_navigation_error_then_ok_rotates_once():
     session = FakeSession([PROXY_DOWN, "ok"])
-    page, verdict = await scraper_with(session)._load(URL, SELECTOR)
+    page, verdict = await scraper_with(session)._load(URL, SELECTOR, "product")
     assert verdict == "ok"
     assert session.rotations == 1
 
 
 async def test_soft_block_is_returned_without_rotating():
     session = FakeSession(["soft_block"])
-    _page, verdict = await scraper_with(session)._load(URL, SELECTOR)
+    _page, verdict = await scraper_with(session)._load(URL, SELECTOR, "product")
     assert verdict == "soft_block"
     assert session.rotations == 0
 
@@ -82,5 +82,5 @@ async def test_soft_block_is_returned_without_rotating():
 async def test_blocked_every_time_raises_scraping_error_naming_the_url():
     session = FakeSession(["captcha"] * (MAX_ROTATIONS_PER_SESSION + 1))
     with pytest.raises(ScrapingError, match="B0TEST0001"):
-        await scraper_with(session)._load(URL, SELECTOR)
+        await scraper_with(session)._load(URL, SELECTOR, "product")
     assert all(page.closed for page in session.pages)

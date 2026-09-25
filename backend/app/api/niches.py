@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
@@ -16,6 +17,7 @@ from app.models.keyword import NicheKeyword
 from app.models.niche import Niche
 from app.models.product import Product
 from app.models.review import ReviewPainPoint
+from app.models.scrape_event import ScrapeEvent
 from app.models.supplier import Supplier
 from app.schemas.competitor import CompetitorListResponse, CompetitorResponse
 from app.schemas.financial import FinancialProjectionResponse, ProjectionListResponse
@@ -24,6 +26,7 @@ from app.schemas.niche import NicheCreate, NicheListResponse, NicheResponse, Nic
 from app.schemas.product import ProductListResponse, ProductResponse
 from app.schemas.review import ReviewPainPointResponse
 from app.schemas.supplier import SupplierListResponse, SupplierResponse
+from app.scraping.health import SCRAPE_HEALTH_WINDOW_HOURS, summarise_scrape_counts
 
 router = APIRouter(prefix="/niches", tags=["niches"])
 
@@ -146,6 +149,26 @@ async def list_niches(
         total_pages=total_pages,
         items=[NicheSummary.model_validate(n) for n in niches],
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /niches/scrape-health — Scrape outcome counts for the last 24h
+# WHY here, before /{niche_id}: FastAPI matches routes in registration order,
+# and "/{niche_id}" would otherwise swallow "/scrape-health" first and fail
+# trying to parse "scrape-health" as an int.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scrape-health")
+async def scrape_health(db: AsyncSession = Depends(get_db)) -> dict:
+    """Counts of scrape outcomes in the last 24 hours, by site and verdict."""
+    since = datetime.now(timezone.utc) - timedelta(hours=SCRAPE_HEALTH_WINDOW_HOURS)
+    rows = (await db.execute(
+        select(ScrapeEvent.site, ScrapeEvent.verdict, func.count())
+        .where(ScrapeEvent.time >= since)
+        .group_by(ScrapeEvent.site, ScrapeEvent.verdict)
+    )).all()
+    return {"since": since.isoformat(), **summarise_scrape_counts(rows)}
 
 
 # ---------------------------------------------------------------------------

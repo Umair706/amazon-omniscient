@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -141,6 +142,27 @@ def _build_browser_session(marketplace: str) -> "BrowserSession":
     return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings())
 
 
+@asynccontextmanager
+async def _page_cache_for_run(force: bool = False):
+    """Yield a PageCache backed by one Redis client for this run, or None when forced to re-scrape.
+
+    WHY: a forced re-run exists specifically to get fresh data, so it must not be served
+    stale pages from a previous run's cache.
+    """
+    if force:
+        yield None
+        return
+
+    from redis.asyncio import Redis
+    from app.scraping.page_cache import PageCache
+
+    redis = Redis.from_url(Settings().REDIS_URL, decode_responses=True)
+    try:
+        yield PageCache(redis)
+    finally:
+        await redis.aclose()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Full Niche Analysis Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
@@ -225,8 +247,15 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
     # WHY: one browser session for the whole run, so every page load shares the
     # same cookies and fingerprint instead of looking like a brand-new visitor.
-    async with session_factory() as db, _build_browser_session(marketplace) as browser:
-        scraper = ScraperService(proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser)
+    async with (
+        session_factory() as db,
+        _build_browser_session(marketplace) as browser,
+        _page_cache_for_run(options.get("force", False)) as page_cache,
+    ):
+        scraper = ScraperService(
+            proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
+            page_cache=page_cache, event_sink=_get_session_factory(),
+        )
 
         # Update status to discovering
         await db.execute(
@@ -324,8 +353,15 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     # WHY: one browser session for the whole run (search, product pages, keyword
     # SERPs), so every page load shares the same cookies and fingerprint. It is
     # opened even for the sub-niche flow because keyword research still scrapes.
-    async with session_factory() as db, _build_browser_session(marketplace) as browser:
-        scraper = ScraperService(proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser)
+    async with (
+        session_factory() as db,
+        _build_browser_session(marketplace) as browser,
+        _page_cache_for_run(options.get("force", False)) as page_cache,
+    ):
+        scraper = ScraperService(
+            proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
+            page_cache=page_cache, event_sink=_get_session_factory(),
+        )
 
         # Update status to analyzing
         await db.execute(
@@ -955,10 +991,11 @@ async def _track_bsr_niche_async(niche_id: int):
         products = (await db.execute(stmt)).scalars().all()
 
         # WHY: one browser session per niche, shared by every product page load.
-        async with _build_browser_session(niche_marketplace) as browser:
+        async with _build_browser_session(niche_marketplace) as browser, _page_cache_for_run() as page_cache:
             context = TrackingContext(
                 scraper=ScraperService(
                     proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                    page_cache=page_cache, event_sink=_get_session_factory(),
                 ),
                 tracker=BSRTracker(db),
                 velocity_svc=SalesVelocityService(db),
@@ -1020,9 +1057,10 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
         from app.services.scraper_service import ScraperService
 
         try:
-            async with _build_browser_session(niche_marketplace) as browser:
+            async with _build_browser_session(niche_marketplace) as browser, _page_cache_for_run() as page_cache:
                 scraper = ScraperService(
                     proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                    page_cache=page_cache, event_sink=_get_session_factory(),
                 )
                 reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
         except Exception as e:

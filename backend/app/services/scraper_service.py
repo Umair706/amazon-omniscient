@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from urllib.parse import quote_plus
@@ -12,6 +13,8 @@ from playwright.async_api import Page
 from app.core.exceptions import ScrapingError
 from app.core.proxy_manager import ProxyManager
 from app.scraping.block_detection import PageVerdict
+from app.scraping.events import record_scrape_event
+from app.scraping.page_cache import PageCache
 from app.scraping.session import MAX_ROTATIONS_PER_SESSION, BrowserSession
 from app.services.review_text import parse_helpful_votes, parse_review_date
 
@@ -47,6 +50,13 @@ _REVIEW_SELECTOR = 'div[data-hook="review"]'
 
 # Verdicts that mean Amazon is blocking this proxy + persona. A fresh identity may get through.
 _ROTATE_ON_VERDICTS = ("captcha", "server_error")
+
+# scrape_events.site for every page this service loads — it only ever talks to Amazon.
+_SITE_AMAZON = "amazon"
+
+# scrape_events.verdict for a navigation error (proxy/tunnel failure, timeout). BrowserSession.load()
+# never returns this verdict itself — it raises instead — so _load assigns it before recording.
+_TIMEOUT_VERDICT = "timeout"
 
 # The buy box names the merchant. Older pages say "Ships from and sold by Amazon.com.au";
 # the 2026 layout (#merchantInfoFeature_feature_div) says "Shipper / Seller  Amazon AU".
@@ -162,6 +172,8 @@ class ScraperService:
         proxy_manager: ProxyManager | None = None,
         marketplace: str = "US",
         session: BrowserSession | None = None,
+        page_cache: PageCache | None = None,
+        event_sink=None,
     ):
         self.proxy_manager = proxy_manager or build_proxy_manager_from_settings()
 
@@ -172,6 +184,13 @@ class ScraperService:
         # WHY: a pipeline run injects one shared session so every page load reuses the
         # same cookies and fingerprint. None means "open a short-lived one per call".
         self._session = session
+
+        # WHY: None disables caching entirely (e.g. a forced re-run must hit Amazon again).
+        self._page_cache = page_cache
+
+        # An async DB session factory. When set, _load() records one scrape_events row
+        # per page load; None (the default) means "don't bother" — used in tests.
+        self._event_sink = event_sink
 
     # ------------------------------------------------------------------
     # Session + page loading
@@ -192,21 +211,26 @@ class ScraperService:
             finally:
                 self._session = None
 
-    async def _load(self, url: str, expected_selector: str) -> tuple[Page, PageVerdict]:
+    async def _load(self, url: str, expected_selector: str, url_kind: str) -> tuple[Page, PageVerdict]:
         """Load url through the session, rotating proxy + persona on a captcha, 5xx or navigation error.
 
         Returns (page, verdict) where verdict is "ok" or "soft_block".
-        The caller must close the page.
+        The caller must close the page. Records one scrape_events row per attempt
+        (see _record_load_event), so a load that needed two rotations shows up as
+        three rows — that is what makes block rates visible on /scrape-health.
         """
         for _ in range(MAX_ROTATIONS_PER_SESSION + 1):
+            started_at = time.monotonic()
             try:
                 page, verdict = await self._session.load(url, expected_selector)
             except PlaywrightError as exc:
+                await self._record_load_event(_TIMEOUT_VERDICT, started_at, url_kind)
                 # WHY: a timeout or proxy/tunnel failure usually means this proxy is dead.
                 # A new one may work. session.load() already closed the tab.
                 logger.warning("Navigation failed loading %s (%s: %s) — rotating", url, type(exc).__name__, exc)
                 await self._rotate_session(url)
                 continue
+            await self._record_load_event(verdict, started_at, url_kind)
             if verdict not in _ROTATE_ON_VERDICTS:
                 return page, verdict
             await page.close()
@@ -214,6 +238,20 @@ class ScraperService:
             await self._rotate_session(url)
         # NOTE: defensive guard only — rotate() raises at the cap before the loop can end.
         raise ScrapingError(f"Still blocked after {MAX_ROTATIONS_PER_SESSION} rotations: {url}")
+
+    async def _record_load_event(self, verdict: str, started_at: float, url_kind: str) -> None:
+        """Record how long this page load took and what we got. No-op unless a sink is configured."""
+        if self._event_sink is None:
+            return
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        await record_scrape_event(
+            self._event_sink,
+            site=_SITE_AMAZON,
+            url_kind=url_kind,
+            verdict=verdict,
+            proxy_label=self._session.proxy_label,
+            duration_ms=duration_ms,
+        )
 
     async def _rotate_session(self, url: str) -> None:
         """Rotate the proxy + persona. Raises ScrapingError once the rotation cap is hit."""
@@ -334,13 +372,20 @@ class ScraperService:
         Returns a list of dicts, one per product, with keys matching the
         ``Product`` model columns wherever possible.
         """
+        cache_key = f"{self._marketplace.code}:{keyword}:{pages}"
+        if self._page_cache is not None:
+            cached = await self._page_cache.get("serp", cache_key)
+            if cached is not None:
+                logger.info("Search results for '%s' served from cache", keyword)
+                return cached
+
         all_results: list[dict] = []
         cards_seen = 0
         async with self._ensure_session():
             for page_num in range(1, pages + 1):
                 url = f"{self._search_url(keyword)}&page={page_num}"
                 logger.info("Scraping search page %d/%d for '%s'", page_num, pages, keyword)
-                page, verdict = await self._load(url, _SEARCH_RESULT_SELECTOR)
+                page, verdict = await self._load(url, _SEARCH_RESULT_SELECTOR, "serp")
                 try:
                     if verdict == "soft_block":
                         logger.warning("No search results found on page %d for '%s'", page_num, keyword)
@@ -351,6 +396,8 @@ class ScraperService:
                 all_results.extend(page_results)
 
         logger.info("Scraped %d results for '%s'", len(all_results), keyword)
+        if self._page_cache is not None and all_results:
+            await self._page_cache.set("serp", cache_key, all_results)
         return all_results
 
     async def _extract_search_page(
@@ -523,9 +570,16 @@ class ScraperService:
 
     async def scrape_product_page(self, asin: str) -> dict:
         """Scrape an Amazon product detail page and return a dict of fields."""
+        cache_key = f"{self._marketplace.code}:{asin}"
+        if self._page_cache is not None:
+            cached = await self._page_cache.get("product", cache_key)
+            if cached is not None:
+                logger.info("Product page for %s served from cache", asin)
+                return cached
+
         logger.info("Scraping product page %s", asin)
         async with self._ensure_session():
-            page, verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR)
+            page, verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "product")
             try:
                 if verdict == "soft_block":
                     logger.warning("Product title not found for ASIN %s", asin)
@@ -534,6 +588,8 @@ class ScraperService:
                 await page.close()
 
         logger.info("Scraped product page for ASIN %s", asin)
+        if self._page_cache is not None:
+            await self._page_cache.set("product", cache_key, result)
         return result
 
     async def _read_sold_by_amazon(self, page: Page) -> bool:
@@ -1160,7 +1216,7 @@ class ScraperService:
             f"?filterByStar={filter_star}&pageNumber={page_num}"
         )
         logger.info("Scraping reviews for %s, page %d, filter=%s", asin, page_num, filter_star)
-        page, verdict = await self._load(url, _REVIEW_SELECTOR)
+        page, verdict = await self._load(url, _REVIEW_SELECTOR, "reviews")
         try:
             # NOTE: a sign-in wall is not a block, so rotating would not help.
             # Returning [] also stops pagination, so this warns once per call.
@@ -1196,7 +1252,7 @@ class ScraperService:
         #availability element to get stock status.
         """
         async with self._ensure_session():
-            page, _verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR)
+            page, _verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
             try:
                 availability = await self._extract_availability(page)
             finally:
@@ -1210,7 +1266,7 @@ class ScraperService:
         details block, price, and availability, for the periodic tracker.
         """
         async with self._ensure_session():
-            page, _verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR)
+            page, _verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
             try:
                 price = await self._extract_first_positive_price(page)
                 parsed_bsr = await self._extract_bsr(page)
@@ -1314,7 +1370,7 @@ class ScraperService:
         try:
             async with self._ensure_session():
                 url = self._search_url(keyword)
-                page, _verdict = await self._load(url, _SEARCH_RESULT_SELECTOR)
+                page, _verdict = await self._load(url, _SEARCH_RESULT_SELECTOR, "serp_meta")
                 try:
                     return await self._extract_serp_metadata(page, keyword)
                 finally:

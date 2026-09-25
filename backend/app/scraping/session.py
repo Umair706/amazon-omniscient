@@ -110,6 +110,11 @@ class BrowserSession:
             await self._browser.close()
         self._context = self._browser = None
 
+    @property
+    def proxy_label(self) -> str | None:
+        """The current proxy's server address, or None when running direct (no proxy)."""
+        return self._proxy_conf.get("server") or None
+
     async def rotate(self) -> None:
         """Abandon the current proxy session + persona and start over. Raises after MAX_ROTATIONS_PER_SESSION."""
         self.rotations += 1
