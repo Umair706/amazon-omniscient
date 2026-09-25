@@ -63,7 +63,7 @@ class Recommendation(Base):
     estimated_acos: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
 
     # Rich JSONB payloads
-    marketing_channels: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    marketing_channels: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     risk_flags: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     launch_playbook: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     ppc_strategy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

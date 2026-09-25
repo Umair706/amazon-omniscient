@@ -185,7 +185,7 @@ export interface RecommendationDetail extends RecommendationSummary {
   competitor_landscape: Record<string, unknown> | null;
 
   // JSONB payloads
-  marketing_channels: Record<string, unknown> | null;
+  marketing_channels: Record<string, unknown>[] | null;
   risk_flags: Record<string, unknown> | null;
   launch_playbook: Record<string, unknown> | null;
   ppc_strategy: Record<string, unknown> | null;
