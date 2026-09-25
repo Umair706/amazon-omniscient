@@ -18,6 +18,29 @@ logger = logging.getLogger(__name__)
 SP_API_BASE = "https://sellingpartnerapi-na.amazon.com"
 TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 
+# Catalog Items v2022-04-01 tags one image per product as the primary listing photo.
+MAIN_IMAGE_VARIANT = "MAIN"
+
+
+def _main_image_link(item: dict, marketplace_id: str) -> str | None:
+    """Find this marketplace's MAIN product image link from a Catalog Items v2022-04-01 item.
+
+    The API's top-level `images` field (not `summaries[].mainImage`, which doesn't exist
+    in this API version) holds a list of images per marketplace, each tagged with a
+    `variant` like "MAIN" or "PT01". Falls back to the first image if none is tagged MAIN,
+    and to the legacy `summaries[].mainImage` shape as a last resort.
+    """
+    images_block = next((i for i in item.get("images", []) if i.get("marketplaceId") == marketplace_id), {})
+    images = images_block.get("images", [])
+    main_image = next((i for i in images if i.get("variant") == MAIN_IMAGE_VARIANT), None)
+    if main_image is None and images:
+        main_image = images[0]
+    if main_image is not None:
+        return main_image.get("link")
+
+    summary = next((s for s in item.get("summaries", []) if s.get("marketplaceId") == marketplace_id), {})
+    return (summary.get("mainImage") or {}).get("link")
+
 
 def normalise_catalog_item(item: dict, marketplace_id: str) -> dict:
     """Map a Catalog Items v2022-04-01 item onto the dict shape ScraperService.scrape_search_results returns."""
@@ -29,7 +52,7 @@ def normalise_catalog_item(item: dict, marketplace_id: str) -> dict:
         "asin": item.get("asin"),
         "title": summary.get("itemName"),
         "brand": summary.get("brand"),
-        "image_url": (summary.get("mainImage") or {}).get("link"),
+        "image_url": _main_image_link(item, marketplace_id),
         "price": None, "rating": None, "review_count": None,
         "bsr": main.get("rank"), "bsr_category": main.get("title"),
         "current_subcategory_bsr": sub.get("rank"), "subcategory_name": sub.get("title"),

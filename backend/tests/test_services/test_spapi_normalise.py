@@ -6,7 +6,11 @@ from app.services.spapi_service import SPAPIService, normalise_catalog_item
 
 ITEM = {
     "asin": "B0A",
-    "summaries": [{"marketplaceId": "ATVPDKIKX0DER", "itemName": "Garlic Press", "brand": "Acme", "mainImage": {"link": "https://img/x.jpg"}}],
+    "summaries": [{"marketplaceId": "ATVPDKIKX0DER", "itemName": "Garlic Press", "brand": "Acme"}],
+    "images": [{"marketplaceId": "ATVPDKIKX0DER", "images": [
+        {"variant": "PT01", "link": "https://img/pt01.jpg", "height": 500, "width": 500},
+        {"variant": "MAIN", "link": "https://img/main.jpg", "height": 1000, "width": 1000},
+    ]}],
     "salesRanks": [{"marketplaceId": "ATVPDKIKX0DER", "displayGroupRanks": [{"title": "Home & Kitchen", "rank": 2345}],
                     "classificationRanks": [{"title": "Garlic Presses", "rank": 12}]}],
 }
@@ -15,7 +19,7 @@ ITEM = {
 def test_normalise_catalog_item():
     n = normalise_catalog_item(ITEM, "ATVPDKIKX0DER")
     assert n["asin"] == "B0A" and n["title"] == "Garlic Press" and n["brand"] == "Acme"
-    assert n["image_url"] == "https://img/x.jpg"
+    assert n["image_url"] == "https://img/main.jpg"
     assert n["bsr"] == 2345 and n["bsr_category"] == "Home & Kitchen"
     assert n["current_subcategory_bsr"] == 12 and n["subcategory_name"] == "Garlic Presses"
     assert n["price"] is None  # pricing comes from the Pricing API, not Catalog
@@ -26,6 +30,25 @@ def test_normalise_catalog_item_missing_marketplace_data():
     n = normalise_catalog_item({"asin": "B0B", "summaries": [], "salesRanks": []}, "ATVPDKIKX0DER")
     assert n["asin"] == "B0B"
     assert n["title"] is None and n["bsr"] is None and n["current_subcategory_bsr"] is None
+
+
+def test_normalise_catalog_item_no_images_field():
+    """An item with no `images` field at all (not every catalog response carries one) has image_url None."""
+    item = {"asin": "B0C", "summaries": [{"marketplaceId": "ATVPDKIKX0DER", "itemName": "No Photo"}], "salesRanks": []}
+    n = normalise_catalog_item(item, "ATVPDKIKX0DER")
+    assert n["image_url"] is None
+
+
+def test_normalise_catalog_item_ignores_other_marketplace_images():
+    """Images listed for a different marketplace must not leak into this marketplace's image_url."""
+    item = {
+        "asin": "B0D",
+        "summaries": [{"marketplaceId": "ATVPDKIKX0DER", "itemName": "Garlic Press"}],
+        "images": [{"marketplaceId": "A1PA6795UKMFR9", "images": [{"variant": "MAIN", "link": "https://img/de-only.jpg"}]}],
+        "salesRanks": [],
+    }
+    n = normalise_catalog_item(item, "ATVPDKIKX0DER")
+    assert n["image_url"] is None
 
 
 @pytest.mark.asyncio
