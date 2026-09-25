@@ -1271,31 +1271,35 @@ class ScraperService:
         """Scrape only the availability/stock level for an ASIN.
 
         Much lighter than a full product page scrape — only extracts the
-        #availability element to get stock status.
+        #availability element to get stock status. The "verdict" key is "ok"
+        only for a real product page (see scrape_rank_snapshot).
         """
         async with self._ensure_session():
-            page, _verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
+            page, verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
             try:
                 availability = await self._extract_availability(page)
             finally:
                 await page.close()
-        return {"asin": asin, **availability}
+        return {"asin": asin, "verdict": verdict, **availability}
 
     async def scrape_rank_snapshot(self, asin: str) -> dict:
         """Scrape current BSR, price, and stock for an ASIN.
 
         Much lighter than a full product page scrape — only extracts the
         details block, price, and availability, for the periodic tracker.
+        The "verdict" key is "ok" only for a real product page. Callers must not
+        record a snapshot with any other verdict — a soft-blocked page parses as
+        "no rank, no price, in stock", which would corrupt the history.
         """
         async with self._ensure_session():
-            page, _verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
+            page, verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
             try:
                 price = await self._extract_first_positive_price(page)
                 parsed_bsr = await self._extract_bsr(page)
                 availability = await self._extract_availability(page)
             finally:
                 await page.close()
-        return {"asin": asin, "price": price, **parsed_bsr, **availability}
+        return {"asin": asin, "verdict": verdict, "price": price, **parsed_bsr, **availability}
 
     async def _extract_first_positive_price(self, page: Page) -> float | None:
         """Price from the first price selector that yields a positive number."""

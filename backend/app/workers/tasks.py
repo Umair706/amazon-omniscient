@@ -56,6 +56,16 @@ MIN_SPAPI_SEARCH_RESULTS = 10
 SERP_FALLBACK_PAGES = 3
 SERP_ENRICHMENT_PAGES = 1
 
+# Each detail page is one live page load, so only the top of the SERP gets one.
+MAX_DETAILED_PRODUCTS = 20
+
+# The only page verdict that means "this is the real product page".
+REAL_PAGE_VERDICT = "ok"
+
+# How many weeks SalesForecastService projects. Also the scorer's
+# "never breaks even" value for break_even_week_base.
+FORECAST_HORIZON_WEEKS = 52
+
 
 @dataclass(frozen=True)
 class TrackingContext:
@@ -203,7 +213,10 @@ def run_full_analysis(self, niche_id: int, keyword: str, marketplace: str = "US"
     product_asins : list[str] | None
         If provided, skip scraping and filter to only these ASINs (sub-niche flow).
     """
-    options = options or {}
+    options = dict(options or {})
+    if self.request.retries > 0:
+        # WHY: a retry after a mid-pipeline failure would otherwise duplicate suppliers/recommendations.
+        options["force"] = True
     logger.info("Starting full analysis for niche %d: %s (marketplace=%s)", niche_id, keyword, marketplace)
 
     try:
@@ -291,7 +304,8 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
         # ── Step 3: Scrape top product details ─────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
-        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], scraper)
+        from app.workers.pipeline_steps.product_details import scrape_product_details
+        detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
 
         # Merge detail data back
         detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
@@ -409,18 +423,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             await db.flush()
             await db.commit()
 
-            products_data = [
-                {
-                    "asin": p.asin,
-                    "title": p.title,
-                    "price": float(p.current_price) if p.current_price else None,
-                    "bsr": p.current_bsr,
-                    "rating": float(p.rating) if p.rating else None,
-                    "review_count": p.review_count,
-                    "brand": p.brand if hasattr(p, "brand") else None,
-                }
-                for p in db_products
-            ]
+            products_data = [_stored_product_as_detail(p) for p in db_products]
             detailed_products = products_data  # Already have detail data
             task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
 
@@ -440,7 +443,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             product_ids = await _save_products(db, niche_id, products_data)
 
             # Scrape individual product pages for detailed data
-            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], scraper)
+            from app.workers.pipeline_steps.product_details import scrape_product_details
+            detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
@@ -538,7 +542,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         competitor_landscape = await competitor_svc.analyze_landscape(
             niche_id=niche_id,
-            products=products_data[:20],
+            products=products_data[:MAX_DETAILED_PRODUCTS],
             category=keyword,
         )
         if competitor_landscape:
@@ -784,7 +788,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         review_strategy = None
         try:
             # Gather competitor review counts from products data
-            competitor_reviews = [p.get("review_count", 0) for p in products_data[:20] if p.get("review_count")]
+            competitor_reviews = [p.get("review_count", 0) for p in products_data[:MAX_DETAILED_PRODUCTS] if p.get("review_count")]
             review_strategy = await review_svc.generate_review_strategy(
                 niche_keyword=keyword,
                 competitor_reviews=competitor_reviews,
@@ -811,6 +815,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             )
             financial_summary = forecast_svc.summarize_forecast(forecast)
             await forecast_svc.save_projections(niche_id, forecast)
+            metrics["break_even_week_base"] = _base_case_break_even_week(financial_summary)
 
             # Calculate launch capital
             launch_capital = forecast_svc.calculate_launch_capital(
@@ -997,7 +1002,14 @@ async def _track_bsr_via_spapi(product, context: TrackingContext) -> None:
 
 
 async def _record_snapshot(product, context: TrackingContext, snapshot: dict) -> None:
-    """Persist one page-scraped rank/price/stock snapshot and update the product row."""
+    """Persist one page-scraped rank/price/stock snapshot and update the product row.
+
+    Skips pages that were not a real product page: a soft-blocked page parses
+    as "no rank, no price, in stock", and recording that would fake a restock.
+    """
+    if snapshot.get("verdict") != REAL_PAGE_VERDICT:
+        logger.debug("Not recording snapshot for %s: page verdict was %r", product.asin, snapshot.get("verdict"))
+        return
     await context.tracker.record_product_snapshot(
         product_id=product.id, asin=product.asin,
         bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
@@ -1078,14 +1090,21 @@ def _build_spapi_client(settings: Settings, marketplace: str) -> "SPAPIService":
 async def _track_products(db: AsyncSession, products: list, context: TrackingContext) -> None:
     """Track each product in turn. One product failing does not stop the others."""
     for product in products:
+        # NOTE: read the ASIN up front. A savepoint rollback expires the product,
+        # and reloading it lazily is not allowed in an async session.
+        asin = product.asin
         try:
-            await _track_one_product(product, context)
-            # WHY: commit after each product, not once at the end — a hard
-            # time-limit kill mid-loop would otherwise lose every snapshot
-            # recorded so far for this niche.
-            await db.commit()
+            # WHY: a savepoint per product, so one failed insert rolls back only
+            # that product and leaves the session usable for the rest.
+            async with db.begin_nested():
+                await _track_one_product(product, context)
         except Exception as e:
-            logger.warning("Failed to track product %s: %s", product.asin, e)
+            logger.warning("Failed to track product %s (rolled back to savepoint): %s", asin, e)
+            continue
+        # WHY: commit after each product, not once at the end — a hard
+        # time-limit kill mid-loop would otherwise lose every snapshot
+        # recorded so far for this niche.
+        await db.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1204,7 +1223,8 @@ async def _refresh_competitor_async(niche_id: int, keyword: str):
                 }
                 for p in db_products
             ]
-            await svc.analyze_landscape(niche_id=niche_id, products=products_for_analysis, category=keyword)
+            landscape = await svc.analyze_landscape(niche_id=niche_id, products=products_for_analysis, category=keyword)
+            await svc.persist_landscape(niche_id, landscape)
             await db.commit()
             logger.info("Competitor refresh complete for niche %d", niche_id)
         except Exception as e:
@@ -1452,132 +1472,26 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
     return product_ids
 
 
-async def _scrape_product_details(
-    db: AsyncSession, niche_id: int, products_data: list[dict], scraper: "ScraperService"
-) -> list[dict]:
-    """Scrape detailed product pages for enriched data and update DB rows."""
-    from app.models.product import Product
-    from app.services.scraper_service import FROM_CACHE_KEY
+def _stored_product_as_detail(product) -> dict:
+    """Turn a stored Product row into the same dict shape a fresh detail-page scrape gives.
 
-    detailed = []
-
-    for p in products_data[:20]:
-        asin = p.get("asin")
-        if not asin:
-            continue
-        try:
-            detail = await scraper.scrape_product_page(asin)
-            if detail:
-                detailed.append(detail)
-                # Write enriched data back to the product row
-                stmt = select(Product).where(Product.asin == asin)
-                existing = (await db.execute(stmt)).scalar_one_or_none()
-                if existing:
-                    if detail.get("title"):
-                        existing.title = detail["title"]
-                    if detail.get("price") is not None:
-                        existing.current_price = detail["price"]
-                    if detail.get("rating") is not None:
-                        existing.rating = detail["rating"]
-                    if detail.get("review_count") is not None:
-                        existing.review_count = detail["review_count"]
-                    if detail.get("brand"):
-                        existing.brand = detail["brand"]
-                    if detail.get("current_bsr") is not None:
-                        existing.current_bsr = detail["current_bsr"]
-                    if detail.get("bsr_category"):
-                        existing.bsr_category = detail["bsr_category"]
-                    if detail.get("current_subcategory_bsr") is not None:
-                        existing.current_subcategory_bsr = detail["current_subcategory_bsr"]
-                    if detail.get("subcategory_name"):
-                        existing.subcategory_name = detail["subcategory_name"]
-                    if detail.get("bullet_count") is not None:
-                        existing.bullet_count = detail["bullet_count"]
-                    if detail.get("image_count") is not None:
-                        existing.image_count = detail["image_count"]
-                    existing.has_video = detail.get("has_video", existing.has_video)
-                    existing.has_a_plus = detail.get("has_a_plus", existing.has_a_plus)
-                    existing.has_brand_story = detail.get("has_brand_story", existing.has_brand_story)
-                    if detail.get("seller_id"):
-                        existing.seller_id = detail["seller_id"]
-                    if detail.get("last_scraped_at"):
-                        from datetime import datetime as dt
-                        try:
-                            existing.last_scraped_at = dt.fromisoformat(detail["last_scraped_at"])
-                        except (ValueError, TypeError):
-                            pass
-                    # Save stock level
-                    if detail.get("stock_level") is not None:
-                        existing.last_stock_level = detail["stock_level"]
-
-                    # ── Save enriched product fields ──
-                    if detail.get("list_price") is not None:
-                        existing.list_price = detail["list_price"]
-                    if detail.get("date_first_available"):
-                        try:
-                            from dateutil.parser import parse as dateparse
-                            existing.date_first_available = dateparse(detail["date_first_available"]).date()
-                        except Exception:
-                            pass
-                    if detail.get("star_distribution"):
-                        existing.star_distribution = detail["star_distribution"]
-                    if detail.get("variation_count") is not None:
-                        existing.variation_count = detail["variation_count"]
-                    if detail.get("category_path"):
-                        existing.category_path = detail["category_path"]
-                    if detail.get("seller_count") is not None:
-                        existing.seller_count = detail["seller_count"]
-                    if detail.get("fbt_asins"):
-                        existing.fbt_asins = detail["fbt_asins"]
-                    if detail.get("qa_count") is not None:
-                        existing.qa_count = detail["qa_count"]
-                    if detail.get("deal_badge"):
-                        existing.deal_badge = detail["deal_badge"]
-                    if detail.get("amazons_choice_keyword"):
-                        existing.amazons_choice_keyword = detail["amazons_choice_keyword"]
-                    if detail.get("review_attributes"):
-                        existing.review_attributes = detail["review_attributes"]
-                    if detail.get("comparison_asins"):
-                        existing.comparison_asins = detail["comparison_asins"]
-                    if detail.get("weight"):
-                        existing.weight = detail["weight"]
-                    if detail.get("dimensions"):
-                        existing.product_dimensions = detail["dimensions"]
-
-                    # WHY: a cache hit returns a page that may be up to 24h old. Recording
-                    # it under today's timestamp would corrupt the BSR/price/stock history
-                    # the velocity and trend code reads, so only a live scrape gets one.
-                    if not detail.get(FROM_CACHE_KEY):
-                        # Record an initial BSR/price snapshot at analysis time so
-                        # the history chart has a starting point before the first
-                        # 6h tracker run.
-                        from app.services.bsr_tracker import BSRTracker
-                        await BSRTracker(db).record_product_snapshot(
-                            product_id=existing.id, asin=asin,
-                            bsr=detail.get("current_bsr"), category_name=detail.get("bsr_category"),
-                            subcategory_bsr=detail.get("current_subcategory_bsr"), subcategory_name=detail.get("subcategory_name"),
-                            price=detail.get("price"),
-                        )
-                        # Record stock snapshot to history
-                        if detail.get("is_in_stock") is not None:
-                            try:
-                                from app.models.stock_history import StockHistory
-                                stock_entry = StockHistory(
-                                    time=datetime.now(timezone.utc),
-                                    product_id=existing.id,
-                                    asin=asin,
-                                    stock_level=detail.get("stock_level"),
-                                    stock_text=detail.get("stock_text"),
-                                    is_in_stock=detail.get("is_in_stock", True),
-                                )
-                                db.add(stock_entry)
-                            except Exception as stock_err:
-                                logger.debug("Stock history save failed for %s: %s", asin, stock_err)
-        except Exception as e:
-            logger.warning("Failed to scrape details for %s: %s", asin, e)
-
-    await db.commit()
-    return detailed
+    WHY: the sub-niche flow reuses the parent niche's products instead of
+    re-scraping, and category/Amazon-share/BSR signals read these keys.
+    """
+    return {
+        "asin": product.asin,
+        "title": product.title,
+        "brand": product.brand,
+        "image_url": product.image_url,
+        "price": float(product.current_price) if product.current_price is not None else None,
+        "rating": float(product.rating) if product.rating is not None else None,
+        "review_count": product.review_count,
+        "bsr": product.current_bsr,
+        "current_bsr": product.current_bsr,
+        "bsr_category": product.bsr_category,
+        "seller_id": product.seller_id,
+        "date_first_available": product.date_first_available.isoformat() if product.date_first_available else None,
+    }
 
 
 def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
@@ -1589,7 +1503,9 @@ def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
     """
     import re
 
-    DEFAULT_DIMS = {"length": 10, "width": 6, "height": 4, "weight_lb": 1.1}
+    from app.core.units import parse_weight_lb
+
+    DEFAULT_DIMS ={"length": 10, "width": 6, "height": 4, "weight_lb": 1.1}
 
     lengths, widths, heights, weights = [], [], [], []
 
@@ -1617,11 +1533,9 @@ def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
             or product.get("product_weight_lbs")
             or product.get("weight_lbs")
         )
-        if weight_val is not None:
-            try:
-                weights.append(float(weight_val))
-            except (ValueError, TypeError):
-                pass
+        weight_lb = parse_weight_lb(weight_val)
+        if weight_lb is not None:
+            weights.append(weight_lb)
 
     if not lengths:
         return DEFAULT_DIMS
@@ -1908,12 +1822,28 @@ def _build_base_metrics(
             metrics["avg_bsr"], metrics["estimated_monthly_sales"],
         )
 
+    # WHY: computed before the 300-unit fallback below, so a made-up sales
+    # number never turns into a made-up revenue. The regression estimate is
+    # for one typical listing, which makes this revenue per seller.
+    if metrics["estimated_monthly_sales"] > 0 and metrics["avg_price"] > 0:
+        metrics["monthly_revenue_per_seller"] = round(metrics["estimated_monthly_sales"] * metrics["avg_price"])
+
     # Fallback: if still zero but we have products with prices, estimate from product count
     if not metrics["estimated_monthly_sales"]:
         metrics["estimated_monthly_sales"] = 300
         logger.info("Using fallback estimated_monthly_sales: 300")
 
     return metrics
+
+
+def _base_case_break_even_week(financial_summary: dict) -> int:
+    """The week the base-case forecast turns cumulative profit positive.
+
+    The forecast returns None when that never happens inside its horizon; we
+    report the horizon itself, which the scorer treats as its worst case.
+    """
+    break_even_week = financial_summary.get("base", {}).get("break_even_week")
+    return break_even_week if break_even_week is not None else FORECAST_HORIZON_WEEKS
 
 
 def _enrich_metrics(
@@ -1948,7 +1878,8 @@ def _enrich_metrics(
         landed = supplier_data.get("landed_cost", {})
         metrics["landed_cost"] = landed.get("total_landed_cost_usd_per_unit", metrics.get("landed_cost", 0))
 
-    # Supplier score defaults
+    # NOTE: supplier defaults only apply when 1688 scraping returned nothing,
+    # so an outage does not zero the score. Tracked in TODO.md.
     metrics.setdefault("supplier_count", 5)
     metrics.setdefault("best_supplier_score", 70)
     metrics.setdefault("min_moq", 500)
