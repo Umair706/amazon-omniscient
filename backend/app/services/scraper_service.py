@@ -30,6 +30,36 @@ _MAX_RETRIES = 3
 class ScraperService:
     """Scrapes Amazon search results, product pages, and reviews via Playwright."""
 
+    # Amazon shows "#N in Category" for the main category and, when the
+    # product also sits in a narrower sub-category, a second "#N in
+    # Category" pair right after. The lookahead stops the category name at
+    # the next "(", "#", or end of string so the "(See Top 100 in ...)"
+    # aside that Amazon inserts between the two pairs is never captured as
+    # part of the category name.
+    _BSR_PATTERN = re.compile(r"#([\d,]+)\s+in\s+([A-Za-z &',\-]+?)(?=\s*\(|\s*#|$)")
+
+    # Ordered by reliability — the first selector that yields a positive
+    # price wins. Shared by the full product-page scrape and the
+    # lightweight rank/price snapshot so both read price the same way.
+    _PRICE_SELECTORS = (
+        "#corePriceDisplay_desktop_feature_div span.a-offscreen",
+        "#corePrice_feature_div span.a-offscreen",
+        ".priceToPay span.a-offscreen",
+        "#apex_offerDisplay_desktop span.a-offscreen",
+        "span.a-price[data-a-color='base'] span.a-offscreen",
+        "span.a-price:not([data-a-strike='true']) span.a-offscreen",
+        "#priceblock_ourprice",
+        "#priceblock_dealprice",
+    )
+
+    # Amazon renders the product-details block (which holds the BSR text)
+    # under different element ids depending on page template.
+    _DETAILS_SELECTORS = (
+        "#productDetails_detailBullets_sections1",
+        "#detailBulletsWrapper_feature_div",
+        "#productDetails_db_sections",
+    )
+
     def __init__(
         self,
         proxy_manager: ProxyManager | None = None,
@@ -114,6 +144,23 @@ class ScraperService:
         except (ValueError, AttributeError):
             pass
         return None
+
+    @staticmethod
+    def parse_bsr_text(details_text: str | None) -> dict:
+        """Parse '#N in Category' pairs. First match is the main category, second the sub-category."""
+        empty = {"current_bsr": None, "bsr_category": None, "current_subcategory_bsr": None, "subcategory_name": None}
+        if not details_text:
+            return empty
+        matches = ScraperService._BSR_PATTERN.findall(details_text)
+        if not matches:
+            return empty
+        parsed = dict(empty)
+        parsed["current_bsr"] = ScraperService._safe_int(matches[0][0])
+        parsed["bsr_category"] = matches[0][1].strip()
+        if len(matches) > 1:
+            parsed["current_subcategory_bsr"] = ScraperService._safe_int(matches[1][0])
+            parsed["subcategory_name"] = matches[1][1].strip()
+        return parsed
 
     async def _launch_browser(self, playwright) -> Browser:
         """Launch a Chromium browser instance, optionally with a rotating proxy."""
@@ -452,16 +499,7 @@ class ScraperService:
 
                 # Price — try multiple selectors (ordered by reliability)
                 price: float | None = None
-                for sel in (
-                    "#corePriceDisplay_desktop_feature_div span.a-offscreen",
-                    "#corePrice_feature_div span.a-offscreen",
-                    ".priceToPay span.a-offscreen",
-                    "#apex_offerDisplay_desktop span.a-offscreen",
-                    "span.a-price[data-a-color='base'] span.a-offscreen",
-                    "span.a-price:not([data-a-strike='true']) span.a-offscreen",
-                    "#priceblock_ourprice",
-                    "#priceblock_dealprice",
-                ):
+                for sel in self._PRICE_SELECTORS:
                     price_text = await self._safe_text(page, sel)
                     if price_text:
                         price = self._safe_float(price_text)
@@ -511,27 +549,15 @@ class ScraperService:
                 subcategory_bsr: int | None = None
                 subcategory_name: str | None = None
                 try:
-                    for sel in (
-                        "#productDetails_detailBullets_sections1",
-                        "#detailBulletsWrapper_feature_div",
-                        "#productDetails_db_sections",
-                    ):
+                    for sel in self._DETAILS_SELECTORS:
                         details_text = await self._safe_text(page, sel)
                         if details_text:
-                            # findall returns ALL "#N in Category" matches
-                            bsr_matches = re.findall(
-                                r"#([\d,]+)\s+in\s+([A-Za-z &',\-]+)",
-                                details_text,
-                            )
-                            if bsr_matches:
-                                # First match = main category BSR (broadest)
-                                bsr = self._safe_int(bsr_matches[0][0])
-                                bsr_category = bsr_matches[0][1].strip()
-                                # Subsequent matches = sub-category BSRs
-                                # (narrower, lower numbers, more niche-specific)
-                                if len(bsr_matches) > 1:
-                                    subcategory_bsr = self._safe_int(bsr_matches[1][0])
-                                    subcategory_name = bsr_matches[1][1].strip()
+                            parsed = self.parse_bsr_text(details_text)
+                            if parsed["current_bsr"] is not None:
+                                bsr = parsed["current_bsr"]
+                                bsr_category = parsed["bsr_category"]
+                                subcategory_bsr = parsed["current_subcategory_bsr"]
+                                subcategory_name = parsed["subcategory_name"]
                                 break
                 except Exception:
                     pass
@@ -1290,6 +1316,84 @@ class ScraperService:
                         pass
 
         raise ScrapingError(f"Failed to scrape stock for ASIN '{asin}' after {_MAX_RETRIES} attempts: {last_error}")
+
+    async def scrape_rank_snapshot(self, asin: str) -> dict:
+        """Scrape current BSR, price, and stock for an ASIN.
+
+        Much lighter than a full product page scrape — only extracts the
+        details block, price, and availability, for the periodic tracker.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            browser: Browser | None = None
+            pw = None
+            try:
+                pw = await async_playwright().start()
+                browser = await self._launch_browser(pw)
+                page = await self._new_page(browser)
+
+                url = f"https://www.{self._marketplace.domain}/dp/{asin}"
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                await self._random_delay(1.0, 2.0)
+
+                price: float | None = None
+                for sel in self._PRICE_SELECTORS:
+                    price_text = await self._safe_text(page, sel)
+                    if price_text:
+                        price = self._safe_float(price_text)
+                        if price is not None and price > 0:
+                            break
+
+                parsed_bsr = {"current_bsr": None, "bsr_category": None, "current_subcategory_bsr": None, "subcategory_name": None}
+                for sel in self._DETAILS_SELECTORS:
+                    details_text = await self._safe_text(page, sel)
+                    if details_text:
+                        parsed_bsr = self.parse_bsr_text(details_text)
+                        if parsed_bsr["current_bsr"] is not None:
+                            break
+
+                stock_level: int | None = None
+                stock_text: str | None = None
+                is_in_stock: bool = True
+
+                avail_el = page.locator("#availability").first
+                if await avail_el.count():
+                    avail_text = (await avail_el.inner_text()).strip()
+                    stock_text = avail_text
+                    stock_match = re.search(r"Only\s+(\d+)\s+left", avail_text, re.IGNORECASE)
+                    if stock_match:
+                        stock_level = int(stock_match.group(1))
+                    if "currently unavailable" in avail_text.lower():
+                        is_in_stock = False
+                        stock_level = 0
+                    elif "out of stock" in avail_text.lower():
+                        is_in_stock = False
+                        stock_level = 0
+
+                return {
+                    "asin": asin,
+                    "price": price,
+                    **parsed_bsr,
+                    "stock_level": stock_level,
+                    "stock_text": stock_text,
+                    "is_in_stock": is_in_stock,
+                }
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Rank snapshot attempt %d/%d failed for %s: %s", attempt, _MAX_RETRIES, asin, exc)
+                if attempt < _MAX_RETRIES:
+                    await self._random_delay(1.0, 2.0)
+            finally:
+                if browser:
+                    await browser.close()
+                if pw:
+                    try:
+                        await pw.stop()
+                    except Exception:
+                        pass
+
+        raise ScrapingError(f"Failed to scrape rank snapshot for ASIN '{asin}' after {_MAX_RETRIES} attempts: {last_error}")
 
     # ------------------------------------------------------------------
     # 6. Amazon Autocomplete API (no Playwright needed)

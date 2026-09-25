@@ -27,6 +27,13 @@ TRACKING_HARD_LIMIT_SECONDS = 25 * 60
 COMPETITOR_REFRESH_SOFT_LIMIT_SECONDS = 10 * 60
 COMPETITOR_REFRESH_HARD_LIMIT_SECONDS = 12 * 60
 
+# Each tracked product costs one page load per 6h beat run, so we cap how
+# much work a single niche can generate and stop tracking niches nobody has
+# rescored recently — a niche the user has moved on from doesn't need a
+# live BSR chart anymore.
+TRACKED_PRODUCTS_PER_NICHE = 20
+TRACKING_WINDOW_DAYS = 30
+
 
 # ---------------------------------------------------------------------------
 # Worker runtime — one event loop and one async engine per worker *process*.
@@ -858,14 +865,19 @@ def track_bsr_prices_all():
 
 
 async def _track_bsr_all_async():
-    """Fetch all active niches and track BSR/prices for their products."""
+    """Fetch recently-scored active niches and track BSR/prices for their products."""
     from app.models.niche import Niche
-    from app.models.product import Product
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
-        # Get all completed niches (actively tracked)
-        stmt = select(Niche.id).where(Niche.status == "completed")
+        # Only track niches scored within the tracking window — an older
+        # niche the user isn't actively evaluating doesn't justify the
+        # scraping cost of a fresh BSR chart every 6 hours.
+        tracking_cutoff = datetime.now(timezone.utc) - timedelta(days=TRACKING_WINDOW_DAYS)
+        stmt = select(Niche.id).where(
+            Niche.status == "completed",
+            Niche.last_scored_at >= tracking_cutoff,
+        )
         result = await db.execute(stmt)
         niche_ids = [row[0] for row in result.all()]
 
@@ -886,67 +898,56 @@ def track_bsr_prices(niche_id: int):
     _run_async(_track_bsr_niche_async(niche_id))
 
 
+async def _track_one_product(product, scraper, tracker, velocity_svc) -> None:
+    """Re-scrape one product's rank/price/stock and persist all three snapshots."""
+    snapshot = await scraper.scrape_rank_snapshot(product.asin)
+    await tracker.record_product_snapshot(
+        product_id=product.id, asin=product.asin,
+        bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
+        subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
+        price=snapshot["price"],
+    )
+    if snapshot["current_bsr"]:
+        product.current_bsr = snapshot["current_bsr"]
+    if snapshot["price"]:
+        product.current_price = snapshot["price"]
+    await velocity_svc.record_stock_snapshot(
+        product_id=product.id, asin=product.asin,
+        stock_level=snapshot["stock_level"], stock_text=snapshot["stock_text"], is_in_stock=snapshot["is_in_stock"],
+    )
+    if snapshot["stock_level"] is not None:
+        product.last_stock_level = snapshot["stock_level"]
+
+
 async def _track_bsr_niche_async(niche_id: int):
-    """Scrape current BSR & price for each product in the niche, plus stock for low-stock items."""
+    """Re-scrape BSR, price, and stock for the niche's top-ranked tracked products."""
+    from app.models.niche import Niche as NicheModel
     from app.models.product import Product
     from app.services.bsr_tracker import BSRTracker
+    from app.services.sales_velocity_service import SalesVelocityService
+    from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
-        tracker = BSRTracker(db)
-
-        stmt = select(Product).where(Product.niche_id == niche_id)
-        result = await db.execute(stmt)
-        products = result.scalars().all()
-
-        # Determine marketplace from niche
-        from app.models.niche import Niche as NicheModel
-        niche_row = (await db.execute(
+        niche_marketplace = (await db.execute(
             select(NicheModel.marketplace).where(NicheModel.id == niche_id)
-        )).scalar_one_or_none()
-        niche_marketplace = niche_row or "US"
+        )).scalar_one_or_none() or "US"
+
+        stmt = (
+            select(Product)
+            .where(Product.niche_id == niche_id)
+            .order_by(Product.search_position.asc().nullslast())
+            .limit(TRACKED_PRODUCTS_PER_NICHE)
+        )
+        products = (await db.execute(stmt)).scalars().all()
+
+        tracker = BSRTracker(db)
+        scraper = ScraperService(marketplace=niche_marketplace)
+        velocity_svc = SalesVelocityService(db)
 
         for product in products:
             try:
-                # Record current BSR
-                if product.current_bsr:
-                    await tracker.record_bsr(
-                        product_id=product.id,
-                        asin=product.asin,
-                        bsr=product.current_bsr,
-                        category_id=product.category_id,
-                    )
-
-                # Record current price
-                if product.current_price:
-                    await tracker.record_price(
-                        product_id=product.id,
-                        asin=product.asin,
-                        price=float(product.current_price),
-                    )
-
-                # Track stock level for products that showed low stock (<20)
-                if product.last_stock_level is not None and product.last_stock_level < 20:
-                    try:
-                        from app.services.scraper_service import ScraperService
-                        from app.services.sales_velocity_service import SalesVelocityService
-
-                        scraper = ScraperService(marketplace=niche_marketplace)
-                        stock_data = await scraper.scrape_stock_level(product.asin)
-
-                        velocity_svc = SalesVelocityService(db)
-                        await velocity_svc.record_stock_snapshot(
-                            product_id=product.id,
-                            asin=product.asin,
-                            stock_level=stock_data.get("stock_level"),
-                            stock_text=stock_data.get("stock_text"),
-                            is_in_stock=stock_data.get("is_in_stock", True),
-                        )
-                        # Update product last_stock_level
-                        if stock_data.get("stock_level") is not None:
-                            product.last_stock_level = stock_data["stock_level"]
-                    except Exception as stock_err:
-                        logger.debug("Stock tracking failed for %s: %s", product.asin, stock_err)
+                await _track_one_product(product, scraper, tracker, velocity_svc)
             except Exception as e:
                 logger.warning("Failed to track product %s: %s", product.asin, e)
 
@@ -1380,6 +1381,17 @@ async def _scrape_product_details(
                         existing.weight = detail["weight"]
                     if detail.get("dimensions"):
                         existing.product_dimensions = detail["dimensions"]
+
+                    # Record an initial BSR/price snapshot at analysis time so
+                    # the history chart has a starting point before the first
+                    # 6h tracker run.
+                    from app.services.bsr_tracker import BSRTracker
+                    await BSRTracker(db).record_product_snapshot(
+                        product_id=existing.id, asin=asin,
+                        bsr=detail.get("current_bsr"), category_name=detail.get("bsr_category"),
+                        subcategory_bsr=detail.get("current_subcategory_bsr"), subcategory_name=detail.get("subcategory_name"),
+                        price=detail.get("price"),
+                    )
                     # Record stock snapshot to history
                     if detail.get("is_in_stock") is not None:
                         try:
