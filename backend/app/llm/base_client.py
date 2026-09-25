@@ -1,9 +1,42 @@
 """Abstract base class for LLM providers."""
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
 
+import httpx
+
 from app.core.exceptions import LLMError
+
+# Transport failures (timeouts, connections, 5xx) are retried; bad JSON is not.
+MAX_TRANSPORT_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 2.0
+
+# The concrete clients (QwenClient, OpenAIClient, AnthropicClient) catch every
+# exception their SDK raises — including transport errors from the underlying
+# httpx client — and re-wrap it as LLMError. That wrapping loses the original
+# exception type, so we can no longer tell "network blip" apart from "bad
+# request" by type alone. These substrings are how the underlying SDKs phrase
+# transient failures, so we match on the message instead.
+_RETRYABLE_LLM_ERROR_MARKERS = (
+    "timeout",
+    "rate limit",
+    "overloaded",
+    "connection",
+    "503",
+    "529",
+)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True if exc is a transport-class failure worth retrying."""
+    if isinstance(exc, (httpx.TransportError, httpx.HTTPStatusError, asyncio.TimeoutError)):
+        return True
+    if isinstance(exc, LLMError):
+        message = str(exc).lower()
+        return any(marker in message for marker in _RETRYABLE_LLM_ERROR_MARKERS)
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Expert system prompt — establishes the brutally realistic analyst persona
@@ -62,7 +95,7 @@ class BaseLLMClient(ABC):
         Strips markdown code fences if present.
         Retries once on parse failure with a corrective prompt.
         """
-        text = await self.generate(prompt, max_tokens, system_message=system_message)
+        text = await self._generate_with_retry(prompt, max_tokens, system_message)
         parsed = self._try_parse_json(text)
         if parsed is not None:
             return parsed
@@ -73,12 +106,34 @@ class BaseLLMClient(ABC):
             "Please fix the following and return ONLY valid JSON, no markdown fences:\n\n"
             f"{text}"
         )
-        text = await self.generate(retry_prompt, max_tokens, system_message=system_message)
+        text = await self._generate_with_retry(retry_prompt, max_tokens, system_message)
         parsed = self._try_parse_json(text)
         if parsed is not None:
             return parsed
 
         raise LLMError(f"Failed to parse LLM response as JSON after retry: {text[:200]}")
+
+    async def _generate_with_retry(
+        self,
+        prompt: str,
+        max_tokens: int,
+        system_message: str | None,
+    ) -> str:
+        """Call generate(), retrying transport-class failures with backoff."""
+        last_error: Exception | None = None
+        for attempt in range(1, MAX_TRANSPORT_ATTEMPTS + 1):
+            try:
+                return await self.generate(prompt, max_tokens, system_message=system_message)
+            except Exception as e:
+                if not _is_retryable(e):
+                    raise
+                last_error = e
+                if attempt < MAX_TRANSPORT_ATTEMPTS:
+                    # NOTE: RETRY_BACKOFF_SECONDS is read here (not captured as a
+                    # default argument) so tests can monkeypatch the module
+                    # attribute and run with zero delay.
+                    await asyncio.sleep(RETRY_BACKOFF_SECONDS * attempt)
+        raise LLMError(f"LLM call failed after {MAX_TRANSPORT_ATTEMPTS} attempts: {last_error}")
 
     @staticmethod
     def _try_parse_json(text: str) -> dict | list | None:
