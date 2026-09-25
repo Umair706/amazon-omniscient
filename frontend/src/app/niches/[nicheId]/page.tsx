@@ -10,6 +10,7 @@ import { StatCard } from "@/components/stat-card";
 import { ScoreRadar, ProfitChart, SalesChart, CompetitorBarChart } from "@/components/charts";
 import { formatCurrency } from "@/lib/utils";
 import api from "@/lib/api";
+import type { NicheDetail } from "@/types";
 import {
   TrendingUp,
   DollarSign,
@@ -22,35 +23,6 @@ import {
   Search,
 } from "lucide-react";
 
-interface NicheDetail {
-  id: number;
-  name: string;
-  keyword: string;
-  status: string;
-  opportunity_score: number | null;
-  confidence_tier: string | null;
-  demand_score: number | null;
-  competition_score: number | null;
-  revenue_score: number | null;
-  margin_score: number | null;
-  trend_score: number | null;
-  review_feasibility_score: number | null;
-  supplier_score: number | null;
-  ppc_viability_score: number | null;
-  launch_feasibility_score: number | null;
-  avg_bsr: number | null;
-  avg_price: number | null;
-  avg_rating: number | null;
-  avg_review_count: number | null;
-  total_monthly_revenue: number | null;
-  estimated_monthly_sales: number | null;
-  top_keyword_search_volume: number | null;
-  is_seasonal: boolean;
-  hard_filter_passed: boolean | null;
-  hard_filter_fail_reasons: string[];
-  analyzed_at: string | null;
-}
-
 interface ProductItem {
   id: number;
   asin: string;
@@ -60,7 +32,6 @@ interface ProductItem {
   current_bsr: number | null;
   rating: number | null;
   review_count: number;
-  main_image_url: string | null;
   image_url: string | null;
   estimated_daily_sales: number | null;
   sales_velocity_trend: string | null;
@@ -192,16 +163,17 @@ export default function NicheDetailPage() {
     return <div className="text-muted-foreground">Niche not found.</div>;
   }
 
+  const num = (v: string | number | null) => (v == null ? 0 : Number(v));
   const subScores: Record<string, number> = {
-    demand: niche.demand_score ?? 0,
-    competition: niche.competition_score ?? 0,
-    revenue: niche.revenue_score ?? 0,
-    margin: niche.margin_score ?? 0,
-    trend: niche.trend_score ?? 0,
-    review_feasibility: niche.review_feasibility_score ?? 0,
-    supplier: niche.supplier_score ?? 0,
-    ppc_viability: niche.ppc_viability_score ?? 0,
-    launch_feasibility: niche.launch_feasibility_score ?? 0,
+    demand: num(niche.demand_score),
+    competition: num(niche.competition_score),
+    revenue: num(niche.revenue_score),
+    margin: num(niche.margin_score),
+    trend: num(niche.trend_score),
+    review_feasibility: num(niche.review_feasibility_score),
+    supplier: num(niche.supplier_score),
+    ppc_viability: num(niche.ppc_viability_score),
+    launch_feasibility: num(niche.launch_feasibility_score),
   };
 
   const tabs: { id: TabId; label: string }[] = [
@@ -225,8 +197,8 @@ export default function NicheDetailPage() {
           <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
             <ArrowLeft className="h-4 w-4" /> Back
           </button>
-          <h1 className="text-3xl font-bold">{niche.name || niche.keyword}</h1>
-          <p className="text-muted-foreground mt-1">{niche.keyword}</p>
+          <h1 className="text-3xl font-bold">{niche.name}</h1>
+          <p className="text-muted-foreground mt-1">{niche.primary_keyword}</p>
         </div>
         {niche.opportunity_score != null && (
           <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
@@ -235,13 +207,19 @@ export default function NicheDetailPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard title="Avg Price" value={niche.avg_price ? formatCurrency(niche.avg_price) : "—"} icon={DollarSign} />
+        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "—"} icon={DollarSign} />
         <StatCard title="Avg BSR" value={niche.avg_bsr?.toLocaleString() || "—"} icon={TrendingUp} />
         <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} />
-        <StatCard title="Search Volume" value={niche.top_keyword_search_volume?.toLocaleString() || "—"} icon={BarChart3} />
+        <StatCard title="Search Volume" value={niche.monthly_search_volume?.toLocaleString() || "—"} icon={BarChart3} />
         <StatCard title="Avg Rating" value={niche.avg_rating ? `${niche.avg_rating}/5` : "—"} icon={Star} />
         <StatCard title="Avg Reviews" value={niche.avg_review_count?.toLocaleString() || "—"} icon={Users} />
       </div>
+
+      {niche.last_error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          Last run failed: {niche.last_error}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="border-b">
@@ -287,7 +265,7 @@ export default function NicheDetailPage() {
               ) : (
                 <div>
                   <Badge>All Passed</Badge>
-                  <p className="text-sm text-muted-foreground mt-2">All 8 hard disqualification filters passed.</p>
+                  <p className="text-sm text-muted-foreground mt-2">All 9 hard disqualification filters passed.</p>
                 </div>
               )}
             </CardContent>
@@ -371,8 +349,8 @@ export default function NicheDetailPage() {
                         </td>
                         <td className="p-4">
                           <div className="flex items-center gap-3">
-                            {(p.main_image_url || p.image_url) && (
-                              <img src={p.main_image_url || p.image_url || ""} alt="" className="w-10 h-10 rounded object-cover" />
+                            {p.image_url && (
+                              <img src={p.image_url} alt="" className="w-10 h-10 rounded object-cover" />
                             )}
                             <div className="min-w-0">
                               <a href={`/products/${p.asin}`} className="font-medium line-clamp-2 max-w-[280px] hover:text-primary transition-colors">
