@@ -84,7 +84,6 @@ quadrantChart
 - [ ] **LLM retry logic** — No retry/backoff on LLM API failures
 - [ ] **Unbounded API responses** — List endpoints return all rows with no pagination
 - [ ] **Review velocity hard filter not armed** — `market_signals.average_review_velocity_gap` exists but lifetime-average review rate is miscalibrated (~29 vs 5.0 threshold on normal listings); needs a recent-window review velocity before it can gate FAIL
-- [ ] **`track_bsr_prices` re-inserts stale values** — beat task copies `product.current_bsr` instead of re-scraping (planned fix: Part B5 of the 2026-09-25 plan)
 
 ## MEDIUM
 
@@ -93,13 +92,13 @@ quadrantChart
 - [ ] **BSR sub-category tracking** — All ASINs use same regression regardless of category
 - [ ] **Financial hardcoded rates** — `fba_calculator.py` FBA fees and referral rates are static
 - [ ] **Scraper output validation** — `scraper_service.py` has no schema validation on scraped data
-- [ ] **Proxy rotation gaps** — `proxy_manager.py` proxy errors don't trigger rotation
 - [ ] **Frontend error handling** — API errors show raw error text or fail silently
 - [ ] **No rate limiting** — No request throttling on API routes
 - [ ] **Celery beat schedule drift** — Beat schedule uses file-based store, can drift
 - [ ] **Docker health check gaps** — No health check on frontend service
 - [ ] **LLM prompt injection** — User-provided keywords injected into prompts without sanitization
-- [ ] **Amazon-as-seller never detected** — Amazon-sold pages have no seller link so `seller_id` is None; scraper should capture `sold_by_amazon` from `#merchant-info` (planned: Part C5)
+- [ ] **`/product-reviews/` requires sign-in on AU** — reviews are product-page-only (≤10/ASIN); the standalone `scrape_reviews` task saves nothing there
+- [ ] **Pacer/rotation state is per worker process** — with `concurrency=4` the aggregate request rate can be ~4× the nominal gap; consider Redis-backed pacing
 
 ## LOW
 

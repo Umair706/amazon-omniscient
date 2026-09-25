@@ -13,7 +13,7 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 
 ## What It Does
 
-1. **Scrapes & collects** Amazon search results, product pages, reviews, and BSR history using headless Playwright browsers with rotating proxies (free via proxyscrape.com or paid residential)
+1. **Scrapes & collects** Amazon search results, product pages, reviews, and BSR history using one headless Playwright browser session per analysis run (coherent persona, jittered pacing, rotating proxies free via proxyscrape.com or paid residential), preferring the official SP-API catalog/rank data when Amazon SP-API credentials are configured
 2. **Scrapes 1688.com suppliers** for real factory pricing, MOQs, and supplier ratings to feed into landed cost calculations
 3. **Analyzes competition** by scoring listing quality across 7 dimensions and detecting exploitable vulnerabilities
 4. **Estimates sales** from BSR using category-specific power-law regression models (handles both main-category and sub-category BSR)
@@ -280,7 +280,7 @@ omniscient/
 
 ---
 
-## API Endpoints (33)
+## API Endpoints (34)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -294,6 +294,7 @@ omniscient/
 | `GET` | `/api/v1/niches/{id}/reviews` | Review pain points |
 | `GET` | `/api/v1/niches/{id}/financials` | 52-week projections |
 | `GET` | `/api/v1/niches/{id}/suppliers` | Supplier data |
+| `GET` | `/api/v1/niches/scrape-health` | Scrape outcome counts, last 24 h |
 | `GET` | `/api/v1/products/{asin}` | Product detail by ASIN |
 | `GET` | `/api/v1/products/{asin}/bsr-history` | BSR time-series |
 | `GET` | `/api/v1/products/{asin}/price-history` | Price time-series |
