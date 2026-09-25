@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select, update
@@ -12,6 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.config import Settings
 from app.core.exceptions import ScrapingError
 from app.workers.celery_app import celery_app
+
+# Only imported for type hints — the real imports stay local to the
+# functions that use them (this file's existing lazy-import convention).
+if TYPE_CHECKING:
+    from app.services.bsr_tracker import BSRTracker
+    from app.services.sales_velocity_service import SalesVelocityService
+    from app.services.scraper_service import ScraperService
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +42,15 @@ COMPETITOR_REFRESH_HARD_LIMIT_SECONDS = 12 * 60
 # live BSR chart anymore.
 TRACKED_PRODUCTS_PER_NICHE = 20
 TRACKING_WINDOW_DAYS = 30
+
+
+@dataclass(frozen=True)
+class TrackingContext:
+    """Bundles the collaborators one niche's product-tracking pass shares, so per-product calls take a single object instead of three positional args."""
+
+    scraper: "ScraperService"
+    tracker: "BSRTracker"
+    velocity_svc: "SalesVelocityService"
 
 
 # ---------------------------------------------------------------------------
@@ -898,10 +916,10 @@ def track_bsr_prices(niche_id: int):
     _run_async(_track_bsr_niche_async(niche_id))
 
 
-async def _track_one_product(product, scraper, tracker, velocity_svc) -> None:
+async def _track_one_product(product, context: TrackingContext) -> None:
     """Re-scrape one product's rank/price/stock and persist all three snapshots."""
-    snapshot = await scraper.scrape_rank_snapshot(product.asin)
-    await tracker.record_product_snapshot(
+    snapshot = await context.scraper.scrape_rank_snapshot(product.asin)
+    await context.tracker.record_product_snapshot(
         product_id=product.id, asin=product.asin,
         bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
         subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
@@ -911,7 +929,7 @@ async def _track_one_product(product, scraper, tracker, velocity_svc) -> None:
         product.current_bsr = snapshot["current_bsr"]
     if snapshot["price"]:
         product.current_price = snapshot["price"]
-    await velocity_svc.record_stock_snapshot(
+    await context.velocity_svc.record_stock_snapshot(
         product_id=product.id, asin=product.asin,
         stock_level=snapshot["stock_level"], stock_text=snapshot["stock_text"], is_in_stock=snapshot["is_in_stock"],
     )
@@ -941,17 +959,22 @@ async def _track_bsr_niche_async(niche_id: int):
         )
         products = (await db.execute(stmt)).scalars().all()
 
-        tracker = BSRTracker(db)
-        scraper = ScraperService(marketplace=niche_marketplace)
-        velocity_svc = SalesVelocityService(db)
+        context = TrackingContext(
+            scraper=ScraperService(marketplace=niche_marketplace),
+            tracker=BSRTracker(db),
+            velocity_svc=SalesVelocityService(db),
+        )
 
         for product in products:
             try:
-                await _track_one_product(product, scraper, tracker, velocity_svc)
+                await _track_one_product(product, context)
+                # WHY: commit after each product, not once at the end — a hard
+                # time-limit kill mid-loop would otherwise lose every snapshot
+                # recorded so far for this niche.
+                await db.commit()
             except Exception as e:
                 logger.warning("Failed to track product %s: %s", product.asin, e)
 
-        await db.commit()
         logger.info("Tracked %d products in niche %d", len(products), niche_id)
 
 

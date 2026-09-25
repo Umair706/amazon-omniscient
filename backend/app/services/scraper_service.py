@@ -30,13 +30,19 @@ _MAX_RETRIES = 3
 class ScraperService:
     """Scrapes Amazon search results, product pages, and reviews via Playwright."""
 
+    # Amazon appends "(See Top 100 in <Category>)" right after the main
+    # rank. Stripping every "(...)" aside before matching keeps that text
+    # out of the category name without having to special-case it in the
+    # main pattern.
+    _PARENTHETICAL_ASIDE = re.compile(r"\([^)]*\)")
+
     # Amazon shows "#N in Category" for the main category and, when the
     # product also sits in a narrower sub-category, a second "#N in
-    # Category" pair right after. The lookahead stops the category name at
-    # the next "(", "#", or end of string so the "(See Top 100 in ...)"
-    # aside that Amazon inserts between the two pairs is never captured as
-    # part of the category name.
-    _BSR_PATTERN = re.compile(r"#([\d,]+)\s+in\s+([A-Za-z &',\-]+?)(?=\s*\(|\s*#|$)")
+    # Category" pair right after — on its own line in the details block's
+    # innerText(). The greedy character class naturally stops at the next
+    # "\n", "#", or the end of string, so category names can include
+    # digits, commas and slashes ("Arts, Crafts & Sewing", "3D Printing").
+    _BSR_PATTERN = re.compile(r"#([\d,]+)\s+in\s+([A-Za-z0-9 &',\-/]+)")
 
     # Ordered by reliability — the first selector that yields a positive
     # price wins. Shared by the full product-page scrape and the
@@ -151,7 +157,9 @@ class ScraperService:
         empty = {"current_bsr": None, "bsr_category": None, "current_subcategory_bsr": None, "subcategory_name": None}
         if not details_text:
             return empty
-        matches = ScraperService._BSR_PATTERN.findall(details_text)
+        # WHY: Amazon appends "(See Top 100 in <Category>)" after the main rank; drop asides before matching.
+        cleaned = ScraperService._PARENTHETICAL_ASIDE.sub(" ", details_text)
+        matches = ScraperService._BSR_PATTERN.findall(cleaned)
         if not matches:
             return empty
         parsed = dict(empty)
