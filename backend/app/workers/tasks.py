@@ -599,11 +599,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
 
+        from app.services.market_signals import apply_supplier_summary
+
         metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace)
-        if supplier_summary["count"]:
-            metrics["supplier_count"] = supplier_summary["count"]
-            metrics["best_supplier_score"] = supplier_summary["best_score"]
-            metrics["min_moq"] = supplier_summary["min_moq"]
+        apply_supplier_summary(metrics, supplier_summary)
         product_dims = _extract_avg_dimensions(detailed_products)
         supplier_data = None
         try:
@@ -1669,12 +1668,6 @@ def _build_base_metrics(
     if not metrics["estimated_monthly_sales"]:
         metrics["estimated_monthly_sales"] = 300
         logger.info("Using fallback estimated_monthly_sales: 300")
-
-    from app.services.market_signals import average_review_velocity_gap
-    from app.core.bsr_regression import BSRSalesEstimator
-    gap = average_review_velocity_gap(detailed_products, BSRSalesEstimator(marketplace=marketplace), metrics["category"])
-    if gap is not None:
-        metrics["avg_review_velocity_gap_ratio"] = gap
 
     return metrics
 

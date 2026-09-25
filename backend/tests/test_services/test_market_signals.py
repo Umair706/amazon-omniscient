@@ -1,6 +1,9 @@
+from datetime import date
+
 from app.core.bsr_regression import BSRSalesEstimator
 from app.services.market_signals import (
-    amazon_seller_pct, average_review_velocity_gap, count_strong_sellers, derive_category, summarize_suppliers,
+    amazon_seller_pct, apply_supplier_summary, average_review_velocity_gap, count_strong_sellers,
+    derive_category, summarize_suppliers,
 )
 
 PRODUCTS = [
@@ -29,9 +32,10 @@ def test_amazon_seller_pct():
 
 def test_average_review_velocity_gap_skips_products_without_dates_or_bsr():
     estimator = BSRSalesEstimator("US")
-    gap = average_review_velocity_gap(PRODUCTS, estimator, "Home & Kitchen")
-    assert gap is not None and gap > 0
-    assert average_review_velocity_gap([PRODUCTS[2]], estimator, "Home & Kitchen") is None
+    fixed_today = date(2026, 9, 25)
+    gap = average_review_velocity_gap(PRODUCTS, estimator, "Home & Kitchen", today=fixed_today)
+    assert gap == 28.94
+    assert average_review_velocity_gap([PRODUCTS[2]], estimator, "Home & Kitchen", today=fixed_today) is None
 
 
 def test_summarize_suppliers():
@@ -43,3 +47,37 @@ def test_summarize_suppliers():
     s = summarize_suppliers(suppliers, cny_to_usd_rate=10.0)
     assert s == {"count": 3, "best_score": 85, "min_moq": 100, "median_fob_usd": 2.5}
     assert summarize_suppliers([], cny_to_usd_rate=10.0) == {"count": 0, "best_score": None, "min_moq": None, "median_fob_usd": None}
+
+
+def test_summarize_suppliers_ignores_missing_scores():
+    # A supplier we couldn't score (no transaction/verification data scraped) must not look
+    # like a real score of 0 and drag down best_score.
+    suppliers = [{"supplier_name": "X", "moq": 500, "price_min": 20.0, "supplier_score": None}]
+    s = summarize_suppliers(suppliers, cny_to_usd_rate=10.0)
+    assert s["best_score"] is None
+
+
+def test_apply_supplier_summary_sets_only_known_fields():
+    metrics = {}
+    apply_supplier_summary(metrics, {"count": 3, "best_score": None, "min_moq": None, "median_fob_usd": None})
+    assert metrics == {"supplier_count": 3}
+
+
+def test_apply_supplier_summary_noop_when_no_suppliers_scraped():
+    metrics = {"best_supplier_score": 70}
+    apply_supplier_summary(metrics, {"count": 0, "best_score": None, "min_moq": None, "median_fob_usd": None})
+    assert metrics == {"best_supplier_score": 70}
+
+
+def test_apply_supplier_summary_sets_all_known_fields():
+    metrics = {}
+    apply_supplier_summary(metrics, {"count": 2, "best_score": 85, "min_moq": 100, "median_fob_usd": 2.5})
+    assert metrics == {"supplier_count": 2, "best_supplier_score": 85, "min_moq": 100}
+
+
+def test_apply_supplier_summary_never_writes_a_none_that_would_crash_scoring():
+    # Regression: an unknown min_moq must be left for ScoringService's own default (9999),
+    # never written as a literal None that a numeric comparison would blow up on.
+    metrics = {}
+    apply_supplier_summary(metrics, {"count": 2, "best_score": 60, "min_moq": None, "median_fob_usd": None})
+    assert "min_moq" not in metrics

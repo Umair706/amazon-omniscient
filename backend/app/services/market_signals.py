@@ -40,22 +40,28 @@ def amazon_seller_pct(products: list[dict], amazon_seller_id: str) -> float:
     return round(amazon_count / len(products) * 100, 1)
 
 
-def _months_listed(date_first_available) -> float | None:
+def _months_listed(date_first_available, today: date) -> float | None:
     if not date_first_available:
         return None
     try:
         listed = date_first_available if isinstance(date_first_available, date) else parse_date(str(date_first_available)).date()
     except (ValueError, OverflowError):
         return None
-    days = (datetime.now().date() - listed).days
+    days = (today - listed).days
     return max(days / DAYS_PER_MONTH, 1.0)
 
 
-def average_review_velocity_gap(products: list[dict], estimator: BSRSalesEstimator, category: str) -> float | None:
+# NOTE: not wired into the ScoringService hard filter yet. Lifetime reviews / months-listed
+# over-counts early Vine/launch review bursts, so this ratio runs far above the trap threshold
+# for perfectly normal, established products. Kept here as a pure building block for later work.
+def average_review_velocity_gap(
+    products: list[dict], estimator: BSRSalesEstimator, category: str, *, today: date | None = None,
+) -> float | None:
     """Mean reviews-per-100-sales ratio across products with a BSR and a listing date. None if no data."""
+    today = today or datetime.now().date()
     ratios = []
     for p in products:
-        months = _months_listed(p.get("date_first_available"))
+        months = _months_listed(p.get("date_first_available"), today)
         bsr = p.get("current_bsr") or p.get("bsr")
         if not months or not bsr:
             continue
@@ -73,10 +79,21 @@ def summarize_suppliers(suppliers: list[dict], cny_to_usd_rate: float) -> dict:
         return {"count": 0, "best_score": None, "min_moq": None, "median_fob_usd": None}
     moqs = [s["moq"] for s in suppliers if s.get("moq")]
     fob_usd = [round(s["price_min"] / cny_to_usd_rate, 4) for s in suppliers if s.get("price_min")]
-    scores = [s.get("supplier_score") or 0 for s in suppliers]
+    scores = [s["supplier_score"] for s in suppliers if s.get("supplier_score") is not None]
     return {
         "count": len(suppliers),
         "best_score": max(scores) if scores else None,
         "min_moq": min(moqs) if moqs else None,
         "median_fob_usd": round(median(fob_usd), 4) if fob_usd else None,
     }
+
+
+def apply_supplier_summary(metrics: dict, summary: dict) -> None:
+    """Copy scraped supplier signals into the scoring inputs, leaving defaults in place for anything unknown."""
+    if not summary.get("count"):
+        return
+    metrics["supplier_count"] = summary["count"]
+    if summary.get("best_score") is not None:
+        metrics["best_supplier_score"] = summary["best_score"]
+    if summary.get("min_moq") is not None:
+        metrics["min_moq"] = summary["min_moq"]
