@@ -7,7 +7,8 @@ signal we were sending. Residential proxies also bill per GB, so we drop images.
 
 import logging
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, Route, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.core.marketplace import MarketplaceConfig
 from app.core.proxy_manager import ProxyManager
@@ -52,7 +53,14 @@ class BrowserSession:
 
     async def __aenter__(self) -> "BrowserSession":
         self._pw = await async_playwright().start()
-        await self._open()
+        try:
+            await self._open()
+        except BaseException:
+            # NOTE: if _open() fails partway (e.g. browser launched but context
+            # creation raised) we must not leak the browser process or the driver.
+            await self._close()
+            await self._pw.stop()
+            raise
         return self
 
     async def __aexit__(self, *_exc) -> None:
@@ -71,6 +79,9 @@ class BrowserSession:
             launch_kwargs["proxy"] = self._proxy_conf
         self._browser = await self._pw.chromium.launch(**launch_kwargs)
         self.persona = build_persona(self._browser.version, self.marketplace)
+        # NOTE: routing (below) disables Playwright's HTTP cache, and a service worker
+        # can serve requests without ever going through our route handler — blocking
+        # service workers keeps should_block_request() actually effective.
         self._context = await self._browser.new_context(
             user_agent=self.persona.user_agent,
             viewport=self.persona.viewport,
@@ -78,11 +89,12 @@ class BrowserSession:
             timezone_id=self.persona.timezone_id,
             extra_http_headers={"Accept-Language": self.persona.accept_language},
             ignore_https_errors=True,
+            service_workers="block",
         )
         await self._context.add_init_script(self.persona.init_script())
         await self._context.route("**/*", self._route)
 
-    async def _route(self, route) -> None:
+    async def _route(self, route: Route) -> None:
         """Playwright request interceptor: abort blocked resource types, let everything else through."""
         request = route.request
         if should_block_request(request.resource_type, request.url):
@@ -91,6 +103,7 @@ class BrowserSession:
             await route.continue_()
 
     async def _close(self) -> None:
+        """Close the context and browser if they are open. Safe to call even if _open() never ran."""
         if self._context:
             await self._context.close()
         if self._browser:
@@ -102,6 +115,10 @@ class BrowserSession:
         self.rotations += 1
         if self.rotations > MAX_ROTATIONS_PER_SESSION:
             raise RuntimeError(f"Blocked {self.rotations} times in one session; giving up")
+        # WHY: marking a proxy failed only changes behaviour in free mode, where
+        # ProxyManager skips failed servers next time. Paid providers already get a
+        # brand-new random session id on every get_next() call, so this is a no-op
+        # safety net for them, not the mechanism that actually rotates the identity.
         if self._proxy_conf.get("username"):
             self.proxy_manager.mark_failed(self._proxy_conf["username"])
         elif self._proxy_conf.get("server"):
@@ -111,16 +128,37 @@ class BrowserSession:
         await self._open()
 
     async def load(self, url: str, expected_selector: str, wait_ms: int = 15_000) -> tuple[Page, PageVerdict]:
-        """Open url in a new tab after pacing; return the page and what kind of page it is."""
+        """Open url in a new tab after pacing; return the page and what kind of page it is.
+
+        expected_selector must be specific to this page's real content (e.g. "#productTitle"),
+        not a generic element that would also appear on a captcha or error page — otherwise
+        every page looks "ok". wait_for_selector only succeeds once the element is visible,
+        not merely present in the DOM.
+        """
+        if self._context is None:
+            raise RuntimeError(
+                "BrowserSession.load() called with no open context; use `async with` (or the last rotate() failed)"
+            )
         await pacer_for(self.site).wait_turn(self.marketplace.domain)
         page = await self._context.new_page()
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+        try:
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
+            verdict = await self._classify_loaded_page(page, response, expected_selector, wait_ms)
+        except BaseException:
+            # NOTE: the page is only ever handed to the caller on success. On any
+            # failure (timeout, proxy error, page crash) close the tab ourselves —
+            # nothing else will.
+            await page.close()
+            raise
+        return page, verdict
+
+    async def _classify_loaded_page(self, page: Page, response, expected_selector: str, wait_ms: int) -> PageVerdict:
+        """Wait for the expected content, then classify the page as ok/captcha/soft_block/server_error."""
         found = True
         try:
             await page.wait_for_selector(expected_selector, timeout=wait_ms)
-        except Exception:
+        except PlaywrightTimeoutError:
             found = False
         title = await page.title()
         body = "" if found else (await page.locator("body").inner_text())[:BODY_SAMPLE_CHARS]
-        verdict = classify_page(response.status if response else None, title, body, found)
-        return page, verdict
+        return classify_page(response.status if response else None, title, body, found)
