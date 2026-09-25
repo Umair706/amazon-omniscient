@@ -83,6 +83,8 @@ quadrantChart
 - [ ] **Missing DB indexes** — No indexes on `Product.asin`, `Review.review_id`, `NicheProduct.niche_id`
 - [ ] **LLM retry logic** — No retry/backoff on LLM API failures
 - [ ] **Unbounded API responses** — List endpoints return all rows with no pagination
+- [ ] **Review velocity hard filter not armed** — `market_signals.average_review_velocity_gap` exists but lifetime-average review rate is miscalibrated (~29 vs 5.0 threshold on normal listings); needs a recent-window review velocity before it can gate FAIL
+- [ ] **`track_bsr_prices` re-inserts stale values** — beat task copies `product.current_bsr` instead of re-scraping (planned fix: Part B5 of the 2026-09-25 plan)
 
 ## MEDIUM
 
@@ -96,8 +98,8 @@ quadrantChart
 - [ ] **No rate limiting** — No request throttling on API routes
 - [ ] **Celery beat schedule drift** — Beat schedule uses file-based store, can drift
 - [ ] **Docker health check gaps** — No health check on frontend service
-- [ ] **No DB migrations** — No Alembic setup; schema changes require manual intervention
 - [ ] **LLM prompt injection** — User-provided keywords injected into prompts without sanitization
+- [ ] **Amazon-as-seller never detected** — Amazon-sold pages have no seller link so `seller_id` is None; scraper should capture `sold_by_amazon` from `#merchant-info` (planned: Part C5)
 
 ## LOW
 
@@ -105,8 +107,6 @@ quadrantChart
 - [ ] **Inconsistent logging** — Mix of `print()` and `logger` calls
 - [ ] **No type hints on some returns** — Various service methods missing return types
 - [ ] **Dead code** — `supplier_scraper.py` has unused fallback selectors
-- [ ] **Test coverage** — No test files found anywhere in the project
-- [ ] **`.env` in repo root** — `.env` with credentials should be in `.gitignore`
 - [ ] **No graceful shutdown** — Workers have no signal handling for clean shutdown
 - [ ] **Frontend bundle size** — No code splitting or lazy loading
 - [ ] **No monitoring/alerting** — No health metrics, error rate tracking, or alerts

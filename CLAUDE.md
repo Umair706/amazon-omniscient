@@ -298,12 +298,8 @@ cd frontend && npm install && npm run dev
 
 ## Database
 
-- 14 tables, 2 hypertables (bsr_history, price_history)
-- Migrations in `backend/migrations/versions/` (4 versions)
-- Migration 001: initial schema with all tables + TimescaleDB hypertables
-- Migration 002: BSR sub-category columns + review velocity gap support
-- Migration 003: product blueprint tables
-- Migration 004: niche status tracking
+- 16 tables, 3 hypertables (bsr_history, price_history, stock_history)
+- 13 migrations in `backend/migrations/versions/`; migration 013 renames the niche score columns to the ScoringService names and adds `avg_rating`, `estimated_monthly_sales`, `last_error`
 
 ## Testing
 
@@ -314,7 +310,7 @@ pytest -v -k scoring      # just scoring tests
 pytest --cov=app          # with coverage
 ```
 
-Tests across 4 modules: scoring_service, sales_forecast, supplier_service, recommendation_engine.
+Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendation engine, and the extracted pipeline steps / market signals.
 
 ## Common patterns
 
@@ -336,10 +332,13 @@ Tests across 4 modules: scoring_service, sales_forecast, supplier_service, recom
 | `backend/app/services/supplier_scraper.py` | 1688.com supplier scraping (factory prices, MOQ, ratings) |
 | `backend/app/services/product_blueprint.py` | AI-driven complaint-based product design |
 | `backend/app/services/financial_report.py` | Consolidated P&L report with scenario analysis |
+| `backend/app/services/market_signals.py` | Pure functions deriving scoring inputs from scraped products/suppliers |
 | `backend/app/core/bsr_regression.py` | BSR-to-sales conversion model |
 | `backend/app/core/fba_calculator.py` | FBA fee estimation (storage, fulfillment, referral) |
+| `backend/app/core/category_mapping.py` | Amazon category name → duty/fee slugs |
 | `backend/app/core/proxy_manager.py` | Rotating proxy (free proxyscrape + paid BrightData/SmartProxy) |
 | `backend/app/workers/tasks.py` | Celery task definitions (full analysis pipeline) |
+| `backend/app/workers/pipeline_steps/` | Extracted pipeline steps: reviews, ppc |
 | `backend/app/llm/base_client.py` | LLM provider abstract interface |
 | `frontend/src/components/sidebar.tsx` | Navigation sidebar with active link highlighting |
 | `frontend/src/app/page.tsx` | Dashboard |

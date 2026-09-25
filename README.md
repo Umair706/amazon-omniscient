@@ -280,7 +280,7 @@ omniscient/
 
 ---
 
-## API Endpoints (28)
+## API Endpoints (33)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -306,6 +306,11 @@ omniscient/
 | `PUT` | `/api/v1/settings/` | Update credentials |
 | `GET` | `/api/v1/exports/niches/{id}/csv` | Export niche data as CSV |
 | `GET` | `/api/v1/exports/recommendations/{id}/pdf` | Export recommendation as PDF |
+| `POST` | `/api/v1/jobs/discover` | Discovery phase — detects broad keywords and proposes sub-niches |
+| `POST` | `/api/v1/jobs/analyze-sub-niche` | Full analysis of a selected sub-niche |
+| `GET` | `/api/v1/niches/{id}/velocity` | Niche-level sales velocity |
+| `GET` | `/api/v1/products/{asin}/velocity` | Product sales-velocity time-series |
+| `POST` | `/api/v1/niches/{id}/keywords/research` | Trigger keyword research |
 | `GET` | `/health` | Health check |
 
 Full interactive docs at http://localhost:8000/docs after starting the backend.
