@@ -48,7 +48,7 @@ class NicheIntelligenceService:
         competitor_details = competitor_landscape.get("competitor_details", []) if competitor_landscape else []
         high_vuln_count = sum(
             1 for c in competitor_details
-            if c.get("vulnerability") in ("high", "critical")
+            if c.get("vulnerabilities", {}).get("vulnerability_level") == "high"
         )
 
         # Inject marketplace context for non-US markets
@@ -132,8 +132,7 @@ Write a market intelligence report as JSON:
             }
             detail = detail_by_asin.get(asin, {})
             listing_scores = detail.get("listing_scores", {}) or {}
-            vulnerabilities = detail.get("vulnerabilities", []) or []
-            vuln_types = [v.get("type", "") for v in vulnerabilities if isinstance(v, dict)]
+            vuln_types = detail.get("vulnerabilities", {}).get("vulnerability_types", [])
             products_text += (
                 f"- ASIN: {asin}\n"
                 f"  Title: {(p.get('title') or 'N/A')[:100]}\n"
@@ -141,7 +140,7 @@ Write a market intelligence report as JSON:
                 f"  Rating: {p.get('rating') or '?'}\n"
                 f"  Reviews: {p.get('review_count') or '?'}\n"
                 f"  BSR: {p.get('bsr') or p.get('current_bsr') or '?'}\n"
-                f"  Listing quality: {listing_scores.get('overall', 'N/A')}/100\n"
+                f"  Listing quality: {listing_scores.get('overall_score', 'N/A')}/100\n"
                 f"  Vulnerabilities: {', '.join(vuln_types) if vuln_types else 'none'}\n"
                 f"  Has A+: {p.get('has_a_plus') or 'N/A'}\n"
                 f"  Has video: {p.get('has_video') or 'N/A'}\n"

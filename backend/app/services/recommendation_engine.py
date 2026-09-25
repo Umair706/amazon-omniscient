@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 from app.models.niche import Niche
 from app.models.recommendation import Recommendation
 from app.services.scoring_service import ScoringService
@@ -215,7 +215,7 @@ Return a JSON object:
     "comparable_opportunities": "<how this compares to typical Amazon opportunities>"
 }}"""
 
-        return await self.llm.generate_json(prompt, max_tokens=4096)
+        return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
 
     # ------------------------------------------------------------------
     # 3. Save recommendation to DB
@@ -264,7 +264,10 @@ Return a JSON object:
             subscore_breakdown=data.get("sub_scores"),
             competitor_landscape=data.get("competitor_landscape"),
             # JSONB payloads
-            marketing_channels=data.get("marketing_plan", {}).get("channels"),
+            # marketing_plan["channels"] is itself {"channels": [...]} from recommend_channels().
+            # generate_full_marketing_plan sets it to None on LLM failure, so unwrap defensively
+            # to keep the DB column an array (or null) as the frontend expects.
+            marketing_channels=((data.get("marketing_plan") or {}).get("channels") or {}).get("channels"),
             risk_flags={"fail_reasons": data.get("fail_reasons", []), "hard_filters": data.get("hard_filters", [])},
             launch_playbook=data.get("marketing_plan", {}).get("launch_playbook"),
             ppc_strategy=data.get("ppc_strategy"),
