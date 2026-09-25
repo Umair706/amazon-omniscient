@@ -460,7 +460,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                 intel_svc = NicheIntelligenceService(llm_client)
                 niche_intelligence = await intel_svc.generate_niche_overview(
                     keyword, detailed_products, competitor_landscape,
-                    _build_base_metrics(competitor_landscape, detailed_products),
+                    _build_base_metrics(competitor_landscape, detailed_products, marketplace=marketplace),
                 )
             except Exception as e:
                 logger.warning("Niche intelligence generation failed: %s", e)
@@ -567,6 +567,9 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         if scraped_suppliers:
             await _save_suppliers(db, niche_id, scraped_suppliers)
 
+        from app.services.market_signals import summarize_suppliers
+        supplier_summary = summarize_suppliers(scraped_suppliers, cny_to_usd_rate=_CNY_TO_USD_RATE)
+
         # ── Step 6a-ii: Translate Chinese supplier fields ─────────────
         if scraped_suppliers and llm_client:
             task.update_state(state="PROGRESS", meta={"step": "translating_suppliers", "progress": 57})
@@ -595,14 +598,19 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
-        from app.services.supplier_service import SupplierService
-        supplier_svc = SupplierService(marketplace=marketplace)
 
-        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary)
-        metrics["marketplace"] = marketplace
+        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace)
+        if supplier_summary["count"]:
+            metrics["supplier_count"] = supplier_summary["count"]
+            metrics["best_supplier_score"] = supplier_summary["best_score"]
+            metrics["min_moq"] = supplier_summary["min_moq"]
+        product_dims = _extract_avg_dimensions(detailed_products)
         supplier_data = None
         try:
-            supplier_data = await _analyze_suppliers(db, niche_id, metrics, marketplace=marketplace)
+            supplier_data = await _analyze_suppliers(
+                db, niche_id, metrics, marketplace=marketplace,
+                fob_unit_cost=supplier_summary["median_fob_usd"], weight_kg=product_dims["weight_lb"] * LB_TO_KG,
+            )
         except Exception as e:
             logger.warning("Supplier analysis failed: %s", e)
 
@@ -718,14 +726,17 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         financial_report = None
         try:
-            # Estimate FOB cost from landed cost (reverse-engineer)
-            fob_estimate = (metrics.get("landed_cost") or 8) * 0.55  # FOB is roughly 55% of landed
-            product_dims = _extract_avg_dimensions(detailed_products)
+            from app.core.category_mapping import category_slugs
+            duty_slug, fee_slug = category_slugs(metrics.get("category"))
             financial_report = await fin_report_svc.generate_full_report(
                 selling_price=metrics.get("avg_price") or 30,
-                unit_cost_fob=fob_estimate,
+                # Use the real scraped 1688 FOB price when we have one; otherwise fall back
+                # to a rough share of landed cost (FOB is typically ~55% of total landed cost).
+                unit_cost_fob=metrics.get("fob_unit_cost") or (metrics.get("landed_cost") or DEFAULT_LANDED_COST_USD) * FOB_SHARE_OF_LANDED_FALLBACK,
                 product_dims=product_dims,
-                category=metrics.get("category", "default"),
+                category=duty_slug,
+                fee_category=fee_slug,
+                weight_kg_per_unit=product_dims["weight_lb"] * LB_TO_KG,
                 order_quantity=metrics.get("initial_order_qty") or 500,
                 estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
                 avg_cpc=metrics.get("avg_cpc") or 1.50,
@@ -1396,40 +1407,47 @@ def _build_competitor_metadata(detailed_products: list[dict]) -> list[dict]:
     ]
 
 
-async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict, marketplace: str = "US") -> dict | None:
-    """Run supplier analysis."""
+async def _analyze_suppliers(
+    db: AsyncSession, niche_id: int, metrics: dict, marketplace: str = "US",
+    fob_unit_cost: float | None = None, weight_kg: float = 0.5,
+) -> dict | None:
+    """Landed cost + margins. Uses the median scraped 1688 FOB price when we have one."""
+    from app.core.category_mapping import category_slugs
     from app.services.supplier_service import SupplierService
 
     svc = SupplierService(marketplace=marketplace)
     avg_price = metrics.get("avg_price", 30)
+    unit_cost = fob_unit_cost or avg_price * FOB_FALLBACK_SHARE_OF_PRICE
+    if fob_unit_cost is None:
+        logger.info("No supplier prices scraped; estimating FOB as %.0f%% of price", FOB_FALLBACK_SHARE_OF_PRICE * 100)
+    duty_slug, _ = category_slugs(metrics.get("category"))
 
-    # Estimate FOB unit cost: roughly 15% of selling price
-    estimated_unit_cost = avg_price * 0.15
-
-    # Calculate landed cost (returns LandedCost dataclass)
-    landed = svc.calculate_landed_cost(
-        unit_cost=estimated_unit_cost,
-        quantity=500,
-        weight_kg=0.5,
-    )
-
-    # Calculate margins (pass LandedCost object directly)
+    landed = svc.calculate_landed_cost(unit_cost=unit_cost, quantity=500, weight_kg=weight_kg, category=duty_slug)
     margin = svc.calculate_margins(
-        selling_price=avg_price,
-        landed_cost=landed,
+        selling_price=avg_price, landed_cost=landed,
         fba_fulfillment_fee=metrics.get("fba_fees", 5),
-        ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,  # CPC / conversion rate
+        ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,
     )
-
+    metrics["fob_unit_cost"] = round(unit_cost, 4)
     metrics["landed_cost"] = landed.total_cost_to_amazon
     metrics["pre_ppc_margin_pct"] = margin["pre_ppc_margin_pct"]
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
-
     return {"landed_cost": {"total_landed_cost_usd_per_unit": landed.total_cost_to_amazon}, "margins": margin}
 
 
 # CNY to USD conversion rate
 _CNY_TO_USD_RATE = 7.2
+
+# Product weight is scraped in pounds; landed-cost/shipping math needs kilograms.
+LB_TO_KG = 0.4536
+
+# When no 1688 supplier prices were scraped, estimate FOB as this share of the average listing price.
+FOB_FALLBACK_SHARE_OF_PRICE = 0.15
+
+# FOB is typically about this share of total landed cost; used only when we have neither a
+# scraped supplier price nor a computed landed cost to work from.
+FOB_SHARE_OF_LANDED_FALLBACK = 0.55
+DEFAULT_LANDED_COST_USD = 8
 
 
 def _calculate_supplier_score(supplier: dict) -> float:
@@ -1511,6 +1529,7 @@ async def _save_suppliers(
 
         # Calculate supplier score
         score = _calculate_supplier_score(s)
+        s["supplier_score"] = score
 
         supplier = Supplier(
             niche_id=niche_id,
@@ -1538,7 +1557,27 @@ async def _save_suppliers(
     return supplier_ids
 
 
-def _build_base_metrics(competitor_landscape: dict | None, detailed_products: list[dict], keyword_research_summary: dict | None = None) -> dict:
+def _derive_product_signals(detailed_products: list[dict], marketplace: str) -> dict:
+    """Derive category, strong-seller count, Amazon-seller share, and avg rating from scraped products."""
+    from app.core.marketplace import get_marketplace
+    from app.services.market_signals import amazon_seller_pct, count_strong_sellers, derive_category
+
+    ratings = [float(p["rating"]) for p in detailed_products if p.get("rating")]
+    return {
+        "marketplace": marketplace,
+        "category": derive_category(detailed_products),
+        "strong_seller_count": count_strong_sellers(detailed_products),
+        "amazon_seller_pct": amazon_seller_pct(detailed_products, get_marketplace(marketplace).amazon_seller_id),
+        "avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else 0,
+    }
+
+
+def _build_base_metrics(
+    competitor_landscape: dict | None,
+    detailed_products: list[dict],
+    keyword_research_summary: dict | None = None,
+    marketplace: str = "US",
+) -> dict:
     """Build base metrics dict from competitor data and scraped products."""
     metrics = {
         "avg_price": 0,
@@ -1557,6 +1596,7 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
         "avg_cpc": 1.5,
         "fba_fees": 5.0,
     }
+    metrics.update(_derive_product_signals(detailed_products, marketplace))
 
     # Use real keyword research data if available
     if keyword_research_summary:
@@ -1587,8 +1627,6 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
             "avg_review_count": review_stats.get("avg", competitor_landscape.get("avg_review_count", 0)),
             "median_competitor_reviews": review_stats.get("median", competitor_landscape.get("median_reviews", 0)),
             "avg_listing_quality": competitor_landscape.get("avg_listing_quality", 50),
-            "strong_seller_count": competitor_landscape.get("strong_seller_count", 0),
-            "amazon_seller_pct": competitor_landscape.get("amazon_seller_pct", 0),
             "estimated_monthly_sales": competitor_landscape.get("estimated_monthly_sales", 0),
         })
 
@@ -1631,6 +1669,12 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
     if not metrics["estimated_monthly_sales"]:
         metrics["estimated_monthly_sales"] = 300
         logger.info("Using fallback estimated_monthly_sales: 300")
+
+    from app.services.market_signals import average_review_velocity_gap
+    from app.core.bsr_regression import BSRSalesEstimator
+    gap = average_review_velocity_gap(detailed_products, BSRSalesEstimator(marketplace=marketplace), metrics["category"])
+    if gap is not None:
+        metrics["avg_review_velocity_gap_ratio"] = gap
 
     return metrics
 

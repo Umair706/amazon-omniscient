@@ -101,6 +101,7 @@ class FinancialReportService:
         unit_cost_fob: float,
         product_dims: dict,
         category: str = "default",
+        fee_category: str | None = None,
         order_quantity: int = 500,
         weight_kg_per_unit: float = 0.5,
         shipping_method: str = "sea_fcl_20ft",
@@ -132,6 +133,9 @@ class FinancialReportService:
             Product dimensions: {length, width, height, weight_lb}.
         category : str
             Product category for duty rate lookup (e.g. "kitchen", "toys").
+        fee_category : str | None
+            Product category for the FBA referral-fee lookup, if it differs
+            from the duty category slug. Falls back to ``category`` when omitted.
         order_quantity : int
             Initial order quantity.
         weight_kg_per_unit : float
@@ -187,7 +191,7 @@ class FinancialReportService:
             width=product_dims.get("width", 6),
             height=product_dims.get("height", 4),
             weight_lb=product_dims.get("weight_lb", 1.0),
-            category=category,
+            category=fee_category or category,
         )
 
         # --- Step 3: Compute per-unit economics ---
