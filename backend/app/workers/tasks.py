@@ -463,7 +463,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # Reviews are embedded in product detail pages (top reviews section),
         # extracted during scrape_product_page(). No separate page loads needed.
         task.update_state(state="PROGRESS", meta={"step": "review_extraction", "progress": 32})
-        from app.models.review import Review as ReviewModel
+        from app.workers.pipeline_steps.reviews import save_reviews_for_product
         reviews_scraped = 0
         for detail in detailed_products[:10]:
             asin = detail.get("asin")
@@ -477,32 +477,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             if not product_obj:
                 continue
 
-            for review_data in page_reviews:
-                # Check for duplicate by review_id
-                if review_data.get("review_id"):
-                    existing = await db.execute(
-                        select(ReviewModel.id).where(
-                            ReviewModel.review_id == review_data["review_id"]
-                        ).limit(1)
-                    )
-                    if existing.scalar_one_or_none():
-                        continue
-
-                review_obj = ReviewModel(
-                    product_id=product_obj.id,
-                    asin=asin,
-                    review_id=review_data.get("review_id"),
-                    rating=review_data.get("rating", 0),
-                    title=review_data.get("title", ""),
-                    body=review_data.get("body", ""),
-                    review_date=review_data.get("review_date"),
-                    verified_purchase=review_data.get("verified_purchase", False),
-                    helpful_votes=review_data.get("helpful_votes", 0),
-                    is_vine=review_data.get("is_vine", False),
-                )
-                db.add(review_obj)
-                reviews_scraped += 1
-            await db.flush()
+            reviews_scraped += await save_reviews_for_product(db, product_obj, page_reviews)
 
         logger.info("Extracted %d reviews from product pages", reviews_scraped)
 
@@ -1022,7 +997,7 @@ def scrape_reviews(niche_id: int, asin: str, max_pages: int = 5):
 async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
     """Scrape and store reviews for a product."""
     from app.models.product import Product
-    from app.models.review import Review
+    from app.workers.pipeline_steps.reviews import save_reviews_for_product
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
@@ -1054,22 +1029,7 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
             logger.warning("Review scraping failed for %s: %s", asin, e)
             return
 
-        # Save to DB
-        saved = 0
-        for review_data in reviews_data:
-            review = Review(
-                product_id=product.id,
-                reviewer_name=review_data.get("reviewer_name", "Anonymous"),
-                rating=review_data.get("rating", 0),
-                title=review_data.get("title", ""),
-                body=review_data.get("body", ""),
-                review_date=review_data.get("date"),
-                verified_purchase=review_data.get("verified", False),
-                helpful_votes=review_data.get("helpful_votes", 0),
-            )
-            db.add(review)
-            saved += 1
-
+        saved = await save_reviews_for_product(db, product, reviews_data)
         await db.commit()
         logger.info("Saved %d reviews for ASIN %s", saved, asin)
 

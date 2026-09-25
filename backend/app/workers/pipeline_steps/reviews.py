@@ -1,6 +1,7 @@
-"""Pipeline step: collect stored reviews for a niche and run the LLM review analysis."""
+"""Pipeline step: save scraped reviews, collect stored reviews for a niche, and run the LLM review analysis."""
 
 import logging
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 # WHY: 30 reviews per ASIN keeps the blueprint/intelligence prompts under ~8K tokens.
 MAX_REVIEWS_PER_ASIN = 30
+
+UNREADABLE_RATING = 0
 
 
 async def collect_reviews_by_asin(db: AsyncSession, niche_id: int) -> dict[str, list[dict]]:
@@ -38,6 +41,45 @@ async def collect_reviews_by_asin(db: AsyncSession, niche_id: int) -> dict[str, 
             "helpful_votes": helpful or 0,
         })
     return reviews_by_asin
+
+
+async def save_reviews_for_product(db: AsyncSession, product: Product, reviews: list[dict]) -> int:
+    """Add scraped review dicts for *product* to the session. Skips review_ids already stored. Returns how many were added."""
+    saved = 0
+    for review in reviews:
+        if await _is_review_already_stored(db, review.get("review_id")):
+            continue
+        db.add(_build_review_row(product, review))
+        saved += 1
+    await db.flush()
+    return saved
+
+
+async def _is_review_already_stored(db: AsyncSession, review_id: str | None) -> bool:
+    """True when a review with this Amazon review id is already in the table."""
+    if not review_id:
+        return False
+    existing = await db.execute(select(Review.id).where(Review.review_id == review_id).limit(1))
+    return existing.scalar_one_or_none() is not None
+
+
+def _build_review_row(product: Product, review: dict) -> Review:
+    """Turn one scraped review dict (ScraperService._extract_single_review) into a Review row."""
+    review_date = review.get("review_date")
+    return Review(
+        product_id=product.id,
+        asin=product.asin,
+        review_id=review.get("review_id"),
+        # NOTE: rating is NOT NULL in the table; a card whose stars we could not read is stored as 0.
+        rating=review.get("rating") or UNREADABLE_RATING,
+        title=review.get("title") or "",
+        body=review.get("body") or "",
+        # WHY: the scraper returns ISO text, but the column is a Date and asyncpg rejects strings.
+        review_date=date.fromisoformat(review_date) if review_date else None,
+        verified_purchase=bool(review.get("verified_purchase")),
+        helpful_votes=review.get("helpful_votes") or 0,
+        is_vine=bool(review.get("is_vine")),
+    )
 
 
 def flatten_reviews(reviews_by_asin: dict[str, list[dict]]) -> list[dict]:
