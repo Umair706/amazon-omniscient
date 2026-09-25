@@ -1178,7 +1178,7 @@ async def _refresh_all_competitors_async():
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
-        stmt = select(Niche.id, Niche.keyword).where(Niche.status == "completed")
+        stmt = select(Niche.id, Niche.primary_keyword).where(Niche.status == "completed")
         result = await db.execute(stmt)
         niches = result.all()
 
