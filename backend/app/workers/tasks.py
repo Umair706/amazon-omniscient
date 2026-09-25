@@ -287,6 +287,11 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         )
         await db.commit()
 
+        if options.get("force"):
+            from app.workers.pipeline_steps.reset import reset_niche_analysis_data
+            await reset_niche_analysis_data(db, niche_id)
+            await db.commit()
+
         if product_asins:
             # ── Sub-niche flow: load products from parent niche by ASIN ──
             task.update_state(state="PROGRESS", meta={"step": "loading_products", "progress": 5})
