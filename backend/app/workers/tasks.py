@@ -5,8 +5,9 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.core.exceptions import ScrapingError
@@ -34,7 +35,7 @@ COMPETITOR_REFRESH_HARD_LIMIT_SECONDS = 12 * 60
 # Keeping a single loop alive for the process lifetime lets us keep one engine.
 # ---------------------------------------------------------------------------
 _loop: asyncio.AbstractEventLoop | None = None
-_engine = None
+_engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 WORKER_POOL_SIZE = 5
@@ -42,6 +43,7 @@ WORKER_POOL_OVERFLOW = 5
 
 
 def _get_loop() -> asyncio.AbstractEventLoop:
+    """Return the process-wide event loop, creating it on first use."""
     global _loop
     if _loop is None or _loop.is_closed():
         _loop = asyncio.new_event_loop()
@@ -63,21 +65,34 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 def _run_async(coro):
-    """Run a coroutine on the process-wide loop."""
-    return _get_loop().run_until_complete(coro)
+    """Run a coroutine on the process-wide loop. Cancels it if the run is interrupted."""
+    loop = _get_loop()
+    task = loop.create_task(coro)
+    try:
+        return loop.run_until_complete(task)
+    except BaseException:
+        # WHY: Celery's SoftTimeLimitExceeded is raised from a signal handler and escapes
+        # run_until_complete while the coroutine is still pending. Left alone it would resume
+        # on the next task that touches this loop.
+        task.cancel()
+        loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+        raise
 
 
 def _dispose_runtime() -> None:
     """Close the engine and loop. Called on worker shutdown."""
     global _engine, _session_factory, _loop
-    if _engine is not None:
-        _get_loop().run_until_complete(_engine.dispose())
-    if _loop is not None and not _loop.is_closed():
-        _loop.close()
-    _engine = _session_factory = _loop = None
+    try:
+        if _engine is not None and _loop is not None and not _loop.is_closed():
+            _loop.run_until_complete(_engine.dispose())
+    finally:
+        if _loop is not None and not _loop.is_closed():
+            _loop.close()
+        _engine = _session_factory = _loop = None
 
 
 def _reset_runtime_for_tests() -> None:
+    """Dispose the cached runtime so the next call rebuilds it from scratch."""
     _dispose_runtime()
 
 
@@ -122,6 +137,12 @@ def run_full_analysis(self, niche_id: int, keyword: str, marketplace: str = "US"
 
     try:
         return _run_async(_run_full_analysis_async(self, niche_id, keyword, options, product_asins=product_asins, marketplace=marketplace))
+    except SoftTimeLimitExceeded:
+        # A retry would just re-run the same slow pipeline and hit the same limit again,
+        # so mark the niche failed instead of retrying.
+        logger.error("Analysis for niche %d exceeded the soft time limit", niche_id)
+        _run_async(_update_niche_status(niche_id, "failed", "Timed out"))
+        raise
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
@@ -147,6 +168,12 @@ def run_discovery(self, niche_id: int, keyword: str, marketplace: str = "US", op
 
     try:
         return _run_async(_run_discovery_async(self, niche_id, keyword, options, marketplace=marketplace))
+    except SoftTimeLimitExceeded:
+        # A retry would just re-run the same slow pipeline and hit the same limit again,
+        # so mark the niche failed instead of retrying.
+        logger.error("Discovery for niche %d exceeded the soft time limit", niche_id)
+        _run_async(_update_niche_status(niche_id, "failed", "Timed out"))
+        raise
     except Exception as exc:
         logger.exception("Discovery failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
