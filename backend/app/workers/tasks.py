@@ -18,42 +18,67 @@ logger = logging.getLogger(__name__)
 # scraper/LLM exceptions can carry huge stack traces that would bloat the row.
 MAX_STORED_ERROR_CHARS = 2000
 
+# Per-task time limit overrides (seconds). These are tighter than the global
+# default in celery_app.py because a hung Playwright page load or scrape loop
+# should not be allowed to occupy a worker slot as long as a full analysis run.
+TRACKING_SOFT_LIMIT_SECONDS = 20 * 60
+TRACKING_HARD_LIMIT_SECONDS = 25 * 60
+COMPETITOR_REFRESH_SOFT_LIMIT_SECONDS = 10 * 60
+COMPETITOR_REFRESH_HARD_LIMIT_SECONDS = 12 * 60
+
 
 # ---------------------------------------------------------------------------
-# Async DB session helper — Celery workers run in sync context, so we need
-# our own engine + event loop to run async DB operations.
+# Worker runtime — one event loop and one async engine per worker *process*.
+# WHY: asyncpg pools are bound to the loop that created them. Creating a new
+# loop per task forced a new engine per task, which leaked connections.
+# Keeping a single loop alive for the process lifetime lets us keep one engine.
 # ---------------------------------------------------------------------------
+_loop: asyncio.AbstractEventLoop | None = None
+_engine = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+WORKER_POOL_SIZE = 5
+WORKER_POOL_OVERFLOW = 5
+
+
+def _get_loop() -> asyncio.AbstractEventLoop:
+    global _loop
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+    return _loop
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Create a fresh async engine + session factory for each call.
-
-    We intentionally do NOT cache the engine across calls because Celery's
-    prefork workers create new event loops for each task, and asyncpg
-    connection pools are bound to the loop that created them.
-    """
-    settings = Settings()
-    engine = create_async_engine(
-        settings.DATABASE_URL,
-        echo=False,
-        pool_size=5,
-        max_overflow=5,
-    )
-    return async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
+    """Return the process-wide session factory, creating the engine on first use."""
+    global _engine, _session_factory
+    if _session_factory is None:
+        _get_loop()
+        _engine = create_async_engine(
+            Settings().DATABASE_URL, echo=False,
+            pool_size=WORKER_POOL_SIZE, max_overflow=WORKER_POOL_OVERFLOW, pool_pre_ping=True,
+        )
+        _session_factory = async_sessionmaker(bind=_engine, class_=AsyncSession, expire_on_commit=False)
+    return _session_factory
 
 
 def _run_async(coro):
-    """Run an async coroutine in a new event loop (safe for Celery workers)."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """Run a coroutine on the process-wide loop."""
+    return _get_loop().run_until_complete(coro)
+
+
+def _dispose_runtime() -> None:
+    """Close the engine and loop. Called on worker shutdown."""
+    global _engine, _session_factory, _loop
+    if _engine is not None:
+        _get_loop().run_until_complete(_engine.dispose())
+    if _loop is not None and not _loop.is_closed():
+        _loop.close()
+    _engine = _session_factory = _loop = None
+
+
+def _reset_runtime_for_tests() -> None:
+    _dispose_runtime()
 
 
 def _get_llm_client():
@@ -819,7 +844,10 @@ async def _track_bsr_all_async():
     logger.info("Queued BSR tracking for %d niches", len(niche_ids))
 
 
-@celery_app.task(name="app.workers.tasks.track_bsr_prices", max_retries=1)
+@celery_app.task(
+    name="app.workers.tasks.track_bsr_prices", max_retries=1,
+    soft_time_limit=TRACKING_SOFT_LIMIT_SECONDS, time_limit=TRACKING_HARD_LIMIT_SECONDS,
+)
 def track_bsr_prices(niche_id: int):
     """Track BSR and prices for all products in a specific niche."""
     logger.info("Tracking BSR/prices for niche %d", niche_id)
@@ -897,7 +925,10 @@ async def _track_bsr_niche_async(niche_id: int):
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Review Scraping
 # ═══════════════════════════════════════════════════════════════════════════
-@celery_app.task(name="app.workers.tasks.scrape_reviews", max_retries=2)
+@celery_app.task(
+    name="app.workers.tasks.scrape_reviews", max_retries=2,
+    soft_time_limit=TRACKING_SOFT_LIMIT_SECONDS, time_limit=TRACKING_HARD_LIMIT_SECONDS,
+)
 def scrape_reviews(niche_id: int, asin: str, max_pages: int = 5):
     """Scrape reviews for a specific product."""
     logger.info("Scraping reviews for ASIN %s (niche %d)", asin, niche_id)
@@ -981,7 +1012,10 @@ async def _refresh_all_competitors_async():
     logger.info("Queued competitor refresh for %d niches", len(niches))
 
 
-@celery_app.task(name="app.workers.tasks.refresh_competitor_data", max_retries=1)
+@celery_app.task(
+    name="app.workers.tasks.refresh_competitor_data", max_retries=1,
+    soft_time_limit=COMPETITOR_REFRESH_SOFT_LIMIT_SECONDS, time_limit=COMPETITOR_REFRESH_HARD_LIMIT_SECONDS,
+)
 def refresh_competitor_data(niche_id: int, keyword: str):
     """Refresh competitor analysis for a single niche."""
     logger.info("Refreshing competitors for niche %d", niche_id)

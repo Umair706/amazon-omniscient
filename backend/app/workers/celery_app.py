@@ -2,6 +2,7 @@
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_process_shutdown
 
 from app.config import Settings
 
@@ -12,6 +13,10 @@ celery_app = Celery(
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
 )
+
+# A full analysis scrapes ~60 pages + ~20 LLM calls; 90 min is generous, 100 min kills a hung browser.
+DEFAULT_TASK_SOFT_TIME_LIMIT_SECONDS = 90 * 60
+DEFAULT_TASK_HARD_TIME_LIMIT_SECONDS = 100 * 60
 
 celery_app.conf.update(
     # Serialisation
@@ -27,6 +32,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     # Result expiry (24 hours)
     result_expires=86400,
+    # Default time limits — per-task overrides live next to their @celery_app.task
+    # decorators in tasks.py for tasks that should time out sooner.
+    task_soft_time_limit=DEFAULT_TASK_SOFT_TIME_LIMIT_SECONDS,
+    task_time_limit=DEFAULT_TASK_HARD_TIME_LIMIT_SECONDS,
     # Task routing
     task_routes={
         "app.workers.tasks.run_full_analysis": {"queue": "analysis"},
@@ -64,3 +73,10 @@ celery_app.conf.update(
 
 # Auto-discover tasks
 celery_app.autodiscover_tasks(["app.workers"])
+
+
+@worker_process_shutdown.connect
+def _close_worker_runtime(**_kwargs):
+    """Dispose the shared engine and event loop when a worker process exits."""
+    from app.workers.tasks import _dispose_runtime
+    _dispose_runtime()
