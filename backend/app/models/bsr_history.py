@@ -1,4 +1,4 @@
-"""BSR (Best Seller Rank) history — TimescaleDB hypertable pattern (no PK)."""
+"""BSR (Best Seller Rank) history — TimescaleDB hypertable keyed by (time, product_id, is_subcategory)."""
 
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -15,9 +15,9 @@ if TYPE_CHECKING:
 class BSRHistory(Base):
     __tablename__ = "bsr_history"
 
-    # TimescaleDB hypertable — composite PK used as surrogate since SQLAlchemy
-    # requires at least one PK column.  The real uniqueness comes from the
-    # (time, product_id) composite index which TimescaleDB uses for chunking.
+    # NOTE: the key includes is_subcategory because a product's main rank and
+    # sub-category rank are recorded with the same timestamp (migration 015).
+    # TimescaleDB requires the time column to be part of any unique key.
     __table_args__ = (
         Index("ix_bsr_history_time_product", "time", "product_id"),
         {"implicit_returning": False},
@@ -36,7 +36,7 @@ class BSRHistory(Base):
     category_id: Mapped[str | None] = mapped_column(String(50))
     category_name: Mapped[str | None] = mapped_column(String(255))
     is_subcategory: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
+        Boolean, nullable=False, server_default="false", primary_key=True
     )
 
     # ----- Relationships -----
