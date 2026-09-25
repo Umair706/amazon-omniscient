@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # WHY: 30 reviews per ASIN keeps the blueprint/intelligence prompts under ~8K tokens.
 MAX_REVIEWS_PER_ASIN = 30
 
+# WHY: reviews.rating is NOT NULL, so a card whose stars we could not read is stored as 0 (never a real rating).
 UNREADABLE_RATING = 0
 
 
@@ -65,21 +66,30 @@ async def _is_review_already_stored(db: AsyncSession, review_id: str | None) -> 
 
 def _build_review_row(product: Product, review: dict) -> Review:
     """Turn one scraped review dict (ScraperService._extract_single_review) into a Review row."""
-    review_date = review.get("review_date")
     return Review(
         product_id=product.id,
         asin=product.asin,
         review_id=review.get("review_id"),
-        # NOTE: rating is NOT NULL in the table; a card whose stars we could not read is stored as 0.
         rating=review.get("rating") or UNREADABLE_RATING,
         title=review.get("title") or "",
         body=review.get("body") or "",
-        # WHY: the scraper returns ISO text, but the column is a Date and asyncpg rejects strings.
-        review_date=date.fromisoformat(review_date) if review_date else None,
+        review_date=_parse_iso_date(review.get("review_date")),
         verified_purchase=bool(review.get("verified_purchase")),
         helpful_votes=review.get("helpful_votes") or 0,
         is_vine=bool(review.get("is_vine")),
     )
+
+
+def _parse_iso_date(date_text: str | None) -> date | None:
+    """Turn the scraper's ISO date text into a date. None when it is missing or not ISO."""
+    # WHY: the column is a Date and asyncpg rejects strings, so the text must be converted here.
+    if not date_text:
+        return None
+    try:
+        return date.fromisoformat(date_text)
+    except ValueError:
+        logger.debug("Review date %r is not ISO (YYYY-MM-DD); storing no date", date_text)
+        return None
 
 
 def flatten_reviews(reviews_by_asin: dict[str, list[dict]]) -> list[dict]:

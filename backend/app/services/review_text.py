@@ -8,6 +8,9 @@ _DATE_AFTER_ON = re.compile(r"\bon\s+(.+?)\s*$")
 
 # WHY: AU/UK pages write the day first ("28 July 2026"); US pages write the
 # month first ("March 12, 2026"). We try both.
+# NOTE: %B only reads English month names (and depends on the process locale,
+# which is the default "C" locale in our containers). A German or Japanese
+# marketplace date gives None, not an error.
 _REVIEW_DATE_FORMATS = ("%d %B %Y", "%B %d, %Y")
 
 _HELPFUL_COUNT = re.compile(r"([\d,]+)")

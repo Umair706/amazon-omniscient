@@ -65,6 +65,8 @@ _PAGE_REVIEW_CARD_SELECTOR = (
     '#reviewsMedley div[data-hook="review"], '
     'div[id^="customer_review-"]'
 )
+# WHY: the product page shows about 10-13 top reviews. 10 per ASIN is enough for the
+# pain-point prompt and keeps one page from dominating the niche's review set.
 _MAX_PAGE_REVIEWS = 10
 
 # Selectors inside one review card, tried in order. Older pages use
@@ -109,15 +111,22 @@ class ScraperService:
     # product also sits in a narrower sub-category, a second pair right after.
     # Older pages write "#N"; the 2026 template drops the "#" and, read with
     # text_content(), puts no line break between the two pairs.
-    # WHY: category names can contain digits ("3D Printing"), so we cannot
-    # stop the category at the first digit. Instead the category is matched
-    # lazily and ends only where the next "<rank> in " pair starts, or at a
-    # line break, a "#", or the end of the text.
+    # WHY: category names can contain digits ("3D Printing"), accents
+    # ("Wall Décor") and curly apostrophes ("Men’s Watches"), so the category
+    # is "anything but a line break, # or (" rather than a list of allowed
+    # letters. A fixed letter list made a whole rank pair vanish on one odd
+    # character, and the sub-rank was then reported as the main BSR.
+    # The category is matched lazily and ends where the next "<rank> in "
+    # pair starts, or at a line break, a "#", a "(", or the end of the text.
     _BSR_PATTERN = re.compile(
         r"#?(\d[\d,]*)\s+in\s+"
-        r"([A-Za-z0-9 &',\-/]+?)"
-        r"(?=\s*#?\d[\d,]*\s+in\s|\s*[\n#]|\s*$)"
+        r"([^\n#(]+?)"
+        r"(?=\s*#?\d[\d,]*\s+in\s|\s*[\n#(]|\s*$)"
     )
+
+    # WHY: a whole details block also has rows like "Size 12 in Black".
+    # Parsing only from this label onwards keeps those from looking like ranks.
+    BSR_LABEL = "best sellers rank"
 
     # Ordered by reliability — the first selector that yields a positive
     # price wins. Shared by the full product-page scrape and the
@@ -293,8 +302,9 @@ class ScraperService:
         empty = {"current_bsr": None, "bsr_category": None, "current_subcategory_bsr": None, "subcategory_name": None}
         if not details_text:
             return empty
+        rank_text = ScraperService._text_from_bsr_label(details_text)
         # WHY: Amazon appends "(See Top 100 in <Category>)" after the main rank; drop asides before matching.
-        cleaned = ScraperService._PARENTHETICAL_ASIDE.sub(" ", details_text)
+        cleaned = ScraperService._PARENTHETICAL_ASIDE.sub(" ", rank_text)
         matches = ScraperService._BSR_PATTERN.findall(cleaned)
         if not matches:
             return empty
@@ -305,6 +315,14 @@ class ScraperService:
             parsed["current_subcategory_bsr"] = ScraperService._safe_int(matches[1][0])
             parsed["subcategory_name"] = matches[1][1].strip()
         return parsed
+
+    @staticmethod
+    def _text_from_bsr_label(details_text: str) -> str:
+        """The text from the "Best Sellers Rank" label onwards, or all of it when the label is absent."""
+        label = re.search(re.escape(ScraperService.BSR_LABEL), details_text, re.IGNORECASE)
+        if label is None:
+            return details_text
+        return details_text[label.start():]
 
     # ------------------------------------------------------------------
     # 1. Search results scraper

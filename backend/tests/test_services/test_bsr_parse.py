@@ -87,6 +87,37 @@ def test_parse_bsr_text_splits_hashless_ranks_without_an_aside():
     }
 
 
+def _ranks(text: str) -> tuple:
+    parsed = ScraperService.parse_bsr_text(text)
+    return (parsed["current_bsr"], parsed["bsr_category"], parsed["current_subcategory_bsr"], parsed["subcategory_name"])
+
+
+def test_parse_bsr_text_keeps_accented_main_category():
+    text = "#2,345 in Wall Décor Accents (See Top 100)\n#12 in Garlic Presses"
+    assert _ranks(text) == (2345, "Wall Décor Accents", 12, "Garlic Presses")
+
+
+def test_parse_bsr_text_keeps_curly_apostrophe_in_sub_category():
+    text = "#2,345 in Home & Kitchen (See Top 100 in Home & Kitchen)\n#12 in Men’s Watches"
+    assert _ranks(text) == (2345, "Home & Kitchen", 12, "Men’s Watches")
+
+
+def test_parse_bsr_text_keeps_accented_sub_category():
+    text = "#2,345 in Home & Kitchen (See Top 100 in Home & Kitchen)\n#12 in Wall Décor"
+    assert _ranks(text) == (2345, "Home & Kitchen", 12, "Wall Décor")
+
+
+def test_parse_bsr_text_reads_a_rank_glued_to_the_label():
+    text = "Best Sellers Rank118 in Kitchen & Dining (See Top 100 in Kitchen & Dining) 1 in Garlic Presses"
+    assert _ranks(text) == (118, "Kitchen & Dining", 1, "Garlic Presses")
+
+
+def test_parse_bsr_text_ignores_rank_like_rows_before_the_label():
+    # A whole details block: "Size 12 in Black" is not a rank.
+    text = "Size\n12 in Black\nBest Sellers Rank 2,345 in Home & Kitchen\n#12 in Garlic Presses"
+    assert _ranks(text) == (2345, "Home & Kitchen", 12, "Garlic Presses")
+
+
 def test_parse_bsr_text_keeps_digits_in_a_hashless_category():
     parsed = ScraperService.parse_bsr_text(HASHLESS_DIGIT_CATEGORY)
     assert parsed == {

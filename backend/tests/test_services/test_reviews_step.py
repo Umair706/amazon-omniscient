@@ -54,6 +54,13 @@ async def test_save_reviews_for_product_skips_review_ids_already_stored():
     assert db.add.call_args.args[0].review_id == "R9W51ZVQXG7F3"
 
 
+async def test_save_reviews_for_product_stores_no_date_when_the_date_text_is_not_iso():
+    db = _fake_db([False])
+    garbled = {**SCRAPED_REVIEW, "review_date": "28 July 2026"}
+    await save_reviews_for_product(db, SimpleNamespace(id=7, asin="B00HEZ888K"), [garbled])
+    assert db.add.call_args.args[0].review_date is None
+
+
 async def test_save_reviews_for_product_keeps_a_review_without_a_date():
     db = _fake_db([False])
     undated = {**SCRAPED_REVIEW, "review_date": None}
