@@ -413,36 +413,25 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         if competitor_landscape:
             competitor_landscape["marketplace"] = marketplace
 
-        # ── Step 4: Analyze reviews (top 10 products) ──────────────────
+        # ── Step 4: Collect reviews + sentiment/pain-point analysis ─────
         task.update_state(state="PROGRESS", meta={"step": "review_analysis", "progress": 38})
         from app.services.review_analyzer import ReviewAnalyzer
-        review_analyzer = ReviewAnalyzer(llm_client)
+        from app.workers.pipeline_steps.reviews import collect_reviews_by_asin, flatten_reviews, run_review_analysis
 
-        review_insights = None
-        all_reviews = await _collect_reviews(db, niche_id)
-        if all_reviews:
-            try:
-                review_insights = await review_analyzer.analyze_reviews(all_reviews)
-            except Exception as e:
-                logger.warning("Review analysis failed: %s", e)
+        competitor_reviews_map = await collect_reviews_by_asin(db, niche_id)
+        review_insights = await run_review_analysis(llm_client, competitor_reviews_map, keyword)
 
         # ── Step 4b: Review Intelligence (deep cross-product synthesis) ──
         task.update_state(state="PROGRESS", meta={"step": "review_intelligence", "progress": 42})
         review_intelligence = None
-        competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
         product_titles_map = {
             p.get("asin", ""): p.get("title", "")
             for p in detailed_products if p.get("asin")
         }
         if competitor_reviews_map and llm_client:
             try:
-                # Build flat list of all review dicts for the intelligence method
-                all_review_dicts = []
-                for reviews_list in competitor_reviews_map.values():
-                    all_review_dicts.extend(reviews_list)
-
-                review_intelligence = await review_analyzer.generate_review_intelligence(
-                    all_reviews=all_review_dicts,
+                review_intelligence = await ReviewAnalyzer(llm_client).generate_review_intelligence(
+                    all_reviews=flatten_reviews(competitor_reviews_map),
                     product_reviews=competitor_reviews_map,
                     niche_keyword=keyword,
                     product_titles=product_titles_map,
@@ -484,9 +473,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         blueprint_svc = ProductBlueprintService(llm_client)
 
         product_blueprint = None
-        # competitor_reviews_map already collected in step 4b above
-        if not competitor_reviews_map:
-            competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
+        # competitor_reviews_map already collected in step 4 above
         competitor_meta = _build_competitor_metadata(detailed_products)
         if competitor_reviews_map:
             try:
@@ -1333,52 +1320,6 @@ async def _scrape_product_details(
 
     await db.commit()
     return detailed
-
-
-async def _collect_reviews(db: AsyncSession, niche_id: int) -> list[str]:
-    """Collect review text from DB for a niche."""
-    from app.models.product import Product
-    from app.models.review import Review
-
-    stmt = (
-        select(Review.body)
-        .join(Product, Review.product_id == Product.id)
-        .where(Product.niche_id == niche_id)
-        .limit(200)
-    )
-    result = await db.execute(stmt)
-    return [row[0] for row in result.all() if row[0]]
-
-
-async def _collect_competitor_reviews(db: AsyncSession, niche_id: int) -> dict[str, list[dict]]:
-    """Collect reviews grouped by ASIN for all products in a niche."""
-    from app.models.product import Product
-    from app.models.review import Review
-
-    stmt = (
-        select(Product.asin, Review.rating, Review.title, Review.body, Review.verified_purchase, Review.helpful_votes)
-        .join(Review, Review.product_id == Product.id)
-        .where(Product.niche_id == niche_id)
-        .order_by(Product.asin, Review.helpful_votes.desc())
-    )
-    result = await db.execute(stmt)
-    rows = result.all()
-
-    reviews_by_asin: dict[str, list[dict]] = {}
-    for asin, rating, title, body, verified, helpful in rows:
-        if asin not in reviews_by_asin:
-            reviews_by_asin[asin] = []
-        # Cap at 30 reviews per ASIN to stay within LLM context limits
-        if len(reviews_by_asin[asin]) < 30:
-            reviews_by_asin[asin].append({
-                "rating": rating,
-                "title": title,
-                "body": body,
-                "verified_purchase": verified,
-                "helpful_votes": helpful or 0,
-            })
-
-    return reviews_by_asin
 
 
 def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
