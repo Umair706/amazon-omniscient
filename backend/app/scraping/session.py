@@ -64,9 +64,13 @@ class BrowserSession:
         return self
 
     async def __aexit__(self, *_exc) -> None:
-        await self._close()
-        if self._pw:
-            await self._pw.stop()
+        # WHY: if closing the browser fails, Playwright must still be stopped,
+        # or its driver process leaks for the life of the worker.
+        try:
+            await self._close()
+        finally:
+            if self._pw:
+                await self._pw.stop()
 
     async def _open(self) -> None:
         """Launch a browser behind the current proxy and attach a fresh persona + request filter."""

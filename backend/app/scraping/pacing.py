@@ -26,6 +26,9 @@ class Pacer:
             self._last_request[domain] = time.monotonic()
 
 
+# NOTE: this registry lives in one worker process. With Celery concurrency=4
+# there are four of them, so the combined request rate to one domain can be
+# about 4x the gap configured here.
 _PACERS = {
     "amazon": Pacer(*AMAZON_GAP_SECONDS),
     "1688": Pacer(*ALIBABA_GAP_SECONDS),

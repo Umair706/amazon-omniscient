@@ -265,7 +265,7 @@ export default function NicheDetailPage() {
               ) : (
                 <div>
                   <Badge>All Passed</Badge>
-                  <p className="text-sm text-muted-foreground mt-2">All 9 hard disqualification filters passed.</p>
+                  <p className="text-sm text-muted-foreground mt-2">All hard disqualification filters passed.</p>
                 </div>
               )}
             </CardContent>

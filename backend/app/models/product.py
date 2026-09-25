@@ -24,7 +24,7 @@ class Product(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     asin: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
     niche_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("niches.id", ondelete="SET NULL")
+        BigInteger, ForeignKey("niches.id", ondelete="SET NULL"), index=True
     )
     title: Mapped[str | None] = mapped_column(Text)
     brand: Mapped[str | None] = mapped_column(String(255))

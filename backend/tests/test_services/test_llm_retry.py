@@ -87,3 +87,37 @@ def test_is_retryable_true_for_rate_limit_marker():
 
 def test_is_retryable_false_for_json_parse_failure():
     assert _is_retryable(LLMError("Failed to parse LLM response as JSON after retry: ...")) is False
+
+
+def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://llm.example/v1/chat")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+@pytest.mark.parametrize("status_code, expected", [(401, False), (400, False), (429, True), (500, True), (503, True)])
+def test_is_retryable_for_http_status_only_on_rate_limit_or_server_error(status_code, expected):
+    assert _is_retryable(_http_status_error(status_code)) is expected
+
+
+def test_wrapped_401_is_not_retried_even_though_its_text_looks_transient():
+    try:
+        raise LLMError("connection refused by gateway") from _http_status_error(401)
+    except LLMError as wrapped:
+        assert _is_retryable(wrapped) is False
+
+
+async def test_generate_json_does_not_retry_a_bad_api_key(monkeypatch):
+    monkeypatch.setattr("app.llm.base_client.RETRY_BACKOFF_SECONDS", 0)
+
+    class UnauthorisedClient(BaseLLMClient):
+        calls = 0
+
+        async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None):
+            self.calls += 1
+            raise _http_status_error(401)
+
+    client = UnauthorisedClient()
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.generate_json("hi")
+    assert client.calls == 1

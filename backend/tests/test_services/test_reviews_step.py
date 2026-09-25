@@ -2,7 +2,10 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from sqlalchemy.dialects import postgresql
+
 from app.workers.pipeline_steps.reviews import (
+    collect_reviews_by_asin,
     flatten_reviews,
     run_review_analysis,
     save_reviews_for_product,
@@ -92,3 +95,14 @@ async def test_run_review_analysis_passes_dicts_and_keyword_to_llm():
 async def test_run_review_analysis_returns_none_without_reviews_or_llm():
     assert await run_review_analysis(None, REVIEWS_BY_ASIN, keyword="x") is None
     assert await run_review_analysis(AsyncMock(), {}, keyword="x") is None
+
+
+async def test_collect_reviews_by_asin_leaves_out_reviews_with_unreadable_stars():
+    result = MagicMock()
+    result.all.return_value = []
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+    await collect_reviews_by_asin(db, niche_id=3)
+    query = db.execute.call_args.args[0]
+    sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "reviews.rating != 0" in sql

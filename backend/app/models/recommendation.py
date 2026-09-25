@@ -22,6 +22,7 @@ class Recommendation(Base):
         BigInteger,
         ForeignKey("niches.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
     # Core scores

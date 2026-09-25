@@ -70,7 +70,11 @@ class AnalyzeKeywordRequest(BaseModel):
     @classmethod
     def normalise_keyword(cls, v: str) -> str:
         # WHY: the keyword is interpolated into LLM prompts and URLs; collapse whitespace/control chars.
-        return " ".join(v.split())
+        v = " ".join(v.split())
+        # NOTE: min_length ran before collapsing, so "   " got past it.
+        if not v:
+            raise ValueError("keyword must not be blank")
+        return v
 
 
 class AnalyzeSubNicheRequest(BaseModel):

@@ -11,6 +11,8 @@ from app.core.exceptions import LLMError
 # Transport failures (timeouts, connections, 5xx) are retried; bad JSON is not.
 MAX_TRANSPORT_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 2.0
+HTTP_TOO_MANY_REQUESTS = 429
+HTTP_FIRST_SERVER_ERROR = 500
 
 # The concrete clients (QwenClient, OpenAIClient, AnthropicClient) catch every
 # exception their SDK raises — including transport errors from the underlying
@@ -40,7 +42,6 @@ def _transient_sdk_error_types() -> tuple[type[BaseException], ...]:
     """
     types: list[type[BaseException]] = [
         httpx.TransportError,
-        httpx.HTTPStatusError,
         asyncio.TimeoutError,
     ]
     try:
@@ -68,8 +69,24 @@ def _transient_sdk_error_types() -> tuple[type[BaseException], ...]:
     return tuple(types)
 
 
+def _find_http_status_error(exc: Exception) -> httpx.HTTPStatusError | None:
+    """The httpx status error behind exc (itself or its wrapped cause), if any."""
+    for candidate in (exc, exc.__cause__):
+        if isinstance(candidate, httpx.HTTPStatusError):
+            return candidate
+    return None
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    """429 (rate limited) and 5xx (server trouble) can pass; other 4xx, like a bad API key, never will."""
+    return status_code == HTTP_TOO_MANY_REQUESTS or status_code >= HTTP_FIRST_SERVER_ERROR
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Return True if exc is a transport-class failure worth retrying."""
+    http_error = _find_http_status_error(exc)
+    if http_error is not None:
+        return _is_retryable_status(http_error.response.status_code)
     transient_types = _transient_sdk_error_types()
     if isinstance(exc, transient_types) or isinstance(exc.__cause__, transient_types):
         return True

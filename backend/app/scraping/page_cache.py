@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 SERP_TTL_SECONDS = 6 * 3600
 PRODUCT_TTL_SECONDS = 24 * 3600
-_TTL_BY_KIND = {"serp": SERP_TTL_SECONDS, "product": PRODUCT_TTL_SECONDS, "serp_meta": SERP_TTL_SECONDS}
+_TTL_BY_KIND = {"serp": SERP_TTL_SECONDS, "product": PRODUCT_TTL_SECONDS}
 
 
 class PageCache:

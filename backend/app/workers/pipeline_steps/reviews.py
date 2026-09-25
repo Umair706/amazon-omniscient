@@ -20,11 +20,16 @@ UNREADABLE_RATING = 0
 
 
 async def collect_reviews_by_asin(db: AsyncSession, niche_id: int) -> dict[str, list[dict]]:
-    """Return {asin: [review dicts]} for every product in the niche, most helpful first."""
+    """Return {asin: [review dicts]} for every product in the niche, most helpful first.
+
+    Reviews whose star rating could not be read are left out: the LLM would
+    otherwise treat them as 0-star complaints.
+    """
     stmt = (
         select(Product.asin, Review.rating, Review.title, Review.body, Review.verified_purchase, Review.helpful_votes)
         .join(Review, Review.product_id == Product.id)
         .where(Product.niche_id == niche_id)
+        .where(Review.rating != UNREADABLE_RATING)
         .order_by(Product.asin, Review.helpful_votes.desc())
     )
     rows = (await db.execute(stmt)).all()
