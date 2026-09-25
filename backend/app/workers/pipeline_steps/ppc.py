@@ -14,6 +14,26 @@ DEFAULT_DAILY_BUDGET = 30.0
 TOP_KEYWORDS_SHOWN = 10
 
 
+async def _generate_llm_narrative(
+    ppc_svc: PPCService, *, keyword: str, portfolio: dict, budget_plan: dict, break_even: dict,
+    competitor_landscape: dict | None,
+) -> dict | None:
+    """Optional LLM commentary on the plan. Returns None when no LLM is configured or the call fails."""
+    if not ppc_svc.llm:
+        return None
+    try:
+        return await ppc_svc.generate_ppc_strategy(
+            niche_keyword=keyword,
+            keyword_portfolio=portfolio,
+            budget_plan=budget_plan,
+            break_even_acos=break_even,
+            competitor_landscape=competitor_landscape,
+        )
+    except Exception as e:
+        logger.warning("LLM PPC strategy failed: %s", e)
+        return None
+
+
 async def build_ppc_strategy(
     ppc_svc: PPCService, *, niche_id: int, keyword: str, metrics: dict, competitor_landscape: dict | None,
 ) -> dict:
@@ -33,18 +53,10 @@ async def build_ppc_strategy(
     )
     await ppc_svc.save_ppc_keywords(niche_id, portfolio)
 
-    llm_strategy = None
-    if ppc_svc.llm:
-        try:
-            llm_strategy = await ppc_svc.generate_ppc_strategy(
-                niche_keyword=keyword,
-                keyword_portfolio=portfolio,
-                budget_plan=budget_plan,
-                break_even_acos=break_even,
-                competitor_landscape=competitor_landscape,
-            )
-        except Exception as e:
-            logger.warning("LLM PPC strategy failed: %s", e)
+    llm_strategy = await _generate_llm_narrative(
+        ppc_svc, keyword=keyword, portfolio=portfolio, budget_plan=budget_plan,
+        break_even=break_even, competitor_landscape=competitor_landscape,
+    )
 
     return {
         **budget_plan,
