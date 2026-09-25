@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from app.services.bsr_tracker import BSRTracker
     from app.services.sales_velocity_service import SalesVelocityService
     from app.services.scraper_service import ScraperService
+    from app.services.spapi_service import SPAPIService
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,16 @@ COMPETITOR_REFRESH_HARD_LIMIT_SECONDS = 12 * 60
 TRACKED_PRODUCTS_PER_NICHE = 20
 TRACKING_WINDOW_DAYS = 30
 
+# A product this low on stock can sell out (and its price/BSR swing) before the next
+# 6h tracker run, so it earns a real page scrape even when SP-API is the BSR source.
+LOW_STOCK_THRESHOLD = 20
+
+# A thinner SP-API catalog search result is less complete than the SERP itself, so we
+# only trust it standalone at or above this size.
+MIN_SPAPI_SEARCH_RESULTS = 10
+SERP_FALLBACK_PAGES = 3
+SERP_ENRICHMENT_PAGES = 1
+
 
 @dataclass(frozen=True)
 class TrackingContext:
@@ -53,6 +64,9 @@ class TrackingContext:
     scraper: "ScraperService"
     tracker: "BSRTracker"
     velocity_svc: "SalesVelocityService"
+    # None when SP-API isn't configured for this niche's marketplace — BSR then always
+    # comes from scrape_rank_snapshot instead.
+    spapi: "SPAPIService | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +279,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
         # ── Step 1: Scrape search results ──────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-        products_data = await _scrape_search_results(scraper, keyword)
+        products_data = await _scrape_search_results(scraper, keyword, marketplace)
 
         if not products_data:
             await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -415,7 +429,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # ── Step 1: Scrape search results ──────────────────────────────
             task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-            products_data = await _scrape_search_results(scraper, keyword)
+            products_data = await _scrape_search_results(scraper, keyword, marketplace)
 
             if not products_data:
                 await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -948,8 +962,42 @@ def track_bsr_prices(niche_id: int):
 
 
 async def _track_one_product(product, context: TrackingContext) -> None:
-    """Re-scrape one product's rank/price/stock and persist all three snapshots."""
+    """Re-scrape one product's rank/price/stock and persist all three snapshots.
+
+    WHY: when SP-API is configured, BSR comes from the Catalog API — free of scraping
+    risk, but with no price or stock. The page itself is only scraped on top of that when
+    the product was already low on stock, since that is the case where price/stock can
+    move before the next tracker run and are worth the extra page load.
+    """
+    if context.spapi is not None:
+        await _track_bsr_via_spapi(product, context)
+        if product.last_stock_level is not None and product.last_stock_level < LOW_STOCK_THRESHOLD:
+            page_snapshot = await context.scraper.scrape_rank_snapshot(product.asin)
+            await _record_snapshot(product, context, page_snapshot)
+        return
+
     snapshot = await context.scraper.scrape_rank_snapshot(product.asin)
+    await _record_snapshot(product, context, snapshot)
+
+
+async def _track_bsr_via_spapi(product, context: TrackingContext) -> None:
+    """Record BSR from the SP-API Catalog API. Does not touch stock history — SP-API has
+    no stock data, and recording a fabricated "in stock" observation would corrupt the
+    real stockout signal the velocity service reads from that history.
+    """
+    snapshot = await context.spapi.get_rank_snapshot(product.asin)
+    await context.tracker.record_product_snapshot(
+        product_id=product.id, asin=product.asin,
+        bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
+        subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
+        price=snapshot["price"],
+    )
+    if snapshot["current_bsr"]:
+        product.current_bsr = snapshot["current_bsr"]
+
+
+async def _record_snapshot(product, context: TrackingContext, snapshot: dict) -> None:
+    """Persist one page-scraped rank/price/stock snapshot and update the product row."""
     await context.tracker.record_product_snapshot(
         product_id=product.id, asin=product.asin,
         bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
@@ -975,6 +1023,7 @@ async def _track_bsr_niche_async(niche_id: int):
     from app.services.bsr_tracker import BSRTracker
     from app.services.sales_velocity_service import SalesVelocityService
     from app.services.scraper_service import ScraperService
+    from app.workers.pipeline_steps.product_source import product_source_for
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
@@ -990,22 +1039,40 @@ async def _track_bsr_niche_async(niche_id: int):
         )
         products = (await db.execute(stmt)).scalars().all()
 
-        # WHY: one browser session per niche, shared by every product page load.
-        async with _build_browser_session(niche_marketplace) as browser:
-            context = TrackingContext(
-                scraper=ScraperService(
-                    proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
-                    # WHY page_cache=None: this scraper only calls scrape_rank_snapshot(),
-                    # which never reads the cache — a fresh BSR/price/stock read is the
-                    # whole point of the tracker, so it must never see a stale page.
-                    page_cache=None, event_sink=session_factory,
-                ),
-                tracker=BSRTracker(db),
-                velocity_svc=SalesVelocityService(db),
-            )
-            await _track_products(db, products, context)
+        settings = Settings()
+        spapi = _build_spapi_client(settings, niche_marketplace) if product_source_for(settings) == "spapi" else None
+
+        try:
+            # WHY: one browser session per niche, shared by every product page load.
+            async with _build_browser_session(niche_marketplace) as browser:
+                context = TrackingContext(
+                    scraper=ScraperService(
+                        proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                        # WHY page_cache=None: this scraper only calls scrape_rank_snapshot(),
+                        # which never reads the cache — a fresh BSR/price/stock read is the
+                        # whole point of the tracker, so it must never see a stale page.
+                        page_cache=None, event_sink=session_factory,
+                    ),
+                    tracker=BSRTracker(db),
+                    velocity_svc=SalesVelocityService(db),
+                    spapi=spapi,
+                )
+                await _track_products(db, products, context)
+        finally:
+            if spapi is not None:
+                await spapi.close()
 
         logger.info("Tracked %d products in niche %d", len(products), niche_id)
+
+
+def _build_spapi_client(settings: Settings, marketplace: str) -> "SPAPIService":
+    """Build one SP-API client for a niche's tracking run. Caller must close it."""
+    from app.services.spapi_service import SPAPIService
+
+    return SPAPIService(
+        client_id=settings.SP_API_CLIENT_ID, client_secret=settings.SP_API_CLIENT_SECRET,
+        refresh_token=settings.SP_API_REFRESH_TOKEN, marketplace=marketplace,
+    )
 
 
 async def _track_products(db: AsyncSession, products: list, context: TrackingContext) -> None:
@@ -1270,13 +1337,55 @@ async def _update_niche_status(niche_id: int, status: str, error: str | None = N
         await db.commit()
 
 
-async def _scrape_search_results(scraper: "ScraperService", keyword: str) -> list[dict]:
-    """Scrape Amazon search results for a keyword. Returns [] if scraping fails."""
+async def _scrape_search_results(scraper: "ScraperService", keyword: str, marketplace: str) -> list[dict]:
+    """Return search-result product dicts for *keyword*.
+
+    Prefers SP-API catalog search (legal, unblockable) when credentials are configured,
+    enriched with price/rating/badges from page 1 of the SERP. Falls back to a full
+    3-page SERP scrape when SP-API isn't configured, errors, or returns too few results
+    to trust on its own. Returns [] if that fallback scrape also fails.
+    """
+    from app.workers.pipeline_steps.product_source import product_source_for
+
+    if product_source_for(Settings()) == "spapi":
+        spapi_products = await _search_via_spapi(scraper, keyword, marketplace)
+        if spapi_products is not None:
+            return spapi_products
+
     try:
-        return await scraper.scrape_search_results(keyword, pages=3)
+        return await scraper.scrape_search_results(keyword, pages=SERP_FALLBACK_PAGES)
     except Exception as e:
         logger.warning("Search scraping failed for '%s': %s", keyword, e)
         return []
+
+
+async def _search_via_spapi(scraper: "ScraperService", keyword: str, marketplace: str) -> list[dict] | None:
+    """Search the SP-API catalog and enrich from page 1 of the SERP. Returns None to signal a full-scrape fallback."""
+    from app.workers.pipeline_steps.product_source import merge_serp_enrichment
+
+    settings = Settings()
+    spapi = _build_spapi_client(settings, marketplace)
+    try:
+        catalog_items = await spapi.search_catalog_products(keyword)
+    except Exception as e:
+        logger.warning("SP-API catalog search failed for '%s', falling back to scraping: %s", keyword, e)
+        return None
+    finally:
+        await spapi.close()
+
+    if len(catalog_items) < MIN_SPAPI_SEARCH_RESULTS:
+        return None
+
+    for position, item in enumerate(catalog_items, start=1):
+        item["position"] = position
+
+    try:
+        serp_page_one = await scraper.scrape_search_results(keyword, pages=SERP_ENRICHMENT_PAGES)
+    except Exception as e:
+        logger.warning("SERP enrichment scrape failed for '%s': %s", keyword, e)
+        serp_page_one = []
+
+    return merge_serp_enrichment(catalog_items, serp_page_one)
 
 
 async def _save_products(db: AsyncSession, niche_id: int, products_data: list[dict]) -> list[int]:
