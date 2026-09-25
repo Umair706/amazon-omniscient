@@ -68,6 +68,8 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────
     APP_SECRET_KEY: str = "change-me-in-production"
+    # Comma-separated list of origins allowed to call the API via CORS.
+    ALLOWED_ORIGINS: str = "http://localhost:3000"
 
     # ── Celery ─────────────────────────────────────────────────────────
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"

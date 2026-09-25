@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,10 @@ from app.workers.celery_app import celery_app
 from app.workers.tasks import run_full_analysis, run_discovery
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# Keywords are interpolated into LLM prompts and Amazon URLs, so we cap
+# their length well below the DB column limit to keep prompts small.
+MAX_KEYWORD_LENGTH = 100
 
 # ---------------------------------------------------------------------------
 # Celery state -> API status mapping
@@ -51,7 +55,7 @@ class AnalyzeKeywordRequest(BaseModel):
     """Payload to trigger analysis from a keyword (creates niche automatically)."""
 
     keyword: str = Field(
-        min_length=1, max_length=255, description="Niche keyword to analyze"
+        min_length=1, max_length=MAX_KEYWORD_LENGTH, description="Niche keyword to analyze"
     )
     marketplace: str = Field(
         default="US",
@@ -61,6 +65,12 @@ class AnalyzeKeywordRequest(BaseModel):
     force: bool = Field(
         default=False, description="Force re-analysis if niche already exists"
     )
+
+    @field_validator("keyword")
+    @classmethod
+    def normalise_keyword(cls, v: str) -> str:
+        # WHY: the keyword is interpolated into LLM prompts and URLs; collapse whitespace/control chars.
+        return " ".join(v.split())
 
 
 class AnalyzeSubNicheRequest(BaseModel):
