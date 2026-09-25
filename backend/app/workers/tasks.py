@@ -626,29 +626,19 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 8: PPC strategy ───────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "ppc_strategy", "progress": 65})
         from app.services.ppc_service import PPCService
-        ppc_svc = PPCService(db, llm_client)
+        from app.workers.pipeline_steps.ppc import build_ppc_strategy, ppc_metrics_from_strategy
 
         ppc_strategy = None
         try:
-            # Build PPC inputs
-            break_even_acos = ppc_svc.calculate_break_even_acos(
-                selling_price=metrics.get("avg_price") or 30,
-                landed_cost=metrics.get("landed_cost") or 8,
-                fba_fees=metrics.get("fba_fees") or 5,
+            ppc_strategy = await build_ppc_strategy(
+                PPCService(db, llm_client),
+                niche_id=niche_id, keyword=keyword, metrics=metrics, competitor_landscape=competitor_landscape,
             )
-            keyword_portfolio = await ppc_svc.build_keyword_portfolio(niche_id=niche_id)
-            budget_plan = {
-                "daily_budget": metrics.get("ppc_daily_budget") or 30,
-                "monthly_budget": (metrics.get("ppc_daily_budget") or 30) * 30,
-            }
-
-            ppc_strategy = await ppc_svc.generate_ppc_strategy(
-                niche_keyword=keyword,
-                keyword_portfolio=keyword_portfolio,
-                budget_plan=budget_plan,
-                break_even_acos=break_even_acos,
-                competitor_landscape=competitor_landscape,
-            )
+            # Feed the deterministic budget numbers forward so steps 9/10/12 (review
+            # strategy, forecast, financial report) see real avg_cpc/budget values
+            # instead of the hard-coded defaults sprinkled through those steps.
+            metrics.update(ppc_metrics_from_strategy(ppc_strategy))
+            await db.flush()
         except Exception as e:
             logger.warning("PPC strategy generation failed: %s", e)
 
@@ -696,6 +686,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                 ppc_budget_90_days=metrics.get("ppc_budget_90d") or 2700,
             )
             metrics["total_launch_capital"] = launch_capital["total_launch_capital"]
+
+            # generate_launch_playbook (step 11) reads exactly these two keys off financial_summary.
+            financial_summary["marketplace"] = marketplace
+            financial_summary["total_launch_capital"] = launch_capital["total_launch_capital"]
         except Exception as e:
             logger.warning("Financial projections failed: %s", e)
 
@@ -1658,11 +1652,8 @@ def _enrich_metrics(
             metrics.setdefault("high_vulnerability_count", competitor_landscape.get("high_vulnerability_count"))
 
     if ppc_strategy:
-        metrics["avg_cpc"] = ppc_strategy.get("avg_cpc", metrics.get("avg_cpc", 1.5))
-        metrics["break_even_acos"] = ppc_strategy.get("break_even_acos", 0)
-        metrics["relevant_keyword_count"] = ppc_strategy.get("keyword_count", 0)
-        metrics["ppc_budget_90d"] = ppc_strategy.get("budget_90d", 0)
-        metrics["estimated_acos"] = ppc_strategy.get("estimated_acos", 35)
+        from app.workers.pipeline_steps.ppc import ppc_metrics_from_strategy
+        metrics.update(ppc_metrics_from_strategy(ppc_strategy))
 
     if review_strategy:
         metrics["review_threshold"] = review_strategy.get("review_threshold", {}).get("threshold", 50)
