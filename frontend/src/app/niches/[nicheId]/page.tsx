@@ -8,6 +8,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
 import { InfoHint } from "@/components/info-hint";
 import { StarButton } from "@/components/star-button";
+import { Breadcrumbs } from "@/components/breadcrumbs";
+import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
 import { useStars } from "@/lib/use-stars";
 import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
 import { StatCard } from "@/components/stat-card";
@@ -22,7 +24,6 @@ import {
   Star,
   ShoppingCart,
   Users,
-  ArrowLeft,
   ExternalLink,
   Search,
 } from "lucide-react";
@@ -207,9 +208,7 @@ export default function NicheDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </button>
+          <Breadcrumbs items={[{ label: "Dashboard", href: "/" }, { label: "Niches", href: "/niches" }, { label: niche.name || niche.primary_keyword }]} />
           <div className="flex items-center gap-2">
             <h1 className="text-3xl font-bold">{niche.name}</h1>
             <StarButton starred={isStarred(niche.id)} onToggle={() => toggle(niche.id)} className="mt-1" />
@@ -362,7 +361,7 @@ export default function NicheDetailPage() {
                 </thead>
                 <tbody>
                   {products.length === 0 ? (
-                    <tr><td colSpan={10} className="p-8 text-center text-muted-foreground">No products found.</td></tr>
+                    <tr><td colSpan={10}><EmptyState title="No products captured" reason={EMPTY_REASONS.noProducts} /></td></tr>
                   ) : (
                     products.map((p) => (
                       <tr key={p.id} className="border-b last:border-0 hover:bg-muted/50">
@@ -470,7 +469,7 @@ export default function NicheDetailPage() {
                   </thead>
                   <tbody>
                     {competitors.length === 0 ? (
-                      <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No competitor data.</td></tr>
+                      <tr><td colSpan={6}><EmptyState title="No competitor data" reason={EMPTY_REASONS.noProducts} /></td></tr>
                     ) : (
                       competitors.map((c) => (
                         <tr key={c.id} className="border-b last:border-0 hover:bg-muted/50">

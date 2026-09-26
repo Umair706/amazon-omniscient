@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -11,11 +11,11 @@ import { ScoreBadge } from "@/components/score-badge";
 import { StatCard } from "@/components/stat-card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { amazonProductUrl } from "@/lib/marketplace";
+import { Breadcrumbs } from "@/components/breadcrumbs";
 import { labelForDataGap } from "@/lib/data-gaps";
 import api from "@/lib/api";
 import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
 import {
-  ArrowLeft,
   DollarSign,
   TrendingUp,
   Clock,
@@ -71,14 +71,21 @@ interface RecommendationDetail {
 
 type TabId = "overview" | "market-intel" | "competitors" | "product-ideas" | "suppliers" | "reviews" | "product" | "blueprint" | "financials" | "marketing" | "playbook";
 
+const TAB_IDS: TabId[] = ["overview", "market-intel", "competitors", "product-ideas", "suppliers", "reviews", "product", "blueprint", "financials", "marketing", "playbook"];
+
 export default function OpportunityBriefPage() {
   const params = useParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const id = params.id as string;
 
   const [rec, setRec] = useState<RecommendationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabId>("overview");
+  // Active tab lives in the URL (?tab=financials) so brief links deep-link and survive refresh.
+  const urlTab = searchParams.get("tab") as TabId | null;
+  const tab: TabId = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "overview";
+  const setTab = (t: TabId) => router.replace(`/recommendations/${id}?tab=${t}`, { scroll: false });
 
   const fetchRec = useCallback(async () => {
     setLoading(true);
@@ -145,9 +152,7 @@ export default function OpportunityBriefPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </button>
+          <Breadcrumbs items={[{ label: "Dashboard", href: "/" }, { label: "Recommendations", href: "/recommendations" }, { label: rec.niche_name || "Brief" }]} />
           <h1 className="text-3xl font-bold">
             {rec.niche_name ? `${rec.niche_name.charAt(0).toUpperCase() + rec.niche_name.slice(1)}` : "Product Opportunity Brief"}
           </h1>
