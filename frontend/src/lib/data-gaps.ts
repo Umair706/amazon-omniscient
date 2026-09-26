@@ -9,6 +9,7 @@ export const DATA_GAP_LABELS: Record<string, string> = {
   moq_assumed: "Minimum order quantity assumed (suppliers listed no MOQ)",
   bsr_unavailable: "BSR could not be read — demand is scored as unknown, not favorable",
   sales_estimate_assumed: "Monthly sales assumed (no BSR to estimate from)",
+  sales_estimate_uncalibrated: "Sales estimate is uncalibrated for this marketplace (US-derived model)",
 };
 
 export function labelForDataGap(gap: string): string {

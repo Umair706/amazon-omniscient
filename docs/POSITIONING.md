@@ -78,8 +78,9 @@ owning the methodology and the data outright is a different proposition from ren
   Omniscient does not compete here; it consumes keywords, it does not out-research them.
 - **Sales-estimate accuracy.** Omniscient converts BSR to sales with a category power-law model, and the
   Australian coefficients are currently a flat 8% scaling of the US curve, which is almost certainly wrong.
-  Jungle Scout and Helium 10 calibrate against real sales panels across the whole catalog. Treat
-  Omniscient's unit estimates as directional until calibrated.
+  Jungle Scout and Helium 10 calibrate against real sales panels across the whole catalog. Non-US briefs now
+  carry a `sales_estimate_uncalibrated` data gap so this is disclosed rather than hidden, but treat
+  Omniscient's non-US unit estimates as directional until the coefficients are fitted.
 - **PPC data.** The Amazon Ads API is stored in settings but not yet called. PPC budgets and ACOS in
   Omniscient are modeled estimates, not pulled from real campaign and bid data. Helium 10's Adtomic and the
   Ads-connected tools use live data.

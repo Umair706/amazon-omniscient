@@ -15,6 +15,7 @@ GAP_REVIEW_VELOCITY = "review_velocity_unavailable"
 GAP_MOQ_ASSUMED = "moq_assumed"
 GAP_BSR = "bsr_unavailable"
 GAP_SALES_ESTIMATED = "sales_estimate_assumed"
+GAP_SALES_UNCALIBRATED = "sales_estimate_uncalibrated"
 
 # Typical values for a mid-range niche; used only when the real signal is missing.
 ASSUMED_BREAK_EVEN_WEEK = 16
@@ -85,6 +86,14 @@ def _fill_missing_market_inputs(metrics: dict) -> None:
         _record_data_gap(metrics, GAP_SALES_ESTIMATED)
     else:
         clear_data_gap(metrics, GAP_SALES_ESTIMATED)
+    # Non-US sales estimates use the US curve scaled by a market-size ratio, not a fitted
+    # model, so disclose them as uncalibrated rather than presenting them as precise.
+    from app.core.bsr_regression import is_calibrated_marketplace
+
+    if not is_calibrated_marketplace(metrics.get("marketplace", "US")):
+        _record_data_gap(metrics, GAP_SALES_UNCALIBRATED)
+    else:
+        clear_data_gap(metrics, GAP_SALES_UNCALIBRATED)
 
 
 def _record_review_velocity_gap(metrics: dict) -> None:

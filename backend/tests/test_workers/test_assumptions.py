@@ -41,6 +41,18 @@ def test_zero_search_volume_counts_as_missing():
     assert metrics["search_volume"] == ASSUMED_SEARCH_VOLUME
 
 
+def test_non_us_marketplace_sales_are_flagged_uncalibrated():
+    from app.workers.pipeline_steps.assumptions import GAP_SALES_UNCALIBRATED
+
+    au = {"avg_bsr": MEASURED_BSR, "supplier_count": 1, "min_moq": 50, "search_volume": 1200,
+          "monthly_revenue_per_seller": 8000, "break_even_week_base": 10,
+          "review_velocity_gap_ratio": 1.2, "marketplace": "AU"}
+    assert GAP_SALES_UNCALIBRATED in apply_assumed_defaults(au)
+
+    us = {**au, "marketplace": "US"}
+    assert GAP_SALES_UNCALIBRATED not in apply_assumed_defaults(us)
+
+
 def test_missing_bsr_is_recorded_and_never_invented():
     metrics = {"avg_bsr": 0, "supplier_count": 1, "min_moq": 50, "search_volume": 1200,
                "monthly_revenue_per_seller": 8000, "break_even_week_base": 10,

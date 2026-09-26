@@ -5,6 +5,16 @@
 # A_au = A_us * 0.08, same B exponent (power law shape is preserved).
 _AU_MARKET_SCALE = 0.08
 
+# Only the US coefficients are fitted from historical data. Every other marketplace reuses
+# the US curve scaled by a market-size ratio, so its unit estimates are order-of-magnitude,
+# not calibrated. Callers should disclose that (see pipeline_steps/assumptions.py).
+CALIBRATED_MARKETPLACES = frozenset({"US"})
+
+
+def is_calibrated_marketplace(marketplace: str) -> bool:
+    """True if the sales model is fitted from real data for this marketplace (only US today)."""
+    return (marketplace or "").strip().upper() in CALIBRATED_MARKETPLACES
+
 
 class BSRSalesEstimator:
     """
