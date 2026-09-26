@@ -6,6 +6,7 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import TYPE_CHECKING
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -1797,7 +1798,9 @@ def _build_base_metrics(
     """Build base metrics dict from competitor data and scraped products."""
     metrics = {
         "avg_price": 0,
-        "avg_bsr": 0,
+        # NOTE: avg_bsr is deliberately NOT seeded. A seeded 0 reads as rank #0 (the best
+        # possible) to the scorer, so a BSR blackout would score as top demand. Leaving it
+        # absent lets ScoringService's m.get("avg_bsr", 99999) treat "unknown" as poor demand.
         "estimated_monthly_sales": 0,
         "avg_rating": 0,
         "avg_review_count": 0,
@@ -1838,13 +1841,15 @@ def _build_base_metrics(
         rating_stats = competitor_landscape.get("rating_stats", {})
         metrics.update({
             "avg_price": price_stats.get("avg", competitor_landscape.get("avg_price", 0)),
-            "avg_bsr": competitor_landscape.get("avg_bsr", 0),
             "avg_rating": rating_stats.get("avg", competitor_landscape.get("avg_rating", 0)),
             "avg_review_count": review_stats.get("avg", competitor_landscape.get("avg_review_count", 0)),
             "median_competitor_reviews": review_stats.get("median", competitor_landscape.get("median_reviews", 0)),
             "avg_listing_quality": competitor_landscape.get("avg_listing_quality", 50),
             "estimated_monthly_sales": competitor_landscape.get("estimated_monthly_sales", 0),
         })
+        # Only set avg_bsr from a real measurement; never seed it (see the note above).
+        if competitor_landscape.get("avg_bsr"):
+            metrics["avg_bsr"] = competitor_landscape["avg_bsr"]
 
     # Fallback: if avg_price is still 0, compute from detailed products
     if not metrics["avg_price"] and detailed_products:
@@ -1856,8 +1861,8 @@ def _build_base_metrics(
                 len(prices), metrics["avg_price"],
             )
 
-    # Fallback: if avg_bsr is still 0, compute from detailed products
-    if not metrics["avg_bsr"] and detailed_products:
+    # Fallback: if avg_bsr is still unknown, compute from detailed products
+    if not metrics.get("avg_bsr") and detailed_products:
         bsrs = [p.get("current_bsr") for p in detailed_products if p.get("current_bsr")]
         if bsrs:
             metrics["avg_bsr"] = round(sum(bsrs) / len(bsrs))
@@ -1868,8 +1873,15 @@ def _build_base_metrics(
         if reviews:
             metrics["avg_review_count"] = round(sum(reviews) / len(reviews))
 
+    # Fallback: if the competitor pass gave no median review count, compute it from the
+    # detailed products. Without this the review-moat hard filter reads 0 and always passes.
+    if not metrics["median_competitor_reviews"] and detailed_products:
+        review_counts = [p.get("review_count") for p in detailed_products if p.get("review_count")]
+        if review_counts:
+            metrics["median_competitor_reviews"] = round(median(review_counts))
+
     # Compute estimated_monthly_sales from BSR using regression model
-    if not metrics["estimated_monthly_sales"] and metrics["avg_bsr"]:
+    if not metrics["estimated_monthly_sales"] and metrics.get("avg_bsr"):
         from app.core.bsr_regression import BSRSalesEstimator
         estimator = BSRSalesEstimator(marketplace=metrics.get("marketplace", "US"))
         metrics["estimated_monthly_sales"] = estimator.estimate_monthly_sales(
@@ -1887,9 +1899,11 @@ def _build_base_metrics(
     if metrics["estimated_monthly_sales"] > 0 and metrics["avg_price"] > 0:
         metrics["monthly_revenue_per_seller"] = round(metrics["estimated_monthly_sales"] * metrics["avg_price"])
 
-    # Fallback: if still zero but we have products with prices, estimate from product count
+    # Fallback: no BSR to estimate from, so assume a mid-range figure. Flagged so the
+    # brief discloses it as an assumption (see pipeline_steps/assumptions.py).
     if not metrics["estimated_monthly_sales"]:
         metrics["estimated_monthly_sales"] = 300
+        metrics["sales_estimated"] = True
         logger.info("Using fallback estimated_monthly_sales: 300")
 
     return metrics

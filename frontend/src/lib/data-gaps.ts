@@ -7,6 +7,8 @@ export const DATA_GAP_LABELS: Record<string, string> = {
   revenue_per_seller_assumed: "Revenue per seller assumed",
   review_velocity_unavailable: "Review velocity not yet measurable — needs 14 days of tracking",
   moq_assumed: "Minimum order quantity assumed (suppliers listed no MOQ)",
+  bsr_unavailable: "BSR could not be read — demand is scored as unknown, not favorable",
+  sales_estimate_assumed: "Monthly sales assumed (no BSR to estimate from)",
 };
 
 export function labelForDataGap(gap: string): string {

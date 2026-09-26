@@ -13,6 +13,8 @@ GAP_SEARCH_VOLUME = "search_volume_assumed"
 GAP_REVENUE_PER_SELLER = "revenue_per_seller_assumed"
 GAP_REVIEW_VELOCITY = "review_velocity_unavailable"
 GAP_MOQ_ASSUMED = "moq_assumed"
+GAP_BSR = "bsr_unavailable"
+GAP_SALES_ESTIMATED = "sales_estimate_assumed"
 
 # Typical values for a mid-range niche; used only when the real signal is missing.
 ASSUMED_BREAK_EVEN_WEEK = 16
@@ -73,6 +75,16 @@ def _fill_missing_market_inputs(metrics: dict) -> None:
     if metrics.get("monthly_revenue_per_seller") is None:
         metrics["monthly_revenue_per_seller"] = ASSUMED_REVENUE_PER_SELLER
         _record_data_gap(metrics, GAP_REVENUE_PER_SELLER)
+    # NOTE: avg_bsr is left absent (not set) when unknown so the scorer's 99999 fail-safe
+    # applies. We only record the gap here; we do not invent a rank.
+    if not metrics.get("avg_bsr"):
+        _record_data_gap(metrics, GAP_BSR)
+    else:
+        clear_data_gap(metrics, GAP_BSR)
+    if metrics.get("sales_estimated"):
+        _record_data_gap(metrics, GAP_SALES_ESTIMATED)
+    else:
+        clear_data_gap(metrics, GAP_SALES_ESTIMATED)
 
 
 def _record_review_velocity_gap(metrics: dict) -> None:
