@@ -575,8 +575,21 @@ same domain, shared process-wide:
 - Amazon: `AMAZON_GAP_SECONDS = (3.0, 7.0)` seconds
 - 1688.com: `ALIBABA_GAP_SECONDS = (5.0, 10.0)` seconds
 
-Each `BrowserSession.load()` call waits its turn before navigating. The pacer state
-is in-process, not shared across Celery workers — see the caveat in `TODO.md`.
+Each `BrowserSession.load()` call waits its turn before navigating.
+
+**Shared pacing across worker processes**
+
+With Celery running at `--concurrency=4`, four in-process `Pacer` instances used
+to let four workers hit Amazon at once — four times the configured rate. Every
+`BrowserSession` and the 1688 `SupplierScraper` (including `SupplierMatchService`
+searches) now pace through `SharedPacer` (`app/scraping/pacing.py`) instead: it
+holds the "last request wins" slot in Redis under the key `pace:{domain}` (a
+`SET pace:{domain} NX PX <gap>`), so one gap is shared by every worker process,
+not one gap per process. `REDIS_URL` must be reachable from every worker for
+this coordination to happen. If a `SharedPacer` call to Redis fails for any
+reason, that instance switches to its local `Pacer` fallback for the rest of the
+run and logs "Shared pacing unavailable" once — pacing degrades back to
+per-process instead of the run failing.
 
 **Image/media/font blocking**
 
@@ -814,6 +827,7 @@ sequenceDiagram
 - **Single-user design:** The current implementation has no user authentication or multi-tenancy. It's designed for personal use on a local machine or private server.
 - **No real-time updates:** Data is collected at analysis time and stored. There's no continuous monitoring or automatic re-analysis unless Celery beat tasks are configured.
 - **TimescaleDB dependency:** The BSR and price time-series features require TimescaleDB. Standard PostgreSQL works for everything else, but hypertable queries will fail without the extension.
+- **Not every browser is on the shared Redis pacer yet:** `AlibabaLoginService` (the 1688 login page, used only when stored cookies are invalid), the keyword-research scraper session behind `POST /niches/{id}/keywords/research`, and `AmazonLoginService` (currently has no callers) still pace themselves per process rather than through `SharedPacer`.
 
 ---
 

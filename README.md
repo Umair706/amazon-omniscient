@@ -259,7 +259,7 @@ omniscient/
 │   │   │   ├── anthropic_client.py
 │   │   │   └── openai_client.py
 │   │   └── workers/              # Celery tasks
-│   ├── migrations/               # Alembic migrations (4 versions)
+│   ├── migrations/               # Alembic migrations (16 versions)
 │   └── tests/                    # pytest suite
 │
 ├── frontend/

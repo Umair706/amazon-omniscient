@@ -281,9 +281,11 @@ erDiagram
 - **BSR regression:** `app/core/bsr_regression.py` converts BSR to estimated sales using `sales = A * BSR^(-B)` with category-specific coefficients. Handles both main-category and sub-category BSR (10x scaling factor).
 - **TimescaleDB hypertables:** `bsr_history` and `price_history` use composite PKs `(time, product_id)` with `implicit_returning=False` for TimescaleDB compatibility.
 - **LLM abstraction:** All LLM calls go through `BaseLLMClient.generate_json()` which handles JSON extraction, code fence stripping, and retries.
-- **Scoring:** `ScoringService` computes 9 weighted sub-scores (0-100 each) — demand, competition, margin, revenue, trend, review feasibility, supplier, PPC viability, launch feasibility — and applies 9 hard disqualification filters. Any filter failure = FAIL tier.
+- **Scoring:** `ScoringService` computes 9 weighted sub-scores (0-100 each) — demand, competition, margin, revenue, trend, review feasibility, supplier, PPC viability, launch feasibility — and applies 9 hard disqualification filters. Any filter failure = FAIL tier. The supplier sub-score returns a neutral `SUPPLIER_UNKNOWN_SCORE = 50.0` when 1688 returned no suppliers at all, instead of scoring fabricated defaults; every assumed input (supplier data, FOB estimated from price, search volume, revenue per seller, break-even week, review velocity) is recorded in `recommendation.risk_flags["data_gaps"]` (`app/workers/pipeline_steps/assumptions.py`) and shown on the recommendation page's Risk Flags card. Hard filter #9 (review velocity trap) only arms once `app/workers/pipeline_steps/review_velocity.py` finds at least `MIN_PRODUCTS_FOR_VELOCITY = 3` products in the niche with two review-count snapshots at least `MIN_VELOCITY_WINDOW_DAYS = 14` days apart within the last 90 days; until then the filter is skipped and `review_velocity_unavailable` shows as a data gap.
 - **Free proxy system:** `ProxyManager` supports three modes: `none` (direct), `free` (public proxies from proxyscrape.com with auto-rotation and failure tracking), and paid providers (`brightdata`/`smartproxy` with session-based rotation).
 - **Scraping session + SP-API-first:** `BrowserSession` (`app/scraping/session.py`) owns one Chromium browser + context per pipeline run with a single coherent `Persona`, so every page load shares cookies and a consistent fingerprint instead of looking like a new visitor each time. `classify_page()` (`app/scraping/block_detection.py`) verdicts (`ok`/`captcha`/`soft_block`/`server_error`) drive `rotate()`, capped at `MAX_ROTATIONS_PER_SESSION = 3` before the load fails outright. When `SP_API_CLIENT_ID`/`SECRET`/`REFRESH_TOKEN` are all set, `app/workers/pipeline_steps/product_source.py` prefers SP-API Catalog Items and rank snapshots over scraping, enriching from page 1 of the SERP only.
+- **Shared pacing:** `SharedPacer` (`app/scraping/pacing.py`) holds the "last request" slot in Redis (`pace:{domain}`) so all Celery worker processes share one gap instead of each process pacing itself; falls back to the per-process `Pacer` when Redis is unreachable (logged once per run, on the `SharedPacer` instance that hit the error).
+- **ORM loading:** every `Niche`/`Product`/`Supplier` relationship is `lazy="raise"`; a query that needs a collection asks for it explicitly with `.options(selectinload(Model.relation))`, and deletes rely on the database's `ON DELETE CASCADE` (`passive_deletes=True`) instead of SQLAlchemy nulling out children first.
 
 ## How to run
 
@@ -300,7 +302,7 @@ cd frontend && npm install && npm run dev
 ## Database
 
 - 17 tables, 3 hypertables (bsr_history, price_history, stock_history)
-- 14 migrations in `backend/migrations/versions/`; migration 013 renames the niche score columns to the ScoringService names and adds `avg_rating`, `estimated_monthly_sales`, `last_error`; migration 014 adds the `scrape_events` table (one row per page load attempt, used by `GET /api/v1/niches/scrape-health`)
+- 16 migrations in `backend/migrations/versions/`; migration 013 renames the niche score columns to the ScoringService names and adds `avg_rating`, `estimated_monthly_sales`, `last_error`; migration 014 adds the `scrape_events` table (one row per page load attempt, used by `GET /api/v1/niches/scrape-health`); migration 016 adds nullable `bsr_history.review_count`, set on main-rank rows only, so a recent review velocity can be derived from tracker snapshots
 
 ## Testing
 
@@ -311,7 +313,7 @@ pytest -v -k scoring      # just scoring tests
 pytest --cov=app          # with coverage
 ```
 
-Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendation engine, and the extracted pipeline steps / market signals.
+Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendation engine, and the extracted pipeline steps / market signals. `pytest -q --co` collects 270 tests. The database- and HTTP-backed tests (`tests/test_db/`, `tests/test_api/`) skip unless `TEST_DATABASE_URL` is set, e.g. `TEST_DATABASE_URL=postgresql+asyncpg://... pytest -q`.
 
 ## Common patterns
 
@@ -341,12 +343,13 @@ Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendatio
 | `backend/app/scraping/session.py` | `BrowserSession` — one Chromium browser + context per run, resource blocking, rotation |
 | `backend/app/scraping/persona.py` | Builds one coherent UA/platform/locale/viewport `Persona` per session |
 | `backend/app/scraping/block_detection.py` | `classify_page()` — ok/captcha/soft_block/server_error verdicts |
-| `backend/app/scraping/pacing.py` | Per-domain jittered minimum gap between page loads (`Pacer`) |
+| `backend/app/scraping/pacing.py` | Per-domain jittered minimum gap between page loads: in-process `Pacer`, and `SharedPacer` which holds the same gap in Redis so every Celery worker process shares it |
 | `backend/app/scraping/page_cache.py` | Redis cache of parsed scrape results (SERP 6h, product 24h TTL) |
 | `backend/app/scraping/events.py` | Fire-and-forget `scrape_events` telemetry writes |
 | `backend/app/workers/tasks.py` | Celery task definitions (full analysis pipeline) |
-| `backend/app/workers/pipeline_steps/` | Extracted pipeline steps: reviews, ppc, product_source (SP-API-first search/BSR) |
+| `backend/app/workers/pipeline_steps/` | Extracted pipeline steps: reviews, ppc, product_source (SP-API-first search/BSR), assumptions (data-gap defaults), review_velocity (recent review velocity from BSR snapshots) |
 | `backend/app/llm/base_client.py` | LLM provider abstract interface |
+| `backend/tests/test_api/` | HTTP-level route tests (httpx `ASGITransport` over the real FastAPI app, real DB rolled back per test); the whole directory skips unless `TEST_DATABASE_URL` is set |
 | `frontend/src/components/sidebar.tsx` | Navigation sidebar with active link highlighting |
 | `frontend/src/app/page.tsx` | Dashboard |
 | `frontend/src/app/docs/page.tsx` | Documentation page |

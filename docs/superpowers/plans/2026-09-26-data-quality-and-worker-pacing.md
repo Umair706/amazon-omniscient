@@ -71,7 +71,7 @@ backend/tests/test_scoring_service.py               (unknown-supplier test)
 - Produces: `recommendation.risk_flags["data_gaps"]: list[str]` (JSONB, no migration).
 - Contract for `_analyze_suppliers`: sets `metrics["fob_unit_cost_estimated"] = True` when it had no scraped FOB and used `FOB_FALLBACK_SHARE_OF_PRICE`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `backend/tests/test_workers/test_assumptions.py`:
 ```python
@@ -126,12 +126,12 @@ def test_supplier_score_uses_real_data_when_present(sample_metrics):
     assert ScoringService._score_supplier(metrics) != SUPPLIER_UNKNOWN_SCORE
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest -q tests/test_workers/test_assumptions.py tests/test_scoring_service.py -k "supplier or assumed or gap"`
 Expected: FAIL — `ModuleNotFoundError: app.workers.pipeline_steps.assumptions`; `ImportError: SUPPLIER_UNKNOWN_SCORE`.
 
-- [ ] **Step 3: Implement `assumptions.py`**
+- [x] **Step 3: Implement `assumptions.py`**
 
 ```python
 """Fills the scoring inputs we could not measure, and records each one as a data gap.
@@ -179,7 +179,7 @@ def apply_assumed_defaults(metrics: dict) -> list[str]:
     return gaps
 ```
 
-- [ ] **Step 4: Explicit unknown path in `_score_supplier`**
+- [x] **Step 4: Explicit unknown path in `_score_supplier`**
 
 In `backend/app/services/scoring_service.py`, add near the other module constants:
 ```python
@@ -201,7 +201,7 @@ and change the top of `_score_supplier` to:
         ...  # rest unchanged
 ```
 
-- [ ] **Step 5: Wire `tasks.py`**
+- [x] **Step 5: Wire `tasks.py`**
 
 Replace lines 1881-1890 of `_enrich_metrics` with:
 ```python
@@ -213,7 +213,7 @@ In `_analyze_suppliers`, right after `unit_cost = fob_unit_cost or avg_price * F
     metrics["fob_unit_cost_estimated"] = fob_unit_cost is None
 ```
 
-- [ ] **Step 6: Carry gaps into the recommendation**
+- [x] **Step 6: Carry gaps into the recommendation**
 
 `backend/app/services/recommendation_engine.py`: in `recommendation_data` (line ~66) add `"data_gaps": metrics.get("data_gaps", [])`. At line ~271 change to:
 ```python
@@ -225,7 +225,7 @@ In `_analyze_suppliers`, right after `unit_cost = fob_unit_cost or avg_price * F
 ```
 Add a test in `backend/tests/test_recommendation_engine.py` that passes `metrics={"data_gaps": ["supplier_data_unavailable"], ...}` through the existing generate path used by the file's other tests and asserts the saved `risk_flags["data_gaps"]` equals it. Follow the file's existing fixture style.
 
-- [ ] **Step 7: Frontend**
+- [x] **Step 7: Frontend**
 
 `frontend/src/lib/data-gaps.ts`:
 ```ts
@@ -259,7 +259,7 @@ In the Risk Flags card of `frontend/src/app/recommendations/[id]/page.tsx` (afte
 ```
 Import `labelForDataGap` from `@/lib/data-gaps` (check how other `@/lib/...` imports are written in that file and match).
 
-- [ ] **Step 8: Run tests, typecheck, commit**
+- [x] **Step 8: Run tests, typecheck, commit**
 
 Run: `pytest -q` (expect all green, +5 tests) and `cd frontend && npx tsc --noEmit && git checkout -- tsconfig.tsbuildinfo`.
 Commit: `feat(scoring): record data gaps instead of faking supplier inputs`
@@ -295,7 +295,7 @@ backend/app/workers/tasks.py                                  (set metrics["avg_
 - Produces: `scrape_rank_snapshot()` result gains `"review_count": int | None`.
 - Produces: `ScraperService._extract_review_count(page) -> int | None` (shared by the full product scrape and the rank snapshot).
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `tests/test_workers/test_tracking.py` — extend `_snapshot()` helper to include `"review_count": 1543` and add:
 ```python
@@ -329,9 +329,9 @@ async def test_review_count_is_stored_on_main_rank_only():
 ```
 Scraper: in `tests/test_services/test_review_count_parse.py` add a test for `_extract_review_count` with a fake page whose `_safe_text` returns `None` for the first selector and `"1,543 ratings"` for the second → `1543`. Build the fake with `SimpleNamespace`/`AsyncMock` the way `test_sold_by_amazon.py` fakes pages.
 
-- [ ] **Step 2: Run, expect failures** (`KeyError: 'review_count'`, `TypeError: unexpected keyword 'review_count'`, `AttributeError: _extract_review_count`).
+- [x] **Step 2: Run, expect failures** (`KeyError: 'review_count'`, `TypeError: unexpected keyword 'review_count'`, `AttributeError: _extract_review_count`).
 
-- [ ] **Step 3: Migration 016**
+- [x] **Step 3: Migration 016**
 
 ```python
 """Store the review count on main-rank BSR snapshots.
@@ -365,12 +365,12 @@ def downgrade() -> None:
     op.drop_column("bsr_history", "review_count")
 ```
 
-- [ ] **Step 4: Model + tracker**
+- [x] **Step 4: Model + tracker**
 
 `bsr_history.py`: add `review_count: Mapped[int | None] = mapped_column(Integer)` with `# NOTE: only set on main-rank rows; the sub-rank row recorded at the same moment leaves it NULL.`
 `bsr_tracker.py`: `record_bsr(..., review_count: int | None = None)` sets it on the `BSRHistory(...)`; `record_product_snapshot(..., review_count: int | None = None)` passes `review_count=review_count` only to the main-rank `record_bsr` call.
 
-- [ ] **Step 5: Scraper**
+- [x] **Step 5: Scraper**
 
 Extract the loop at `scraper_service.py:722-726` into:
 ```python
@@ -384,12 +384,12 @@ Extract the loop at `scraper_service.py:722-726` into:
 ```
 Use it in the full product scrape (replace the loop) and in `scrape_rank_snapshot` (`review_count = await self._extract_review_count(page)`; include `"review_count": review_count` in the returned dict). Update the `scrape_rank_snapshot` docstring: "…BSR, price, stock and review count…".
 
-- [ ] **Step 6: Forward in workers**
+- [x] **Step 6: Forward in workers**
 
 `tasks.py:_record_snapshot`: add `review_count=snapshot.get("review_count"),` to the `record_product_snapshot` call. `_track_bsr_via_spapi` is unchanged (SP-API has no review count; the row stays NULL).
 `product_details.py:_record_first_snapshots`: add `review_count=detail.get("review_count"),`.
 
-- [ ] **Step 7: Migrate the test DB, run everything, commit**
+- [x] **Step 7: Migrate the test DB, run everything, commit**
 
 Run (Docker): `alembic upgrade head` against the test database, then `pytest -q` with `TEST_DATABASE_URL` set, then `alembic downgrade 015` and `upgrade head` once more to prove the round trip.
 Commit: `feat(tracking): record review count on rank snapshots (migration 016)`
@@ -409,7 +409,7 @@ Commit: `feat(tracking): record review count on rank snapshots (migration 016)`
 - Produces: `review_velocity_gap_for_niche(db, niche_id, estimator, category) -> float | None`.
 - Sets `metrics["avg_review_velocity_gap_ratio"]` when a value exists; `ScoringService` hard filter #9 then runs unchanged (`scoring_service.py:598-611`). When absent, Task D1 records `GAP_REVIEW_VELOCITY`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 Replace `test_average_review_velocity_gap_skips_products_without_dates_or_bsr` in `tests/test_services/test_market_signals.py` with:
 ```python
@@ -465,9 +465,9 @@ def test_windows_take_first_and_last_snapshot_per_product():
 ```
 (rows are `(product_id, current_bsr, time, review_count)` ordered by product then time; products without a BSR are skipped.)
 
-- [ ] **Step 2: Run, expect ImportError.**
+- [x] **Step 2: Run, expect ImportError.**
 
-- [ ] **Step 3: market_signals**
+- [x] **Step 3: market_signals**
 
 Delete `_months_listed`, `average_review_velocity_gap`, the `NOTE: not wired…` comment and the `DAYS_PER_MONTH` constant if nothing else uses it (grep first). Add:
 ```python
@@ -504,7 +504,7 @@ def average_recent_velocity_gap(windows: list[dict], estimator: BSRSalesEstimato
     return round(sum(ratios) / len(ratios), 2)
 ```
 
-- [ ] **Step 4: `pipeline_steps/review_velocity.py`**
+- [x] **Step 4: `pipeline_steps/review_velocity.py`**
 
 ```python
 """Derives the niche's recent review velocity from stored rank snapshots."""
@@ -556,7 +556,7 @@ async def review_velocity_gap_for_niche(
     return average_recent_velocity_gap(windows_from_rows(rows), estimator, category)
 ```
 
-- [ ] **Step 5: Wire into the pipeline**
+- [x] **Step 5: Wire into the pipeline**
 
 In `tasks.py` right after `metrics = _build_base_metrics(...)` (line ~736):
 ```python
@@ -569,7 +569,7 @@ In `tasks.py` right after `metrics = _build_base_metrics(...)` (line ~736):
 ```
 Import `BSRSalesEstimator` the way the file already does for other uses (grep `BSRSalesEstimator` in tasks.py and reuse that import). Also confirm `Product.current_bsr` is the column name used by the model (grep `current_bsr` in `app/models/product.py`); if it is `bsr`, use that.
 
-- [ ] **Step 6: Run `pytest -q`, commit.** `feat(scoring): arm the review-velocity filter on recent snapshot windows`
+- [x] **Step 6: Run `pytest -q`, commit.** `feat(scoring): arm the review-velocity filter on recent snapshot windows`
 
 ---
 
@@ -584,7 +584,7 @@ Import `BSRSalesEstimator` the way the file already does for other uses (grep `B
 - Produces: fixture `client` (httpx `AsyncClient` over `ASGITransport(app)`) whose `get_db` dependency yields a session bound to one outer transaction that is rolled back after each test; fixture `seeded_niche` that inserts one `Niche` with two `Product`s, one `Competitor`, one `Supplier`, one `FinancialProjection`, one `NicheKeyword`, one `ReviewPainPoint`, one `Recommendation` via the ORM and flushes.
 - Skips the whole directory unless `TEST_DATABASE_URL` is set.
 
-- [ ] **Step 1: conftest**
+- [x] **Step 1: conftest**
 
 ```python
 """HTTP-level tests against the real FastAPI app and a real (rolled back) database."""
@@ -632,7 +632,7 @@ async def client(db_session):
 ```
 Add a `seeded_niche` fixture in the same file that builds the rows listed in Interfaces (use only columns that exist on each model; read the models first) and returns the `Niche`. `db.commit()` inside routes must not end the outer transaction: check how `get_db` commits (`app/dependencies.py:25-40`) and, if the route layer calls `commit()`, use `connection.begin_nested()`/`join_transaction_mode="create_savepoint"` on the session so the outer transaction survives.
 
-- [ ] **Step 2: Route tests**
+- [x] **Step 2: Route tests**
 
 ```python
 async def test_list_niches_returns_envelope(client, seeded_niche):
@@ -659,7 +659,7 @@ async def test_unknown_niche_is_404(client):
     assert (await client.get("/api/v1/niches/999999999")).status_code == 404
 ```
 
-- [ ] **Step 3: Run with `TEST_DATABASE_URL` in Docker, then without (expect skips). Commit.** `test(api): first HTTP-level route tests against a real database`
+- [x] **Step 3: Run with `TEST_DATABASE_URL` in Docker, then without (expect skips). Commit.** `test(api): first HTTP-level route tests against a real database`
 
 ### Task F2: Relationships load only when asked (F18)
 
@@ -671,7 +671,7 @@ async def test_unknown_niche_is_404(client):
 **Interfaces:**
 - Every relationship listed above becomes `lazy="raise"`. Any code that needs a collection must ask with `.options(selectinload(Model.relation))` — `niches.py:402` already does for `Supplier.landed_cost_calculations`.
 
-- [ ] **Step 1: Failing test — count queries**
+- [x] **Step 1: Failing test — count queries**
 
 Add to `test_niche_routes.py`:
 ```python
@@ -691,7 +691,7 @@ async def test_get_niche_runs_one_query(client, seeded_niche, db_session):
 ```
 NOTE for the implementer: `event.remove` needs the same callable that was registered — keep the lambda in a variable. Getting the sync engine from an `AsyncConnection`-bound session: `db_session.bind` is an `AsyncConnection`; use `db_session.bind.sync_connection.engine`. Adjust until the listener fires; the assertion should fail before Step 2 with ~11 SELECTs.
 
-- [ ] **Step 2: Flip the strategies**
+- [x] **Step 2: Flip the strategies**
 
 In `niche.py` change every `lazy="selectin"` to `lazy="raise"`, and add one comment above the block:
 ```python
@@ -701,7 +701,7 @@ In `niche.py` change every `lazy="selectin"` to `lazy="raise"`, and add one comm
 ```
 Same in `product.py` (four collections) and `supplier.py:62`. Grep `app/` for attribute access to any of these relationship names (the survey found none outside `niches.py:402`); if you find one, add the explicit `selectinload` at that query site.
 
-- [ ] **Step 3: Run the F1 suite with the DB, then full `pytest -q`. Commit.** `perf(models): stop eager-loading the whole niche graph on every query`
+- [x] **Step 3: Run the F1 suite with the DB, then full `pytest -q`. Commit.** `perf(models): stop eager-loading the whole niche graph on every query`
 
 ### Task F3: Dashboard numbers come from the server (F19)
 
@@ -713,7 +713,7 @@ Same in `product.py` (four collections) and `supplier.py:62`. Grep `app/` for at
 **Interfaces:**
 - Produces: `GET /api/v1/niches/stats` → `NicheStatsResponse {total_niches: int, avg_score: float | None, high_confidence_count: int, total_recommendations: int}`.
 
-- [ ] **Step 1: Failing test**
+- [x] **Step 1: Failing test**
 ```python
 async def test_niche_stats(client, seeded_niche):
     body = (await client.get("/api/v1/niches/stats")).json()
@@ -721,7 +721,7 @@ async def test_niche_stats(client, seeded_niche):
     assert body["total_recommendations"] >= 1
     assert set(body) == {"total_niches", "avg_score", "high_confidence_count", "total_recommendations"}
 ```
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Schema:
 ```python
@@ -752,7 +752,7 @@ async def niche_stats(db: AsyncSession = Depends(get_db)) -> NicheStatsResponse:
 ```
 Frontend: `page.tsx` replaces the three requests with `api.get<NicheStats>("/api/v1/niches/stats")` and sets `stats` from the body (round `avg_score` for display, treat `null` as 0). Add `NicheStats` to `types/index.ts`. In `recent-niches-table.tsx` change `sort_by: "analyzed_at"` to `"created_at"` (the only time field the API sorts by — `niches.py:111-118`).
 
-- [ ] **Step 3: pytest (with DB) + `npx tsc --noEmit` + restore tsbuildinfo. Commit.** `feat(dashboard): compute headline stats server-side`
+- [x] **Step 3: pytest (with DB) + `npx tsc --noEmit` + restore tsbuildinfo. Commit.** `feat(dashboard): compute headline stats server-side`
 
 ### Task F4: Server-side failures are logged 500s, not silent 400s (found by F1)
 
@@ -765,7 +765,7 @@ Frontend: `page.tsx` replaces the three requests with `api.get<NicheStats>("/api
 **Interfaces:**
 - `PermissionError` → 403 and `FileNotFoundError` → 404 stay, but are logged at WARNING with the path. Every other exception (including `ValueError`/`ValidationError`) → `logger.exception(...)` + 500 `{"detail": "Internal server error"}`.
 
-- [ ] **Step 1: Failing test**
+- [x] **Step 1: Failing test**
 
 ```python
 """GlobalExceptionMiddleware turns server-side failures into logged 500s, never silent 400s."""
@@ -825,9 +825,9 @@ async def test_permission_error_is_a_logged_403(client, caplog):
     assert "/forbidden" in caplog.text
 ```
 
-- [ ] **Step 2: Run, expect the first test to fail with 400.**
+- [x] **Step 2: Run, expect the first test to fail with 400.**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 class GlobalExceptionMiddleware(BaseHTTPMiddleware):
@@ -853,7 +853,7 @@ class GlobalExceptionMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 ```
 
-- [ ] **Step 4: `pytest -q`; commit.** `fix(api): log server-side failures as 500s instead of blaming the client with a silent 400`
+- [x] **Step 4: `pytest -q`; commit.** `fix(api): log server-side failures as 500s instead of blaming the client with a silent 400`
 
 ---
 
@@ -871,7 +871,7 @@ class GlobalExceptionMiddleware(BaseHTTPMiddleware):
 - Produces: `BrowserSession(marketplace, proxy_manager, site="amazon", pacer: Pacer | SharedPacer | None = None)`; `load()` uses `self.pacer`, which defaults to `pacer_for(site)`.
 - Redis key: `pace:{domain}`; a run that holds the key for one gap length is "the last request". Any Redis error switches that `SharedPacer` instance to its local fallback for the rest of the process and logs once.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `tests/test_scraping/test_pacing.py` add:
 ```python
@@ -926,9 +926,9 @@ async def test_redis_failure_falls_back_to_local_pacing():
 ```
 `tests/test_scraping/test_session_policy.py`: add a test that `BrowserSession(marketplace, proxy_manager, pacer=custom)` stores `custom` on `.pacer`, and that the default is `pacer_for("amazon")` (identity check). Follow that file's existing construction helpers.
 
-- [ ] **Step 2: Run, expect ImportError.**
+- [x] **Step 2: Run, expect ImportError.**
 
-- [ ] **Step 3: Implement `SharedPacer`** (append to `pacing.py`; keep the file under 200 lines)
+- [x] **Step 3: Implement `SharedPacer`** (append to `pacing.py`; keep the file under 200 lines)
 
 ```python
 # Poll granularity while another process holds the slot. Short enough to feel
@@ -973,11 +973,11 @@ class SharedPacer:
 ```
 Add `import logging` and `logger = logging.getLogger(__name__)` at the top. Replace the `NOTE: this registry lives in one worker process…` comment with one sentence: "Local fallback pacers; the pipeline injects a SharedPacer (Redis) so all worker processes share the gap."
 
-- [ ] **Step 4: Inject into `BrowserSession`**
+- [x] **Step 4: Inject into `BrowserSession`**
 
 Constructor gains `pacer: "Pacer | SharedPacer | None" = None` and sets `self.pacer = pacer or pacer_for(site)`. `load()` line 151 becomes `await self.pacer.wait_turn(self.marketplace.domain)`.
 
-- [ ] **Step 5: `pytest -q`, commit.** `feat(scraping): Redis-backed pacer shared by every worker process`
+- [x] **Step 5: `pytest -q`, commit.** `feat(scraping): Redis-backed pacer shared by every worker process`
 
 ### Task G2: Every browser in the pipeline uses the shared pacer — including 1688
 
@@ -992,7 +992,7 @@ Constructor gains `pacer: "Pacer | SharedPacer | None" = None` and sets `self.pa
 - Produces: `_build_browser_session(marketplace, pacer=None)`.
 - Produces: `SupplierScraper(proxy_manager=None, cookie_manager=None, pacer=None)`; `self.pacer = pacer or pacer_for("1688")`; both `page.goto(...)` calls at 290 and 610 are preceded by `await self.pacer.wait_turn("1688.com")`. `_random_delay` stays only for the intra-page scroll/expand waits (lines 333, 375, 716); the fixed render sleeps (296, 312, 611) stay.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 `tests/test_services/test_supplier_scraper_pacing.py`:
 ```python
@@ -1030,9 +1030,9 @@ def test_page_cache_is_skipped_on_forced_rerun():
     assert tasks._page_cache_for(object(), force=False) is not None
 ```
 
-- [ ] **Step 2: Run, expect AttributeError / TypeError.**
+- [x] **Step 2: Run, expect AttributeError / TypeError.**
 
-- [ ] **Step 3: Implement in `tasks.py`**
+- [x] **Step 3: Implement in `tasks.py`**
 
 ```python
 @asynccontextmanager
@@ -1078,9 +1078,9 @@ def _build_browser_session(marketplace: str, pacer=None) -> "BrowserSession":
 (Keep nesting ≤ 3 levels: if the existing body is already deep, extract the inner part into a named helper.) Line 689: `SupplierScraper(cookie_manager=cookie_manager, pacer=_shared_pacer(redis, "1688"))`. The tracker (1059) and competitor refresh (1149) also open `_redis_for_run()` and pass `_shared_pacer(redis, "amazon")`; line 386 (sub-niche) reuses the outer run's `redis`.
 Delete `_page_cache_for_run`.
 
-- [ ] **Step 4: `SupplierScraper`** — constructor and the two `wait_turn` calls as in Interfaces. Import `pacer_for` from `app.scraping.pacing`.
+- [x] **Step 4: `SupplierScraper`** — constructor and the two `wait_turn` calls as in Interfaces. Import `pacer_for` from `app.scraping.pacing`.
 
-- [ ] **Step 5: Full `pytest -q`; run one `run_full_analysis` in Docker with Redis down and confirm the log line "Shared pacing unavailable" appears once and the run completes. Commit.** `feat(workers): all browsers pace through the shared Redis pacer, 1688 included`
+- [x] **Step 5: Full `pytest -q`; run one `run_full_analysis` in Docker with Redis down and confirm the log line "Shared pacing unavailable" appears once and the run completes. Commit.** `feat(workers): all browsers pace through the shared Redis pacer, 1688 included`
 
 ---
 
@@ -1088,10 +1088,10 @@ Delete `_page_cache_for_run`.
 
 **Files:** `CLAUDE.md`, `README.md`, `GUIDE.md`, `TODO.md`, `docs/superpowers/plans/2026-09-26-data-quality-and-worker-pacing.md` (this file: tick boxes)
 
-- [ ] `CLAUDE.md`: Database section → 15 migrations, migration 016 adds `bsr_history.review_count`; Scoring bullet: supplier sub-score is neutral (50) when no supplier data, recommendation `risk_flags.data_gaps` lists assumptions; hard filter #9 arms once ≥ 3 products have ≥ 14 days of review-count snapshots; relationships are `lazy="raise"`; pacing is Redis-shared with per-process fallback. Add `app/workers/pipeline_steps/{assumptions,review_velocity}.py`, `tests/test_api/` to the file tables.
-- [ ] `GUIDE.md` scraping section: shared pacing paragraph; note the `pace:{domain}` key.
-- [ ] `TODO.md`: check off "Review velocity hard filter not armed", "Niche eager loading", "Pacer/rotation state is per worker process", "Supplier sub-score uses assumed defaults"; update "Unbounded API responses" with the rationale in Decisions.
-- [ ] Commit: `docs: tranche 2 — data gaps, review velocity, lazy loading, shared pacing`
+- [x] `CLAUDE.md`: Database section → 15 migrations, migration 016 adds `bsr_history.review_count`; Scoring bullet: supplier sub-score is neutral (50) when no supplier data, recommendation `risk_flags.data_gaps` lists assumptions; hard filter #9 arms once ≥ 3 products have ≥ 14 days of review-count snapshots; relationships are `lazy="raise"`; pacing is Redis-shared with per-process fallback. Add `app/workers/pipeline_steps/{assumptions,review_velocity}.py`, `tests/test_api/` to the file tables.
+- [x] `GUIDE.md` scraping section: shared pacing paragraph; note the `pace:{domain}` key.
+- [x] `TODO.md`: check off "Review velocity hard filter not armed", "Niche eager loading", "Pacer/rotation state is per worker process", "Supplier sub-score uses assumed defaults"; update "Unbounded API responses" with the rationale in Decisions.
+- [x] Commit: `docs: tranche 2 — data gaps, review velocity, lazy loading, shared pacing`
 
 ---
 
