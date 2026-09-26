@@ -11,7 +11,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, require_feature
+from app.licensing import FEATURE_EXPORT
 from app.models.competitor import Competitor
 from app.models.financial_projection import FinancialProjection
 from app.models.keyword import NicheKeyword
@@ -21,7 +22,13 @@ from app.models.recommendation import Recommendation
 from app.models.review import ReviewPainPoint
 from app.models.supplier import Supplier
 
-router = APIRouter(prefix="/exports", tags=["exports"])
+# NOTE: every export route is a paid feature. Gating at the router covers CSV and PDF
+# at once, so a new export endpoint is locked by default rather than by remembering to add it.
+router = APIRouter(
+    prefix="/exports",
+    tags=["exports"],
+    dependencies=[Depends(require_feature(FEATURE_EXPORT))],
+)
 
 
 # ---------------------------------------------------------------------------

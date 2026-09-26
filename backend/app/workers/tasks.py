@@ -643,7 +643,12 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         product_blueprint = None
         # competitor_reviews_map already collected in step 4 above
         competitor_meta = _build_competitor_metadata(detailed_products)
-        if competitor_reviews_map and llm_client:
+        # NOTE: the AI product blueprint is a paid feature. The worker reads the same
+        # LICENSE_KEY as the API, so an unlicensed deployment skips the step entirely.
+        from app.licensing import FEATURE_BLUEPRINT, current_license
+
+        blueprint_licensed = FEATURE_BLUEPRINT in current_license().features
+        if competitor_reviews_map and llm_client and blueprint_licensed:
             try:
                 product_blueprint = await blueprint_svc.generate_blueprint(
                     niche_keyword=keyword,

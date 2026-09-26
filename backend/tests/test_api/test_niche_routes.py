@@ -113,3 +113,18 @@ async def test_delete_niche_cascades_in_the_database(client, seeded_niche, db_se
         select(func.count()).select_from(Competitor).where(Competitor.niche_id == seeded_niche.id)
     )).scalar_one()
     assert remaining == 0
+
+
+async def test_license_status_is_free_tier_by_default(client):
+    """No LICENSE_KEY configured in the test environment, so the app reports the free tier."""
+    body = (await client.get("/api/v1/license")).json()
+    assert body["tier"] == "free"
+    assert body["features"] == []
+    assert body["valid"] is False
+
+
+async def test_export_is_locked_on_the_free_tier(client, seeded_niche):
+    """Exports are a paid feature; the free tier gets 402 before any work happens."""
+    response = await client.get(f"/api/v1/exports/niches/{seeded_niche.id}/csv")
+    assert response.status_code == 402
+    assert response.json()["detail"]["feature"] == "export"

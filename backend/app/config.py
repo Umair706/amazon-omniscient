@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # stored in risk_flags.review_velocity_gap_ratio).
     REVIEW_VELOCITY_FILTER_ENABLED: bool = False
 
+    # --- Licensing (open-core) ---
+    # The key a customer was issued; empty = free tier. LICENSE_PUBLIC_KEY is only
+    # needed by the maintainer when the public key was not embedded in source.
+    LICENSE_KEY: str = ""
+    LICENSE_PUBLIC_KEY: str = ""
+
     # ── Celery ─────────────────────────────────────────────────────────
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
