@@ -332,7 +332,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
         # ── Step 3: Scrape top product details ─────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
         from app.workers.pipeline_steps.product_details import scrape_product_details
-        detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
+        detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper, marketplace)
 
         # Merge detail data back
         detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
@@ -480,7 +480,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # Scrape individual product pages for detailed data
             from app.workers.pipeline_steps.product_details import scrape_product_details
-            detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
+            detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper, marketplace)
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
