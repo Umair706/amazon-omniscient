@@ -143,6 +143,37 @@ class TestHardFilters:
         assert result["confidence_tier"] == "FAIL"
 
 
+class TestSellerThresholdOverrides:
+    """A seller's own thresholds replace the marketplace defaults."""
+
+    def test_margin_override_can_reject_a_normally_passing_margin(self, scorer, sample_metrics):
+        # A 30% margin passes the default 25% floor, but a seller who demands
+        # 40% should see this disqualified.
+        sample_metrics["pre_ppc_margin_pct"] = 30
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+
+        sample_metrics["min_margin_override"] = 40
+        result = scorer.compute_score(sample_metrics)
+        assert result["pass_all_filters"] is False
+        assert any("margin" in r.lower() for r in result["fail_reasons"])
+
+    def test_review_moat_override_can_accept_a_normally_failing_moat(self, scorer, sample_metrics):
+        # 3000 reviews fails the default US moat of 2000, but a seller willing
+        # to enter moatier niches can raise the ceiling.
+        sample_metrics["median_competitor_reviews"] = 3000
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is False
+
+        sample_metrics["review_moat_override"] = 5000
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+
+    def test_no_override_leaves_marketplace_default_untouched(self, scorer, sample_metrics):
+        # A missing override must not change the shared class-level defaults.
+        sample_metrics["median_competitor_reviews"] = 3000
+        result = scorer.compute_score(sample_metrics)
+        assert result["pass_all_filters"] is False
+        assert ScoringService.MARKETPLACE_THRESHOLDS["US"]["review_moat_max"] == 2000
+
+
 class TestConfidenceTiers:
     def test_fail_tier_on_filter_failure(self, scorer, sample_metrics):
         sample_metrics["avg_price"] = 10

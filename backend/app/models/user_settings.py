@@ -25,12 +25,10 @@ class UserSettings(TimestampMixin, Base):
     default_marketplace: Mapped[str | None] = mapped_column(
         String(20), server_default="US"
     )
-    min_margin_threshold: Mapped[Decimal | None] = mapped_column(
-        Numeric(5, 2), server_default="25.00"
-    )
-    max_review_moat: Mapped[int | None] = mapped_column(
-        Integer, server_default="2000"
-    )
+    # NULL means "use the smart per-marketplace default" (US and AU differ).
+    # A value here is a deliberate seller override of that default.
+    min_margin_threshold: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    max_review_moat: Mapped[int | None] = mapped_column(Integer)
     allow_seasonal: Mapped[bool | None] = mapped_column(
         Boolean, server_default="false"
     )

@@ -816,6 +816,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace,
         )
 
+        # A seller's own thresholds (min margin, max review moat, seasonal) override
+        # the marketplace defaults. NULL settings fall back to those defaults.
+        from app.workers.pipeline_steps.seller_overrides import (
+            apply_seller_overrides,
+            load_seller_overrides,
+        )
+        apply_seller_overrides(metrics, await load_seller_overrides(db))
+
         from app.workers.pipeline_steps.review_velocity import apply_review_velocity
         await apply_review_velocity(
             db, niche_id, metrics, marketplace=marketplace, filter_enabled=Settings().REVIEW_VELOCITY_FILTER_ENABLED,

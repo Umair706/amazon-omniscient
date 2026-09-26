@@ -507,6 +507,22 @@ class ScoringService:
     # ------------------------------------------------------------------
     # Hard disqualification filters
     # ------------------------------------------------------------------
+    @staticmethod
+    def _apply_threshold_overrides(thresholds: dict, m: dict) -> None:
+        """Overwrite specific filter thresholds with a seller's own settings.
+
+        A seller can tune two hard filters in Settings to match their own risk
+        appetite. When a metric carries an override, it replaces the
+        marketplace default in place. Missing or None overrides change nothing.
+        """
+        margin_override = m.get("min_margin_override")
+        if margin_override is not None:
+            thresholds["margin_min"] = margin_override
+
+        review_moat_override = m.get("review_moat_override")
+        if review_moat_override is not None:
+            thresholds["review_moat_max"] = review_moat_override
+
     def _apply_hard_filters(self, m: dict) -> list[dict]:
         """Apply 9 hard filters. Each returns pass/fail with reason.
 
@@ -515,9 +531,13 @@ class ScoringService:
         """
         allow_seasonal = m.get("allow_seasonal", False)
         marketplace = m.get("marketplace", "US")
-        thresholds = self.MARKETPLACE_THRESHOLDS.get(
-            marketplace, self.MARKETPLACE_THRESHOLDS["US"]
+        # Start from the marketplace defaults, then let a seller's own settings
+        # override specific filters. Copy first so we never mutate the shared
+        # class-level defaults dict.
+        thresholds = dict(
+            self.MARKETPLACE_THRESHOLDS.get(marketplace, self.MARKETPLACE_THRESHOLDS["US"])
         )
+        self._apply_threshold_overrides(thresholds, m)
         filters = []
 
         # Determine currency symbol for display

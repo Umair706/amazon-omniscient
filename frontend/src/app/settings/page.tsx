@@ -28,16 +28,25 @@ export default function SettingsPage() {
   const [llmProvider, setLlmProvider] = useState("qwen");
   const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
-  const [defaultMarketplace, setDefaultMarketplace] = useState("US");
+  const [defaultMarketplace, setDefaultMarketplace] = useState("AU");
+  const [minMargin, setMinMargin] = useState("");
+  const [maxReviewMoat, setMaxReviewMoat] = useState("");
+  const [allowSeasonal, setAllowSeasonal] = useState(false);
+
+  // Load the stored settings into the form. Blank threshold fields mean
+  // "use the smart per-marketplace default", so a null value stays blank.
+  const syncFormFromSettings = (data: UserSettings) => {
+    setSettings(data);
+    setDefaultMarketplace(data.default_marketplace || "AU");
+    setMinMargin(data.min_margin_threshold != null ? String(data.min_margin_threshold) : "");
+    setMaxReviewMoat(data.max_review_moat != null ? String(data.max_review_moat) : "");
+    setAllowSeasonal(!!data.allow_seasonal);
+  };
 
   useEffect(() => {
     api
       .get("/api/v1/settings/")
-      .then((res) => {
-        const data: UserSettings = res.data;
-        setSettings(data);
-        setDefaultMarketplace(data.default_marketplace || "US");
-      })
+      .then((res) => syncFormFromSettings(res.data as UserSettings))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -69,6 +78,12 @@ export default function SettingsPage() {
       // Preferences
       if (defaultMarketplace) payload.default_marketplace = defaultMarketplace;
 
+      // Threshold overrides. A blank field sends null, which reverts that
+      // filter to the marketplace default rather than forcing a value.
+      payload.min_margin_threshold = minMargin.trim() === "" ? null : Number(minMargin);
+      payload.max_review_moat = maxReviewMoat.trim() === "" ? null : Number(maxReviewMoat);
+      payload.allow_seasonal = allowSeasonal;
+
       await api.put("/api/v1/settings/", payload);
       setMessage({ type: "success", text: "Settings saved successfully" });
       // Clear secret fields after save
@@ -76,9 +91,9 @@ export default function SettingsPage() {
       setAdsClientSecret("");
       setLlmApiKey("");
 
-      // Refresh settings state
+      // Refresh settings state and re-sync the form to normalised values
       const res = await api.get("/api/v1/settings/");
-      setSettings(res.data);
+      syncFormFromSettings(res.data as UserSettings);
     } catch (err: unknown) {
       const error = err as { response?: { data?: { detail?: string } } };
       setMessage({ type: "error", text: error.response?.data?.detail || "Failed to save settings" });
@@ -270,24 +285,66 @@ export default function SettingsPage() {
       {/* Preferences */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Preferences</CardTitle>
-          <CardDescription>Analysis defaults and marketplace</CardDescription>
+          <CardTitle className="text-lg">Analysis preferences</CardTitle>
+          <CardDescription>
+            Your default marketplace and the hard-filter thresholds used when scoring a niche.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="text-sm font-medium">Default Marketplace</label>
+            <label className="text-sm font-medium">Default marketplace</label>
             <select
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={defaultMarketplace}
               onChange={(e) => setDefaultMarketplace(e.target.value)}
             >
-              <option value="US">United States (US)</option>
-              <option value="AU">Australia (AU)</option>
-              <option value="UK">United Kingdom (UK)</option>
-              <option value="DE">Germany (DE)</option>
-              <option value="CA">Canada (CA)</option>
-              <option value="JP">Japan (JP)</option>
+              <option value="AU">Australia — Amazon.com.au (AU)</option>
+              <option value="US">United States — Amazon.com (US)</option>
             </select>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Minimum margin %</label>
+            <Input
+              type="number"
+              inputMode="decimal"
+              value={minMargin}
+              onChange={(e) => setMinMargin(e.target.value)}
+              placeholder="Leave blank to use the marketplace default (25%)"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              A niche whose pre-PPC margin falls below this is disqualified. Blank uses the default for your marketplace.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Maximum review moat</label>
+            <Input
+              type="number"
+              inputMode="numeric"
+              value={maxReviewMoat}
+              onChange={(e) => setMaxReviewMoat(e.target.value)}
+              placeholder="Leave blank to use the marketplace default (US 2000, AU 500)"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              The most reviews a typical competitor can have before the niche is too hard to break into. Blank uses the marketplace default.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              id="allow-seasonal"
+              type="checkbox"
+              checked={allowSeasonal}
+              onChange={(e) => setAllowSeasonal(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-input"
+            />
+            <label htmlFor="allow-seasonal" className="text-sm">
+              Allow seasonal-only niches
+              <span className="block text-xs text-muted-foreground">
+                Off by default. When off, a niche with demand only part of the year is disqualified.
+              </span>
+            </label>
           </div>
         </CardContent>
       </Card>
