@@ -83,9 +83,9 @@ class AnalyzeKeywordRequest(BaseModel):
         min_length=1, max_length=MAX_KEYWORD_LENGTH, description="Niche keyword to analyze"
     )
     marketplace: str = Field(
-        default="US",
+        default="AU",
         max_length=10,
-        description="Amazon marketplace code (e.g. US, AU)",
+        description="Amazon marketplace code (e.g. AU, US). Defaults to AU.",
     )
     force: bool = Field(
         default=False, description="Force re-analysis if niche already exists"
