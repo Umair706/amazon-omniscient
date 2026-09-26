@@ -46,3 +46,6 @@ coverage.xml
 
 # Local compose overrides (machine-specific ports etc.)
 docker-compose.override.yml
+
+# Celery beat writes its schedule database into the mounted backend/ directory
+backend/celerybeat-schedule*
