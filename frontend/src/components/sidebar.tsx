@@ -8,6 +8,7 @@ import { useLicense } from "@/lib/use-license";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
   BarChart3,
+  Compass,
   Search,
   Star,
   Settings,
@@ -18,6 +19,7 @@ import {
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
+  { href: "/discover", label: "Discover", icon: Compass },
   { href: "/niches", label: "Niche Explorer", icon: Search },
   { href: "/recommendations", label: "Recommendations", icon: Star },
   { href: "/docs", label: "Documentation", icon: BookOpen },

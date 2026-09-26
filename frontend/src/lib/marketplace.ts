@@ -4,6 +4,9 @@ export const MARKETPLACE_LABELS: Record<string, string> = {
   US: "Amazon.com (United States)",
 };
 
+// Codes for a selector, AU first (the default marketplace).
+export const MARKETPLACE_CODES = ["AU", "US"];
+
 // Full human label for a marketplace code, e.g. "AU" -> "Amazon.com.au (Australia)".
 export function marketplaceLabel(code?: string | null): string {
   if (!code) return "Unknown marketplace";

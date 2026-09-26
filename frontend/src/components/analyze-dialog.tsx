@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -118,6 +119,7 @@ interface AnalyzeDialogProps {
 // ---------------------------------------------------------------------------
 
 export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
+  const searchParams = useSearchParams();
   const [keyword, setKeyword] = useState("");
   const [marketplace, setMarketplace] = useState(DEFAULT_MARKETPLACE);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -257,11 +259,11 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
     return () => clearInterval(interval);
   }, [jobId, jobStatus]);
 
-  // ---- Submit (starts discovery) ----
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmed = keyword.trim();
+  // ---- Start discovery for a keyword + marketplace ----
+  // Shared by the manual form and the auto-start from a /?keyword=... link.
+  const beginDiscovery = useCallback(
+    async (rawKeyword: string, targetMarketplace: string) => {
+      const trimmed = rawKeyword.trim();
       if (!trimmed) return;
 
       setJobStatus("submitting");
@@ -273,14 +275,14 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
       setStep("");
 
       try {
-        const res = await api.post("/api/v1/jobs/discover", { keyword: trimmed, marketplace });
+        const res = await api.post("/api/v1/jobs/discover", { keyword: trimmed, marketplace: targetMarketplace });
         const { job_id, result } = res.data;
         setJobId(job_id);
         setJobStatus("discovering");
         saveActiveJob({
           jobId: job_id,
           keyword: trimmed,
-          marketplace,
+          marketplace: targetMarketplace,
           startedAt: new Date().toISOString(),
           phase: "discovery",
           parentNicheId: result?.niche_id,
@@ -291,8 +293,33 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
         setJobError(err.response?.data?.detail || "Failed to start discovery");
       }
     },
-    [keyword, marketplace, onJobStarted],
+    [onJobStarted],
   );
+
+  // ---- Submit (starts discovery) ----
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      beginDiscovery(keyword, marketplace);
+    },
+    [keyword, marketplace, beginDiscovery],
+  );
+
+  // ---- Auto-start from a /?keyword=... link (e.g. the Discover page) ----
+  // Runs once. A resumable job in localStorage wins, so we never stomp on
+  // an analysis the user already has in flight.
+  const [autoStarted, setAutoStarted] = useState(false);
+  useEffect(() => {
+    if (autoStarted) return;
+    const linkedKeyword = searchParams.get("keyword");
+    if (!linkedKeyword) return;
+    setAutoStarted(true);
+    if (loadActiveJob()) return;
+    const linkedMarketplace = searchParams.get("marketplace") || DEFAULT_MARKETPLACE;
+    setKeyword(linkedKeyword);
+    setMarketplace(linkedMarketplace);
+    beginDiscovery(linkedKeyword, linkedMarketplace);
+  }, [searchParams, autoStarted, beginDiscovery]);
 
   // ---- Sub-niche selection ----
   const handleSubNicheSelect = useCallback(

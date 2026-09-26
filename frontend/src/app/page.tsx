@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { motion } from "framer-motion";
 import { StatCard } from "@/components/stat-card";
 import { AnalyzeDialog } from "@/components/analyze-dialog";
@@ -95,7 +95,9 @@ export default function DashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.4 }}
       >
-        <AnalyzeDialog />
+        <Suspense fallback={null}>
+          <AnalyzeDialog />
+        </Suspense>
       </motion.div>
 
       {/* Empty State or Recent Niches */}
