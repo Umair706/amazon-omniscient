@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
-from app.core.exceptions import ScrapingError
+from app.core.exceptions import ScrapingError, WrongMarketplaceError
 from app.workers.celery_app import celery_app
 
 # Only imported for type hints — the real imports stay local to the
@@ -246,6 +246,11 @@ def run_full_analysis(self, niche_id: int, keyword: str, marketplace: str = "US"
         # so mark the niche failed instead of retrying.
         logger.error("Analysis for niche %d exceeded the soft time limit", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", "Timed out"))
+        raise
+    except WrongMarketplaceError as exc:
+        # The redirect is decided by the exit IP's country; a retry lands in the same place.
+        logger.error("Analysis for niche %d cannot run from this network: %s", niche_id, exc)
+        _run_async(_update_niche_status(niche_id, "failed", str(exc)))
         raise
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
@@ -1412,6 +1417,10 @@ async def _scrape_search_results(scraper: "ScraperService", keyword: str, market
 
     try:
         return await scraper.scrape_search_results(keyword, pages=SERP_FALLBACK_PAGES)
+    except WrongMarketplaceError:
+        # NOTE: an empty result here would be reported as "no products found", which hides
+        # the real cause (a geo-redirect) and triggers retries that cannot succeed.
+        raise
     except Exception as e:
         logger.warning("Search scraping failed for '%s': %s", keyword, e)
         return []

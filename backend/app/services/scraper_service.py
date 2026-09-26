@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
-from app.core.exceptions import ScrapingError
+from app.core.exceptions import ScrapingError, WrongMarketplaceError
 from app.core.proxy_manager import ProxyManager
 from app.scraping.block_detection import PageVerdict
 from app.scraping.events import record_scrape_event
@@ -259,7 +259,7 @@ class ScraperService:
             await self._record_load_event(verdict, started_at, url_kind)
             if verdict == _WRONG_MARKETPLACE_VERDICT:
                 await page.close()
-                raise ScrapingError(self._wrong_marketplace_message(url, getattr(page, "url", "")))
+                raise WrongMarketplaceError(self._wrong_marketplace_message(url, getattr(page, "url", "")))
             if verdict not in _ROTATE_ON_VERDICTS:
                 return page, verdict
             await page.close()
