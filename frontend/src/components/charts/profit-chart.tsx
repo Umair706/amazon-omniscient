@@ -36,6 +36,7 @@ export function ProfitChart({ bull, base, bear, className }: ProfitChartProps) {
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
           <XAxis
             dataKey="week"
+            minTickGap={24}
             label={{ value: "Week", position: "insideBottom", offset: -5 }}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
           />

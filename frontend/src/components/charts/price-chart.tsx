@@ -35,6 +35,7 @@ export function PriceChart({ data, className }: PriceChartProps) {
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
           <XAxis
             dataKey="time"
+            minTickGap={28}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
           />
           <YAxis
