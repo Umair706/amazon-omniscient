@@ -30,11 +30,16 @@ import {
   Server,
 } from "lucide-react";
 
-type TabKey = "pipeline" | "scoring" | "api";
+import { GettingStartedTab } from "./getting-started-tab";
+import { ReadingResultsTab } from "./reading-results-tab";
+
+type TabKey = "start" | "pipeline" | "scoring" | "reading" | "api";
 
 const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
+  { key: "start", label: "Getting Started", icon: Rocket },
   { key: "pipeline", label: "How It Works", icon: Cpu },
   { key: "scoring", label: "Scoring System", icon: Award },
+  { key: "reading", label: "Reading Results", icon: BookOpen },
   { key: "api", label: "API Reference", icon: Server },
 ];
 
@@ -114,32 +119,35 @@ const PIPELINE_STEPS = [
 const SUB_SCORES = [
   { name: "Demand", weight: "15%", icon: Target, description: "Search volume, BSR velocity" },
   { name: "Competition", weight: "15%", icon: Shield, description: "Listing quality, review moats, brand dominance" },
-  { name: "Revenue", weight: "12%", icon: DollarSign, description: "Monthly revenue per seller, market size" },
   { name: "Margin", weight: "15%", icon: Percent, description: "Pre/post-PPC profit margins" },
-  { name: "Trend", weight: "8%", icon: TrendingUp, description: "Search volume trajectory, seasonality" },
+  { name: "Revenue", weight: "10%", icon: DollarSign, description: "Monthly revenue per seller, market size" },
+  { name: "Trend", weight: "10%", icon: TrendingUp, description: "Search volume trajectory, seasonality" },
   { name: "Review Feasibility", weight: "10%", icon: Star, description: "How achievable the review moat is" },
   { name: "Supplier", weight: "10%", icon: Truck, description: "Supplier reliability, cost competitiveness" },
-  { name: "PPC Viability", weight: "8%", icon: Megaphone, description: "ACOS sustainability, keyword opportunity" },
-  { name: "Launch Feasibility", weight: "7%", icon: Rocket, description: "Capital requirements, break-even timeline" },
+  { name: "PPC Viability", weight: "10%", icon: Megaphone, description: "ACOS sustainability, keyword opportunity" },
+  { name: "Launch Feasibility", weight: "5%", icon: Rocket, description: "Capital requirements, break-even timeline" },
 ];
 
 const CONFIDENCE_TIERS = [
   { tier: "HIGH", range: "80-100", color: "bg-tier1", description: "Strong opportunity" },
   { tier: "MEDIUM", range: "60-79", color: "bg-tier2", description: "Viable with caveats" },
   { tier: "LOW", range: "40-59", color: "bg-tier3", description: "Significant risks" },
-  { tier: "VERY LOW", range: "20-39", color: "bg-rejected", description: "Major concerns" },
+  { tier: "VERY LOW", range: "< 40", color: "bg-rejected", description: "Major concerns" },
   { tier: "FAIL", range: "--", color: "bg-destructive", description: "One or more hard filters failed" },
 ];
 
+// Thresholds are per-marketplace and some are seller-tunable in Settings, so
+// the values here are the US defaults shown for orientation, not fixed law.
 const HARD_FILTERS = [
-  "Price range ($15-$70)",
-  "Review moat (median < 2,000)",
-  "BSR demand (avg BSR < 50,000)",
-  "Minimum margin (pre-PPC > 25%)",
-  "Amazon dominance (< 30%)",
-  "Restricted category check",
-  "IP/patent risk check",
-  "Seasonality check",
+  "Price in range (US $15-$70)",
+  "Review moat below ceiling (US 2,000, AU 500; tunable)",
+  "BSR demand (avg BSR below the marketplace ceiling)",
+  "Minimum margin (pre-PPC above 25%; tunable)",
+  "Amazon dominance (below 30% of the shelf)",
+  "Not a restricted or hazmat category",
+  "No IP or patent risk indicators",
+  "Not seasonal-only (unless you allow it in Settings)",
+  "No review-velocity manipulation trap",
 ];
 
 interface EndpointRow {
@@ -192,10 +200,11 @@ const API_GROUPS: EndpointGroup[] = [
   },
   {
     name: "Jobs",
-    count: 4,
+    count: 5,
     endpoints: [
       { method: "POST", path: "/api/v1/jobs/analyze", description: "Start a keyword analysis (creates the niche)" },
       { method: "POST", path: "/api/v1/jobs/discover", description: "Start sub-niche discovery for a keyword" },
+      { method: "POST", path: "/api/v1/jobs/discover-opportunities", description: "Rank candidate niches from a broad seed" },
       { method: "POST", path: "/api/v1/jobs/analyze-sub-niche", description: "Analyze a discovered sub-niche" },
       { method: "GET", path: "/api/v1/jobs/{id}/status", description: "Get job status and progress" },
     ],
@@ -233,7 +242,7 @@ const METHOD_COLORS: Record<string, string> = {
 };
 
 export default function DocsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>("pipeline");
+  const [activeTab, setActiveTab] = useState<TabKey>("start");
 
   return (
     <div className="space-y-6">
@@ -267,8 +276,10 @@ export default function DocsPage() {
       </div>
 
       {/* Tab Content */}
+      {activeTab === "start" && <GettingStartedTab />}
       {activeTab === "pipeline" && <PipelineTab />}
       {activeTab === "scoring" && <ScoringTab />}
+      {activeTab === "reading" && <ReadingResultsTab />}
       {activeTab === "api" && <ApiTab />}
     </div>
   );
@@ -416,9 +427,9 @@ function ScoringTab() {
           <div className="mt-4 flex items-start gap-2 p-3 rounded-md bg-destructive/5 border border-destructive/20">
             <CheckCircle2 className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground">
-              All 8 filters must pass for the niche to receive a numerical score and confidence tier.
+              Every applicable filter must pass for the niche to receive a numerical score and confidence tier.
               If any filter fails, the niche is marked as <span className="font-semibold text-destructive">FAIL</span> regardless
-              of its sub-score performance.
+              of its sub-score performance. The review-velocity filter only applies when we have enough review history to judge it.
             </p>
           </div>
         </CardContent>
