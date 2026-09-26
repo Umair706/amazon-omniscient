@@ -6,10 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import api from "@/lib/api";
+import { useLicense } from "@/lib/use-license";
 import type { UserSettings } from "@/types";
-import { Save, Loader2, Download, Eye, EyeOff } from "lucide-react";
+import { Save, Loader2, Download, Eye, EyeOff, Lock } from "lucide-react";
 
 export default function SettingsPage() {
+  const { has } = useLicense();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -105,7 +107,11 @@ export default function SettingsPage() {
       a.download = `omniscient-export-${new Date().toISOString().split("T")[0]}.csv`;
       a.click();
       window.URL.revokeObjectURL(url);
-    } catch {
+    } catch (err: any) {
+      if (err?.response?.status === 402) {
+        setMessage({ type: "error", text: "CSV export is a Pro feature. See docs/LICENSING.md to obtain a key." });
+        return;
+      }
       setMessage({ type: "error", text: "Export failed. Make sure you have analyzed at least one niche." });
     }
   };
@@ -293,9 +299,15 @@ export default function SettingsPage() {
           <CardDescription>Export your analysis data</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="outline" onClick={() => handleExportCsv()}>
-            <Download className="h-4 w-4 mr-2" /> Export Latest Niche (CSV)
+          <Button variant="outline" onClick={() => handleExportCsv()} disabled={!has("export")}>
+            {has("export") ? <Download className="h-4 w-4 mr-2" /> : <Lock className="h-4 w-4 mr-2" />}
+            Export Latest Niche (CSV)
           </Button>
+          {!has("export") && (
+            <p className="text-xs text-muted-foreground mt-2">
+              CSV and PDF export is a Pro feature. See docs/LICENSING.md to obtain a license key.
+            </p>
+          )}
         </CardContent>
       </Card>
 

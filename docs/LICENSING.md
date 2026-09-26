@@ -106,10 +106,17 @@ and restarts. `GET /api/v1/license` confirms the tier, the features, and the exp
 - **`app/api/license.py`** — `GET /api/v1/license` returns `{tier, features, expires, valid, reason}` so the
   frontend can show premium controls as locked with an upgrade link. This is a *soft* gate for UX; the
   backend `require_feature` is the one that actually protects the feature.
-- **Enforced today (the starter):** the CSV and PDF exports (`export`) and the AI product-blueprint pipeline
-  step (`blueprint`, checked in the worker, which reads the same `LICENSE_KEY`).
-- **Defined but not yet enforced:** `financial_report`, `multi_marketplace`, `api`, `white_label`. They
-  exist in the tier presets so keys issued now are future-proof; wiring their gate points is a follow-up.
+- **Enforced:**
+  - `export` — the CSV and PDF export routes (gated at the exports router).
+  - `blueprint` — the AI product-blueprint pipeline step (checked in the worker, which reads the same `LICENSE_KEY`).
+  - `financial_report` — the consolidated financial-report pipeline step (also worker-side).
+  - `multi_marketplace` — the analyze endpoint. The free tier may analyse one marketplace; a request that
+    would introduce a second distinct one returns 402. The first marketplace a user ever analyses is free.
+  - `white_label` — the frontend hides the "Powered by Omniscient" badge in the sidebar when granted.
+- **License-terms only (not a technical gate):** `api`. On a self-hosted product the customer runs the API
+  themselves, so a technical block is meaningless — what a paid key grants is the *contractual right* to
+  build a commercial service on the API. Faking a technical gate here would be security theatre, so we
+  don't. It travels in the agency preset and is enforced by the license terms.
 
 ## Failure behaviour
 

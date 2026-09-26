@@ -3,6 +3,8 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect } from "react";
+
+import { useLicense } from "@/lib/use-license";
 import {
   BarChart3,
   Search,
@@ -25,6 +27,7 @@ const STORAGE_KEY = "omniscient_active_job";
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { license, has } = useLicense();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hasActiveJob, setHasActiveJob] = useState(false);
 
@@ -80,9 +83,10 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="mt-auto pt-6 border-t">
-        <p className="text-xs text-muted-foreground">
-          Amazon Product Research Engine
-        </p>
+        <p className="text-xs font-medium capitalize">{license.tier} tier</p>
+        {!has("white_label") && (
+          <p className="text-xs text-muted-foreground mt-1">Powered by Omniscient</p>
+        )}
       </div>
     </>
   );

@@ -643,12 +643,13 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         product_blueprint = None
         # competitor_reviews_map already collected in step 4 above
         competitor_meta = _build_competitor_metadata(detailed_products)
-        # NOTE: the AI product blueprint is a paid feature. The worker reads the same
-        # LICENSE_KEY as the API, so an unlicensed deployment skips the step entirely.
-        from app.licensing import FEATURE_BLUEPRINT, current_license
+        # NOTE: the AI blueprint and the consolidated financial report are paid features.
+        # The worker reads the same LICENSE_KEY as the API, so an unlicensed deployment
+        # skips both steps entirely. Read the license once for both checks.
+        from app.licensing import FEATURE_BLUEPRINT, FEATURE_FINANCIAL_REPORT, current_license
 
-        blueprint_licensed = FEATURE_BLUEPRINT in current_license().features
-        if competitor_reviews_map and llm_client and blueprint_licensed:
+        licensed_features = current_license().features
+        if competitor_reviews_map and llm_client and FEATURE_BLUEPRINT in licensed_features:
             try:
                 product_blueprint = await blueprint_svc.generate_blueprint(
                     niche_keyword=keyword,
@@ -898,28 +899,32 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         from app.services.financial_report import FinancialReportService
         fin_report_svc = FinancialReportService(marketplace=marketplace)
 
+        # The consolidated financial report is a paid feature; skip it on an unlicensed deployment.
         financial_report = None
-        try:
-            from app.core.category_mapping import category_slugs
-            duty_slug, fee_slug = category_slugs(metrics.get("category"))
-            financial_report = await fin_report_svc.generate_full_report(
-                selling_price=metrics.get("avg_price") or 30,
-                # Use the real scraped 1688 FOB price when we have one; otherwise fall back
-                # to a rough share of landed cost (FOB is typically ~55% of total landed cost).
-                unit_cost_fob=metrics.get("fob_unit_cost") or (metrics.get("landed_cost") or DEFAULT_LANDED_COST_USD) * FOB_SHARE_OF_LANDED_FALLBACK,
-                product_dims=product_dims,
-                category=duty_slug,
-                fee_category=fee_slug,
-                weight_kg_per_unit=product_dims["weight_lb"] * LB_TO_KG,
-                order_quantity=metrics.get("initial_order_qty") or 500,
-                estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
-                avg_cpc=metrics.get("avg_cpc") or 1.50,
-                launch_ppc_daily=metrics.get("ppc_daily_budget") or 30,
-                hard_filter_results=hard_filter_results,
-                confidence_tier=confidence_tier,
-            )
-        except Exception as e:
-            logger.warning("Consolidated financial report failed: %s", e)
+        if FEATURE_FINANCIAL_REPORT not in licensed_features:
+            logger.info("Consolidated financial report skipped: not in the installed license")
+        else:
+            try:
+                from app.core.category_mapping import category_slugs
+                duty_slug, fee_slug = category_slugs(metrics.get("category"))
+                financial_report = await fin_report_svc.generate_full_report(
+                    selling_price=metrics.get("avg_price") or 30,
+                    # Use the real scraped 1688 FOB price when we have one; otherwise fall back
+                    # to a rough share of landed cost (FOB is typically ~55% of total landed cost).
+                    unit_cost_fob=metrics.get("fob_unit_cost") or (metrics.get("landed_cost") or DEFAULT_LANDED_COST_USD) * FOB_SHARE_OF_LANDED_FALLBACK,
+                    product_dims=product_dims,
+                    category=duty_slug,
+                    fee_category=fee_slug,
+                    weight_kg_per_unit=product_dims["weight_lb"] * LB_TO_KG,
+                    order_quantity=metrics.get("initial_order_qty") or 500,
+                    estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
+                    avg_cpc=metrics.get("avg_cpc") or 1.50,
+                    launch_ppc_daily=metrics.get("ppc_daily_budget") or 30,
+                    hard_filter_results=hard_filter_results,
+                    confidence_tier=confidence_tier,
+                )
+            except Exception as e:
+                logger.warning("Consolidated financial report failed: %s", e)
 
         # ── Step 13: Save recommendation ───────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "saving_recommendation", "progress": 93})

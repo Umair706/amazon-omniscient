@@ -6,16 +6,41 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_license
+from app.licensing import FEATURE_MULTI_MARKETPLACE, License
 from app.models.niche import Niche
 from app.schemas.common import JobStatusResponse
 from app.workers.celery_app import celery_app
 from app.workers.tasks import run_full_analysis, run_discovery
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+async def _guard_marketplace(db: AsyncSession, marketplace: str, license: License) -> None:
+    """Free tier may analyse one marketplace; a second distinct one needs multi_marketplace.
+
+    Raises 402 when the requested marketplace would be the account's second and the
+    license does not grant it. The first marketplace a user ever analyses is always free.
+    """
+    if FEATURE_MULTI_MARKETPLACE in license.features:
+        return
+    used = (await db.execute(select(distinct(Niche.marketplace)))).scalars().all()
+    existing = {m for m in used if m}
+    if existing and marketplace not in existing:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "feature_locked",
+                "feature": FEATURE_MULTI_MARKETPLACE,
+                "message": (
+                    f"The free tier analyses one marketplace ({', '.join(sorted(existing))}). "
+                    f"Analysing '{marketplace}' too needs a license with multi_marketplace. See docs/LICENSING.md."
+                ),
+            },
+        )
 
 # Keywords are interpolated into LLM prompts and Amazon URLs, so we cap
 # their length well below the DB column limit to keep prompts small.
@@ -94,10 +119,12 @@ class AnalyzeSubNicheRequest(BaseModel):
 async def trigger_keyword_analysis(
     payload: AnalyzeKeywordRequest,
     db: AsyncSession = Depends(get_db),
+    license: License = Depends(get_license),
 ) -> JobStatusResponse:
     """Trigger analysis from a keyword. Creates the niche if it doesn't exist."""
     keyword = payload.keyword.strip()
     marketplace = payload.marketplace.strip().upper()
+    await _guard_marketplace(db, marketplace, license)
 
     # Check if niche already exists for this marketplace
     result = await db.execute(
