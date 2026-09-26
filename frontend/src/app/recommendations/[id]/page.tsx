@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
 import { StatCard } from "@/components/stat-card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+import { amazonProductUrl } from "@/lib/marketplace";
 import { labelForDataGap } from "@/lib/data-gaps";
 import api from "@/lib/api";
 import {
@@ -31,6 +32,7 @@ interface RecommendationDetail {
   id: number;
   niche_id: number;
   niche_name: string | null;
+  marketplace: string | null;
   omniscient_score: number;
   confidence_tier: string;
   product_description: string | null;
@@ -519,7 +521,7 @@ export default function OpportunityBriefPage() {
                           <h4 className="font-semibold text-sm">{p.title || p.asin}</h4>
                           <div className="flex flex-wrap gap-2 items-center mt-1 text-xs text-muted-foreground">
                             <a
-                              href={`https://www.amazon.com/dp/${p.asin}`}
+                              href={amazonProductUrl(p.asin, rec.marketplace)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-primary hover:underline font-mono"

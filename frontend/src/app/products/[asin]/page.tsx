@@ -9,7 +9,7 @@ import { StatCard } from "@/components/stat-card";
 import { BSRChart, PriceChart } from "@/components/charts";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import api from "@/lib/api";
-import { marketplaceLabel } from "@/lib/marketplace";
+import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
 import {
   ArrowLeft,
   DollarSign,
@@ -316,7 +316,7 @@ export default function ProductDetailPage() {
               Amazon&apos;s Choice{product.amazons_choice_keyword !== "(badge present)" ? ` for "${product.amazons_choice_keyword}"` : ""}
             </Badge>
           )}
-          <a href={`https://amazon.com/dp/${product.asin}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-1 text-xs">
+          <a href={amazonProductUrl(product.asin, product.marketplace)} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-1 text-xs">
             View on Amazon <ExternalLink className="h-3 w-3" />
           </a>
         </div>

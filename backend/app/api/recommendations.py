@@ -105,11 +105,13 @@ async def get_recommendation(
             detail=f"Recommendation {recommendation_id} not found",
         )
     data = RecommendationResponse.model_validate(rec)
-    # Fetch niche name
+    # Fetch the niche name and marketplace (marketplace lives on the niche, and the brief's
+    # Amazon links need it to point at the right store).
     niche_result = await db.execute(
-        select(Niche.name).where(Niche.id == rec.niche_id)
+        select(Niche.name, Niche.marketplace).where(Niche.id == rec.niche_id)
     )
-    niche_row = niche_result.scalar_one_or_none()
+    niche_row = niche_result.one_or_none()
     if niche_row:
-        data.niche_name = niche_row
+        data.niche_name = niche_row.name
+        data.marketplace = niche_row.marketplace
     return data

@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { LucideIcon } from "lucide-react";
 import { motion, useInView } from "framer-motion";
+import { InfoHint } from "@/components/info-hint";
 
 interface StatCardProps {
   title: string;
@@ -13,6 +14,7 @@ interface StatCardProps {
   trend?: { value: number; label: string };
   className?: string;
   index?: number;
+  hint?: string;
 }
 
 function AnimatedNumber({ value }: { value: string | number }) {
@@ -46,7 +48,7 @@ function AnimatedNumber({ value }: { value: string | number }) {
   return <span ref={ref}>{displayed}</span>;
 }
 
-export function StatCard({ title, value, subtitle, icon: Icon, trend, className, index = 0 }: StatCardProps) {
+export function StatCard({ title, value, subtitle, icon: Icon, trend, className, index = 0, hint }: StatCardProps) {
   const numericValue = typeof value === "string" ? NaN : value;
   const isNumeric = !isNaN(numericValue);
 
@@ -60,7 +62,10 @@ export function StatCard({ title, value, subtitle, icon: Icon, trend, className,
         <CardContent className="p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">{title}</p>
+              <p className="text-sm font-medium text-muted-foreground">
+                {title}
+                {hint && <InfoHint text={hint} className="ml-1" />}
+              </p>
               <p className="text-2xl font-bold mt-1">
                 {isNumeric ? <AnimatedNumber value={numericValue} /> : value}
               </p>

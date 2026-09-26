@@ -6,7 +6,8 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
-import { marketplaceLabel } from "@/lib/marketplace";
+import { InfoHint } from "@/components/info-hint";
+import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
 import { StatCard } from "@/components/stat-card";
 import { ScoreRadar, ProfitChart, SalesChart, CompetitorBarChart } from "@/components/charts";
 import { formatCurrency } from "@/lib/utils";
@@ -34,6 +35,7 @@ interface ProductItem {
   rating: number | null;
   review_count: number;
   image_url: string | null;
+  estimated_monthly_units: number | null;
   estimated_daily_sales: number | null;
   sales_velocity_trend: string | null;
   search_position: number | null;
@@ -211,12 +213,12 @@ export default function NicheDetailPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "—"} icon={DollarSign} />
-        <StatCard title="Avg BSR" value={niche.avg_bsr?.toLocaleString() || "—"} icon={TrendingUp} />
-        <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} />
-        <StatCard title="Search Volume" value={niche.monthly_search_volume?.toLocaleString() || "—"} icon={BarChart3} />
-        <StatCard title="Avg Rating" value={niche.avg_rating ? `${niche.avg_rating}/5` : "—"} icon={Star} />
-        <StatCard title="Avg Reviews" value={niche.avg_review_count?.toLocaleString() || "—"} icon={Users} />
+        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "—"} icon={DollarSign} hint="Average selling price across the top products scraped for this niche." />
+        <StatCard title="Avg BSR" value={niche.avg_bsr?.toLocaleString() || "—"} icon={TrendingUp} hint="Average Best Sellers Rank of the scraped products. Lower means higher demand." />
+        <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} hint="Estimated units/month for a typical listing, from the average BSR via a category sales curve. Uncalibrated for non-US stores." />
+        <StatCard title="Search Volume" value={niche.monthly_search_volume?.toLocaleString() || "—"} icon={BarChart3} hint="Monthly searches for the top keyword, from Amazon autocomplete depth. An estimate, not an exact figure." />
+        <StatCard title="Avg Rating" value={niche.avg_rating ? `${niche.avg_rating}/5` : "—"} icon={Star} hint="Average star rating across the scraped products." />
+        <StatCard title="Avg Reviews" value={niche.avg_review_count?.toLocaleString() || "—"} icon={Users} hint="Average review count across the scraped products — the review moat a new entrant faces." />
       </div>
 
       {niche.last_error && (
@@ -248,14 +250,14 @@ export default function NicheDetailPage() {
       {tab === "overview" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
-            <CardHeader><CardTitle className="text-lg">Sub-Score Radar</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-lg">Sub-Score Radar <InfoHint text="Nine 0-100 sub-scores (demand, competition, margin, revenue, trend, reviews, supplier, PPC, launch). Their weighted sum is the Omniscient Score." /></CardTitle></CardHeader>
             <CardContent>
               <ScoreRadar subScores={subScores} />
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader><CardTitle className="text-lg">Hard Filters</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-lg">Hard Filters <InfoHint text="Nine pass/fail gates (price band, review moat, BSR ceiling, margin, Amazon share, hazmat, IP risk, seasonality, review velocity). Any single failure forces the FAIL tier regardless of score." /></CardTitle></CardHeader>
             <CardContent>
               {niche.hard_filter_fail_reasons && niche.hard_filter_fail_reasons.length > 0 ? (
                 <div className="space-y-2">
@@ -336,9 +338,9 @@ export default function NicheDetailPage() {
                     <th className="p-4">#</th>
                     <th className="p-4">Product</th>
                     <th className="p-4">Price</th>
-                    <th className="p-4">BSR</th>
-                    <th className="p-4">Est. Daily Sales</th>
-                    <th className="p-4">Velocity</th>
+                    <th className="p-4 whitespace-nowrap">BSR <InfoHint text="Best Sellers Rank scraped from the product page. Lower = sells more. #1 is the category best-seller." /></th>
+                    <th className="p-4 whitespace-nowrap">Est. Sales/mo <InfoHint text="Estimated monthly units, derived from this product's BSR via a category sales curve. Uncalibrated for non-US stores — treat as a rough guide." /></th>
+                    <th className="p-4 whitespace-nowrap">Velocity <InfoHint text="Direction of the product's BSR over time. Appears once the 6-hourly tracker has built at least two snapshots; blank on a fresh analysis." /></th>
                     <th className="p-4">Rating</th>
                     <th className="p-4">Reviews</th>
                     <th className="p-4">Badges</th>
@@ -369,7 +371,7 @@ export default function NicheDetailPage() {
                         </td>
                         <td className="p-4">{p.current_price ? formatCurrency(p.current_price) : "—"}</td>
                         <td className="p-4">{(p.bsr_current || p.current_bsr)?.toLocaleString() || "—"}</td>
-                        <td className="p-4">{p.estimated_daily_sales != null ? p.estimated_daily_sales : "—"}</td>
+                        <td className="p-4">{p.estimated_monthly_units != null ? p.estimated_monthly_units.toLocaleString() : "—"}</td>
                         <td className="p-4"><VelocityBadge trend={p.sales_velocity_trend} /></td>
                         <td className="p-4">{p.rating ? `${p.rating}/5` : "—"}</td>
                         <td className="p-4">{p.review_count?.toLocaleString() || "0"}</td>
@@ -398,7 +400,7 @@ export default function NicheDetailPage() {
                               Details
                             </a>
                             <a
-                              href={`https://amazon.com/dp/${p.asin}`}
+                              href={amazonProductUrl(p.asin, niche.marketplace)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs"
