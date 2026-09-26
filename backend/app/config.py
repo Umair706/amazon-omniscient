@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     # Comma-separated list of origins allowed to call the API via CORS.
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
+    # ── Scoring ────────────────────────────────────────────────────────
+    # WHY off by default: the velocity is derived from Amazon's global ratings count,
+    # which grows faster than written reviews; the 5 %/3 % trap thresholds were set
+    # for reviews. Turn on after checking observed ratios on tracked niches (they are
+    # stored in risk_flags.review_velocity_gap_ratio).
+    REVIEW_VELOCITY_FILTER_ENABLED: bool = False
+
     # ── Celery ─────────────────────────────────────────────────────────
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"

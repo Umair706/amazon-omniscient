@@ -757,13 +757,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace)
 
-        from app.core.bsr_regression import BSRSalesEstimator
-        from app.workers.pipeline_steps.review_velocity import review_velocity_gap_for_niche
-        velocity_gap = await review_velocity_gap_for_niche(
-            db, niche_id, BSRSalesEstimator(marketplace=marketplace), metrics.get("category", "default"),
+        from app.workers.pipeline_steps.review_velocity import apply_review_velocity
+        await apply_review_velocity(
+            db, niche_id, metrics, marketplace=marketplace, filter_enabled=Settings().REVIEW_VELOCITY_FILTER_ENABLED,
         )
-        if velocity_gap is not None:
-            metrics["avg_review_velocity_gap_ratio"] = velocity_gap
 
         apply_supplier_summary(metrics, supplier_summary)
         product_dims = _extract_avg_dimensions(detailed_products)

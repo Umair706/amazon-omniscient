@@ -72,6 +72,7 @@ class RecommendationEngine:
             "pass_all_filters": score_result["pass_all_filters"],
             "fail_reasons": score_result["fail_reasons"],
             "data_gaps": metrics.get("data_gaps", []),
+            "review_velocity_gap_ratio": metrics.get("review_velocity_gap_ratio"),
         }
 
         # Step 3: Add strategy data
@@ -273,6 +274,7 @@ Return a JSON object:
                 "fail_reasons": data.get("fail_reasons", []),
                 "hard_filters": data.get("hard_filters", []),
                 "data_gaps": data.get("data_gaps", []),
+                "review_velocity_gap_ratio": data.get("review_velocity_gap_ratio"),
             },
             launch_playbook=data.get("marketing_plan", {}).get("launch_playbook"),
             ppc_strategy=data.get("ppc_strategy"),

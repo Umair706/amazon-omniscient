@@ -808,6 +808,7 @@ sequenceDiagram
 - **Sub-category BSR:** The 10x scaling factor for sub-category BSR is an approximation. Actual ratios vary from 5x-20x depending on the sub-category relative to its parent.
 - **Seasonal products:** BSR fluctuates significantly for seasonal products. A point-in-time BSR snapshot may not represent annual averages.
 - **New vs. established products:** BSR behaves differently for newly launched products (volatile) vs. established ones (stable). The model doesn't distinguish between these.
+- **Review-velocity trap (hard filter #9) is observe-only by default:** the reviews-per-100-sales ratio is computed from tracked review-count snapshots and stored as `risk_flags.review_velocity_gap_ratio`, but it disqualifies a niche only when `REVIEW_VELOCITY_FILTER_ENABLED=true`. The count comes from Amazon's global ratings count, which grows faster than written reviews, so the 5 %/3 % trap thresholds are not yet calibrated for it. SP-API-tracked products never get a review count, so the window only accumulates from page scrapes (analysis-time and scrape-based tracking).
 
 ### LLM Analysis
 

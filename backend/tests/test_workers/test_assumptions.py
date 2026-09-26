@@ -12,7 +12,7 @@ MEASURED_BREAK_EVEN_WEEK = 9
 
 def test_no_supplier_data_is_a_gap_not_a_default():
     metrics = {"search_volume": 1200, "monthly_revenue_per_seller": 8000,
-               "break_even_week_base": 10, "avg_review_velocity_gap_ratio": 1.2}
+               "break_even_week_base": 10, "review_velocity_gap_ratio": 1.2}
     gaps = apply_assumed_defaults(metrics)
     assert gaps == [GAP_SUPPLIER_DATA]
     assert "supplier_count" not in metrics
@@ -33,7 +33,7 @@ def test_every_assumed_value_is_recorded():
 
 def test_zero_search_volume_counts_as_missing():
     metrics = {"supplier_count": 1, "min_moq": 50, "search_volume": 0, "monthly_revenue_per_seller": 1,
-               "break_even_week_base": 1, "avg_review_velocity_gap_ratio": 0.5}
+               "break_even_week_base": 1, "review_velocity_gap_ratio": 0.5}
     assert apply_assumed_defaults(metrics) == [GAP_SEARCH_VOLUME]
     assert metrics["search_volume"] == ASSUMED_SEARCH_VOLUME
 
@@ -70,7 +70,7 @@ def test_gaps_clear_when_a_later_pass_finds_the_real_signal():
     apply_assumed_defaults(metrics)
     metrics["supplier_count"] = 3
     metrics["min_moq"] = 100
-    metrics["avg_review_velocity_gap_ratio"] = 2.5
+    metrics["review_velocity_gap_ratio"] = 2.5
     gaps = apply_assumed_defaults(metrics)
     assert GAP_SUPPLIER_DATA not in gaps
     assert GAP_REVIEW_VELOCITY not in gaps
@@ -78,7 +78,7 @@ def test_gaps_clear_when_a_later_pass_finds_the_real_signal():
 
 def test_suppliers_without_a_parseable_moq_get_an_assumed_moq_and_a_gap():
     metrics = {"supplier_count": 3, "search_volume": 1200, "monthly_revenue_per_seller": 8000,
-               "break_even_week_base": 10, "avg_review_velocity_gap_ratio": 1.2}
+               "break_even_week_base": 10, "review_velocity_gap_ratio": 1.2}
     gaps = apply_assumed_defaults(metrics)
     assert metrics["min_moq"] == ASSUMED_MOQ
     assert gaps == [GAP_MOQ_ASSUMED]

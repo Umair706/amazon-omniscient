@@ -76,7 +76,9 @@ def _fill_missing_market_inputs(metrics: dict) -> None:
 
 
 def _record_review_velocity_gap(metrics: dict) -> None:
-    if metrics.get("avg_review_velocity_gap_ratio") is None:
+    # NOTE: reads the observed ratio, not the one hard filter #9 uses. The filter copy
+    # is only set when REVIEW_VELOCITY_FILTER_ENABLED is on; the gap is about the data.
+    if metrics.get("review_velocity_gap_ratio") is None:
         _record_data_gap(metrics, GAP_REVIEW_VELOCITY)
     else:
         clear_data_gap(metrics, GAP_REVIEW_VELOCITY)

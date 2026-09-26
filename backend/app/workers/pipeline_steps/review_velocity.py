@@ -13,6 +13,9 @@ from app.services.market_signals import average_recent_velocity_gap
 # Older snapshots describe a listing that may have changed hands or relaunched.
 VELOCITY_LOOKBACK_DAYS = 90
 
+# BSRSalesEstimator falls back to its default curve for any category it doesn't know.
+UNKNOWN_CATEGORY = "default"
+
 
 def windows_from_rows(rows: list[tuple]) -> list[dict]:
     """Group (product_id, bsr, time, review_count) rows, ordered by product then time, into first/last windows."""
@@ -40,8 +43,29 @@ async def load_review_count_rows(db: AsyncSession, niche_id: int) -> list[tuple]
 
 
 async def review_velocity_gap_for_niche(
-    db: AsyncSession, niche_id: int, estimator: BSRSalesEstimator, category: str,
+    db: AsyncSession, niche_id: int, *, estimator: BSRSalesEstimator, category: str,
 ) -> float | None:
     """Reviews-per-100-sales for the niche, or None until enough products have two weeks of snapshots."""
     rows = await load_review_count_rows(db, niche_id)
     return average_recent_velocity_gap(windows_from_rows(rows), estimator, category)
+
+
+async def apply_review_velocity(
+    db: AsyncSession, niche_id: int, metrics: dict, *, marketplace: str, filter_enabled: bool,
+) -> None:
+    """Store the niche's observed review-velocity ratio in metrics; hand it to hard filter #9 only when enabled.
+
+    WHY two keys: the ratio is always saved (risk_flags.review_velocity_gap_ratio) so the
+    trap threshold can be calibrated on real niches. The scorer reads
+    avg_review_velocity_gap_ratio, so leaving that unset keeps the filter from disqualifying.
+    """
+    gap = await review_velocity_gap_for_niche(
+        db, niche_id,
+        estimator=BSRSalesEstimator(marketplace=marketplace),
+        category=metrics.get("category", UNKNOWN_CATEGORY),
+    )
+    if gap is None:
+        return
+    metrics["review_velocity_gap_ratio"] = gap
+    if filter_enabled:
+        metrics["avg_review_velocity_gap_ratio"] = gap
