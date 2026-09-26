@@ -40,3 +40,6 @@ redisdata/
 htmlcov/
 .coverage
 coverage.xml
+
+# Superpowers SDD scratch workspace (ledger, briefs, review packages)
+.superpowers/
