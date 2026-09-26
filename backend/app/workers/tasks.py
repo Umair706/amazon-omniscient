@@ -396,6 +396,43 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
         }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 1c. Niche discovery — expand a seed into ranked candidate niches to analyse
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@celery_app.task(
+    bind=True, name="app.workers.tasks.discover_opportunities", max_retries=1,
+    soft_time_limit=TRACKING_SOFT_LIMIT_SECONDS, time_limit=TRACKING_HARD_LIMIT_SECONDS,
+)
+def discover_opportunities(self, seed: str, marketplace: str = "AU"):
+    """Expand a seed keyword into ranked candidate niches. Returns {seed, marketplace, candidates}."""
+    logger.info("Discovering opportunities for seed '%s' (marketplace=%s)", seed, marketplace)
+    try:
+        return _run_async(_discover_opportunities_async(seed, marketplace))
+    except SoftTimeLimitExceeded:
+        logger.error("Discovery for '%s' exceeded the soft time limit", seed)
+        raise
+
+
+async def _discover_opportunities_async(seed: str, marketplace: str) -> dict:
+    """Open one browser session and rank candidate niches for the seed."""
+    from app.services.discovery import DiscoveryService
+    from app.services.scraper_service import ScraperService
+
+    session_factory = _get_session_factory()
+    async with (
+        _redis_for_run() as redis,
+        _build_browser_session(marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
+    ):
+        scraper = ScraperService(
+            proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
+            page_cache=_page_cache_for(redis, force=False), event_sink=session_factory,
+        )
+        candidates = await DiscoveryService(scraper).discover(seed)
+    return {"seed": seed, "marketplace": marketplace, "candidates": candidates}
+
+
 async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: dict, product_asins: list[str] | None = None, marketplace: str = "US"):
     """Async implementation of the full analysis pipeline."""
     from app.models.niche import Niche

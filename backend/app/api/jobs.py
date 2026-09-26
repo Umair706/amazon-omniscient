@@ -14,7 +14,7 @@ from app.licensing import FEATURE_MULTI_MARKETPLACE, License
 from app.models.niche import Niche
 from app.schemas.common import JobStatusResponse
 from app.workers.celery_app import celery_app
-from app.workers.tasks import run_full_analysis, run_discovery
+from app.workers.tasks import run_full_analysis, run_discovery, discover_opportunities
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -99,6 +99,21 @@ class AnalyzeKeywordRequest(BaseModel):
         # NOTE: min_length ran before collapsing, so "   " got past it.
         if not v:
             raise ValueError("keyword must not be blank")
+        return v
+
+
+class DiscoverOpportunitiesRequest(BaseModel):
+    """Payload to discover candidate niches from a broad seed keyword."""
+
+    seed: str = Field(min_length=1, max_length=MAX_KEYWORD_LENGTH, description="Broad seed, e.g. 'kitchen'")
+    marketplace: str = Field(default="AU", max_length=10, description="Amazon marketplace code (default AU).")
+
+    @field_validator("seed")
+    @classmethod
+    def normalise_seed(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("seed must not be blank")
         return v
 
 
@@ -342,6 +357,27 @@ async def trigger_sub_niche_analysis(
         error=None,
         created_at=now,
         updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/discover-opportunities — Rank candidate niches from a broad seed
+# ---------------------------------------------------------------------------
+
+
+@router.post("/discover-opportunities", response_model=JobStatusResponse, status_code=202)
+async def trigger_opportunity_discovery(
+    payload: DiscoverOpportunitiesRequest,
+) -> JobStatusResponse:
+    """Expand a broad seed into ranked candidate niches. No niche is created; results come
+    back in the job's `result.candidates`. Not marketplace-gated — exploring is always free."""
+    marketplace = payload.marketplace.strip().upper()
+    task = discover_opportunities.delay(seed=payload.seed, marketplace=marketplace)
+    now = datetime.now(timezone.utc)
+    return JobStatusResponse(
+        job_id=task.id, status="pending", progress=0,
+        result={"seed": payload.seed, "marketplace": marketplace}, error=None,
+        created_at=now, updated_at=None,
     )
 
 
