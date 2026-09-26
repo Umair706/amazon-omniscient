@@ -8,6 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScoreBadge } from "@/components/score-badge";
 import { marketplaceLabel } from "@/lib/marketplace";
+import { useStars } from "@/lib/use-stars";
+import { StarButton } from "@/components/star-button";
+import { Star } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import api from "@/lib/api";
@@ -34,6 +37,8 @@ export default function NicheExplorerPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [minScore, setMinScore] = useState<number | "">("");
   const [tierFilter, setTierFilter] = useState<string>("");
+  const [starredOnly, setStarredOnly] = useState(false);
+  const { isStarred, toggle } = useStars();
 
   const fetchNiches = useCallback(async () => {
     setLoading(true);
@@ -63,6 +68,8 @@ export default function NicheExplorerPage() {
   }, [fetchNiches]);
 
   const totalPages = Math.ceil(total / perPage);
+  // "Starred only" filters the loaded page client-side (stars live in this browser).
+  const shownNiches = starredOnly ? niches.filter((n) => isStarred(n.id)) : niches;
 
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -142,7 +149,14 @@ export default function NicheExplorerPage() {
                 <option value="FAIL">Disqualified</option>
               </select>
             </div>
-            <Button variant="outline" onClick={() => { setSearch(""); setMinScore(""); setTierFilter(""); setPage(1); }}>
+            <Button
+              variant={starredOnly ? "default" : "outline"}
+              onClick={() => setStarredOnly((v) => !v)}
+              title="Show only niches you have starred (this browser)"
+            >
+              <Star className={`h-4 w-4 mr-1 ${starredOnly ? "fill-current" : ""}`} /> Starred
+            </Button>
+            <Button variant="outline" onClick={() => { setSearch(""); setMinScore(""); setTierFilter(""); setStarredOnly(false); setPage(1); }}>
               <Filter className="h-4 w-4 mr-1" /> Clear
             </Button>
           </div>
@@ -173,23 +187,26 @@ export default function NicheExplorerPage() {
                       <td colSpan={8} className="p-4"><Skeleton className="h-8 w-full" /></td>
                     </tr>
                   ))
-                ) : niches.length === 0 ? (
+                ) : shownNiches.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="p-12 text-center text-muted-foreground">
-                      No niches found. Try adjusting your filters.
+                      {starredOnly ? "No starred niches on this page." : "No niches found. Try adjusting your filters."}
                     </td>
                   </tr>
                 ) : (
-                  niches.map((niche) => (
+                  shownNiches.map((niche) => (
                     <tr
                       key={niche.id}
                       className="border-b last:border-0 hover:bg-muted/50 cursor-pointer transition-colors"
                       onClick={() => window.location.href = `/niches/${niche.id}`}
                     >
                       <td className="p-4">
-                        <div>
-                          <p className="font-medium">{niche.name || niche.primary_keyword}</p>
-                          <p className="text-xs text-muted-foreground">{niche.primary_keyword}</p>
+                        <div className="flex items-center gap-2">
+                          <StarButton starred={isStarred(niche.id)} onToggle={() => toggle(niche.id)} />
+                          <div>
+                            <p className="font-medium">{niche.name || niche.primary_keyword}</p>
+                            <p className="text-xs text-muted-foreground">{niche.primary_keyword}</p>
+                          </div>
                         </div>
                       </td>
                       <td className="p-4">

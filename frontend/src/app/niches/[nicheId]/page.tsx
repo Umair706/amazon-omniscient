@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
 import { InfoHint } from "@/components/info-hint";
+import { StarButton } from "@/components/star-button";
+import { useStars } from "@/lib/use-stars";
 import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
 import { StatCard } from "@/components/stat-card";
 import { ScoreRadar, ProfitChart, SalesChart, CompetitorBarChart } from "@/components/charts";
@@ -119,6 +121,7 @@ export default function NicheDetailPage() {
   const params = useParams();
   const nicheId = params.nicheId as string;
 
+  const { isStarred, toggle } = useStars();
   const [tab, setTab] = useState<TabId>("overview");
   const [niche, setNiche] = useState<NicheDetail | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
@@ -200,7 +203,10 @@ export default function NicheDetailPage() {
           <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
             <ArrowLeft className="h-4 w-4" /> Back
           </button>
-          <h1 className="text-3xl font-bold">{niche.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold">{niche.name}</h1>
+            <StarButton starred={isStarred(niche.id)} onToggle={() => toggle(niche.id)} className="mt-1" />
+          </div>
           <p className="text-muted-foreground mt-1">{niche.primary_keyword}</p>
           <Badge variant="outline" className="mt-2" title={marketplaceLabel(niche.marketplace)}>
             {marketplaceLabel(niche.marketplace)}

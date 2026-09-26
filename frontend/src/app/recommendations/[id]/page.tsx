@@ -13,6 +13,7 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import { amazonProductUrl } from "@/lib/marketplace";
 import { labelForDataGap } from "@/lib/data-gaps";
 import api from "@/lib/api";
+import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
 import {
   ArrowLeft,
   DollarSign,
@@ -492,8 +493,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No market intelligence available.
+              <CardContent>
+                <EmptyState title="No market intelligence yet" reason={EMPTY_REASONS.llm} icon={TrendingUp} />
               </CardContent>
             </Card>
           )}
@@ -667,8 +668,8 @@ export default function OpportunityBriefPage() {
             ))
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No product ideas available.
+              <CardContent>
+                <EmptyState title="No product ideas yet" reason={EMPTY_REASONS.llm} icon={Lightbulb} />
               </CardContent>
             </Card>
           )}
@@ -743,8 +744,8 @@ export default function OpportunityBriefPage() {
             ))
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No per-product supplier matches available.
+              <CardContent>
+                <EmptyState title="No supplier matches" reason={EMPTY_REASONS.suppliers} />
               </CardContent>
             </Card>
           )}
@@ -930,8 +931,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No review intelligence available.
+              <CardContent>
+                <EmptyState title="No review analysis yet" reason={EMPTY_REASONS.llm} icon={Star} />
               </CardContent>
             </Card>
           )}
@@ -941,6 +942,14 @@ export default function OpportunityBriefPage() {
       {/* Product Strategy Tab */}
       {tab === "product" && (
         <div className="space-y-6">
+          {!rec.product_description && (!rec.differentiation_features || rec.differentiation_features.length === 0) && (
+            <Card>
+              <CardContent>
+                <EmptyState title="No product spec yet" reason={EMPTY_REASONS.llm} icon={Lightbulb} />
+              </CardContent>
+            </Card>
+          )}
+
           {rec.product_description && (
             <Card>
               <CardHeader><CardTitle className="text-lg">Differentiation Strategy</CardTitle></CardHeader>
@@ -1219,8 +1228,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No product blueprint available. Blueprint is generated from competitor review analysis.
+              <CardContent>
+                <EmptyState title="No product blueprint yet" reason={EMPTY_REASONS.llm} icon={ShieldCheck} />
               </CardContent>
             </Card>
           )}
@@ -1628,8 +1637,8 @@ export default function OpportunityBriefPage() {
             </Card>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No marketing data available.
+              <CardContent>
+                <EmptyState title="No marketing plan yet" reason={EMPTY_REASONS.llm} icon={Megaphone} />
               </CardContent>
             </Card>
           )}
@@ -1697,8 +1706,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No launch playbook available.
+              <CardContent>
+                <EmptyState title="No launch playbook yet" reason={EMPTY_REASONS.llm} icon={CheckCircle2} />
               </CardContent>
             </Card>
           )}
