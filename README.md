@@ -144,16 +144,23 @@ DASHSCOPE_API_KEY=sk-xxxx     # for Qwen (default)
 docker compose up --build
 ```
 
-### 3. Run database migration
+### 3. Database migrations and browsers
+
+Nothing to do: the `backend` container runs `alembic upgrade head` before the API
+starts (the worker and beat wait for it), and the image already contains Chromium.
+To migrate by hand (for example after pulling new migrations while the stack runs):
 
 ```bash
 docker compose exec backend alembic upgrade head
 ```
 
-### 4. Install Playwright browsers
+If your machine already runs Redis or Postgres on the default ports, create a
+`docker-compose.override.yml` (git-ignored) that drops the port mapping, e.g.
 
-```bash
-docker compose exec backend python -m playwright install chromium --with-deps
+```yaml
+services:
+  redis:
+    ports: !override []
 ```
 
 ### 5. Open the app

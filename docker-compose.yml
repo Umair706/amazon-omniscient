@@ -18,14 +18,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Migrations run here, before the API starts. The worker and beat wait for this
+    # container to be healthy, so no task can run against tables that do not exist yet.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     volumes:
       - ./backend:/app
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
-      interval: 30s
+      interval: 10s
       timeout: 10s
-      retries: 3
+      retries: 12
+      start_period: 20s
 
   celery-worker:
     build: ./backend
@@ -42,6 +45,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q default,analysis,tracking,scraping
     volumes:
@@ -68,6 +73,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     command: celery -A app.workers.celery_app beat --loglevel=info --pidfile=/tmp/celerybeat.pid
     volumes:

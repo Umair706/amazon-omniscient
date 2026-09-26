@@ -290,9 +290,8 @@ erDiagram
 ## How to run
 
 ```bash
-# Full stack via Docker
+# Full stack via Docker (the backend container migrates the database on start)
 docker compose up --build
-docker compose exec backend alembic upgrade head
 
 # Or locally
 cd backend && pip install -e ".[dev]" && uvicorn app.main:app --reload
