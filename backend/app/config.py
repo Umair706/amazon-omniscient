@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     PROXY_PASSWORD: str = ""
 
     # ── Alibaba / 1688 ─────────────────────────────────────────────────
+    # NOTE: APP_KEY/SECRET are reserved for the official Alibaba Open API and
+    # are NOT wired to anything yet — see docs/SUPPLIERS.md for the plan. Only
+    # the 1688 login pair below is used today (by AlibabaLoginService, to warm
+    # a scraping session). Do not assume supplier data works from these keys.
     ALIBABA_APP_KEY: str = ""
     ALIBABA_APP_SECRET: str = ""
     ALIBABA_1688_EMAIL: str = ""
