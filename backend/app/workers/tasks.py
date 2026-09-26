@@ -19,6 +19,8 @@ from app.workers.celery_app import celery_app
 # Only imported for type hints — the real imports stay local to the
 # functions that use them (this file's existing lazy-import convention).
 if TYPE_CHECKING:
+    from app.scraping.page_cache import PageCache
+    from app.scraping.pacing import SharedPacer
     from app.scraping.session import BrowserSession
     from app.services.bsr_tracker import BSRTracker
     from app.services.sales_velocity_service import SalesVelocityService
@@ -58,6 +60,10 @@ SERP_ENRICHMENT_PAGES = 1
 
 # Each detail page is one live page load, so only the top of the SERP gets one.
 MAX_DETAILED_PRODUCTS = 20
+
+# Short enough that a hung Redis fails fast and the shared pacer falls back to
+# pacing locally, instead of stalling a worker slot for the rest of the run.
+REDIS_SOCKET_TIMEOUT_SECONDS = 2.0
 
 # The only page verdict that means "this is the real product page".
 REAL_PAGE_VERDICT = "ok"
@@ -157,34 +163,49 @@ def _get_llm_client():
         return None
 
 
-def _build_browser_session(marketplace: str) -> "BrowserSession":
+def _build_browser_session(marketplace: str, pacer: "SharedPacer | None" = None) -> "BrowserSession":
     """Return an unopened BrowserSession for this marketplace, behind the proxy configured in settings."""
     from app.core.marketplace import get_marketplace
     from app.scraping.session import BrowserSession
     from app.services.scraper_service import build_proxy_manager_from_settings
 
-    return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings())
+    return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings(), pacer=pacer)
 
 
 @asynccontextmanager
-async def _page_cache_for_run(force: bool = False):
-    """Yield a PageCache backed by one Redis client for this run, or None when forced to re-scrape.
-
-    WHY: a forced re-run exists specifically to get fresh data, so it must not be served
-    stale pages from a previous run's cache.
-    """
-    if force:
-        yield None
-        return
-
+async def _redis_for_run():
+    """Yield one Redis client for this run; the page cache and the shared pacer both use it."""
     from redis.asyncio import Redis
-    from app.scraping.page_cache import PageCache
 
-    redis = Redis.from_url(Settings().REDIS_URL, decode_responses=True)
+    # WHY: a hung Redis must not occupy a worker slot forever — a short socket
+    # timeout makes a dead Redis fail fast so the shared pacer can fall back
+    # to pacing locally instead of the run stalling.
+    redis = Redis.from_url(
+        Settings().REDIS_URL,
+        decode_responses=True,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+        socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+    )
     try:
-        yield PageCache(redis)
+        yield redis
     finally:
         await redis.aclose()
+
+
+def _page_cache_for(redis, force: bool) -> "PageCache | None":
+    """WHY None on force: a forced re-run exists to get fresh data, not last run's cached pages."""
+    if force:
+        return None
+    from app.scraping.page_cache import PageCache
+    return PageCache(redis)
+
+
+def _shared_pacer(redis, site: str) -> "SharedPacer":
+    """Pacer for `site` ('amazon' or '1688') shared across worker processes through Redis."""
+    from app.scraping.pacing import ALIBABA_GAP_SECONDS, AMAZON_GAP_SECONDS, SharedPacer, pacer_for
+
+    gaps = {"amazon": AMAZON_GAP_SECONDS, "1688": ALIBABA_GAP_SECONDS}[site]
+    return SharedPacer(redis, *gaps, fallback=pacer_for(site))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -276,9 +297,10 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
     # same cookies and fingerprint instead of looking like a brand-new visitor.
     async with (
         session_factory() as db,
-        _build_browser_session(marketplace) as browser,
-        _page_cache_for_run(options.get("force", False)) as page_cache,
+        _redis_for_run() as redis,
+        _build_browser_session(marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
     ):
+        page_cache = _page_cache_for(redis, options.get("force", False))
         scraper = ScraperService(
             proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
             page_cache=page_cache, event_sink=session_factory,
@@ -383,9 +405,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     # opened even for the sub-niche flow because keyword research still scrapes.
     async with (
         session_factory() as db,
-        _build_browser_session(marketplace) as browser,
-        _page_cache_for_run(options.get("force", False)) as page_cache,
+        _redis_for_run() as redis,
+        _build_browser_session(marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
     ):
+        page_cache = _page_cache_for(redis, options.get("force", False))
         scraper = ScraperService(
             proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
             page_cache=page_cache, event_sink=session_factory,
@@ -686,7 +709,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("1688 login failed: %s", e)
 
-        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager)
+        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager, pacer=_shared_pacer(redis, "1688"))
 
         scraped_suppliers: list[dict] = []
         try:
@@ -1065,7 +1088,10 @@ async def _track_bsr_niche_async(niche_id: int):
 
         try:
             # WHY: one browser session per niche, shared by every product page load.
-            async with _build_browser_session(niche_marketplace) as browser:
+            async with (
+                _redis_for_run() as redis,
+                _build_browser_session(niche_marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
+            ):
                 context = TrackingContext(
                     scraper=ScraperService(
                         proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
@@ -1155,7 +1181,10 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
         from app.services.scraper_service import ScraperService
 
         try:
-            async with _build_browser_session(niche_marketplace) as browser:
+            async with (
+                _redis_for_run() as redis,
+                _build_browser_session(niche_marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
+            ):
                 scraper = ScraperService(
                     proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
                     # WHY page_cache=None: scrape_reviews() never reads the cache, so

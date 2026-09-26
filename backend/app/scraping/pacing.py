@@ -45,6 +45,8 @@ def pacer_for(site: str) -> Pacer:
 # immediate, long enough not to hammer Redis.
 _RETRY_SLEEP_SECONDS = 0.05
 
+MS_PER_SECOND = 1000
+
 
 class SharedPacer:
     """Pacer whose 'last request' lives in Redis, so every worker process shares one gap.
@@ -53,7 +55,7 @@ class SharedPacer:
     once. The slot is a SET NX key that expires after one random gap; whoever sets it goes.
     """
 
-    def __init__(self, redis, min_gap_s: float, max_gap_s: float, fallback: Pacer):
+    def __init__(self, redis, min_gap_s: float, max_gap_s: float, *, fallback: Pacer):
         self.redis = redis
         self.min_gap_s = min_gap_s
         self.max_gap_s = max_gap_s
@@ -68,15 +70,20 @@ class SharedPacer:
         try:
             await self._claim_slot(domain)
         except Exception as e:
-            logger.warning("Shared pacing unavailable (%s); pacing %s per process from now on", e, domain)
+            logger.warning("Shared pacing unavailable (%s); pacing %s locally for the rest of this run", e, domain)
             self.using_fallback = True
             await self.fallback.wait_turn(domain)
 
     async def _claim_slot(self, domain: str) -> None:
         key = f"pace:{domain}"
         while True:
-            gap_ms = int(random.uniform(self.min_gap_s, self.max_gap_s) * 1000)
+            gap_ms = int(random.uniform(self.min_gap_s, self.max_gap_s) * MS_PER_SECOND)
             if await self.redis.set(key, "1", nx=True, px=gap_ms):
                 return
+            # NOTE: PTTL returns -2 when the key vanished and -1 when it has no
+            # expiry; both mean "try again shortly".
             remaining_ms = await self.redis.pttl(key)
-            await asyncio.sleep(max(remaining_ms, 0) / 1000 or _RETRY_SLEEP_SECONDS)
+            if remaining_ms <= 0:
+                await asyncio.sleep(_RETRY_SLEEP_SECONDS)
+            else:
+                await asyncio.sleep(remaining_ms / MS_PER_SECOND)
