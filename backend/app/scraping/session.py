@@ -13,7 +13,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from app.core.marketplace import MarketplaceConfig
 from app.core.proxy_manager import ProxyManager
 from app.scraping.block_detection import PageVerdict, classify_page
-from app.scraping.pacing import pacer_for
+from app.scraping.pacing import Pacer, SharedPacer, pacer_for
 from app.scraping.persona import Persona, build_persona
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,13 @@ def should_block_request(resource_type: str, url: str) -> bool:
 class BrowserSession:
     """Owns one Playwright browser + context for a whole scraping run."""
 
-    def __init__(self, marketplace: MarketplaceConfig, proxy_manager: ProxyManager, site: str = "amazon"):
+    def __init__(
+        self,
+        marketplace: MarketplaceConfig,
+        proxy_manager: ProxyManager,
+        site: str = "amazon",
+        pacer: "Pacer | SharedPacer | None" = None,
+    ):
         self.marketplace = marketplace
         self.proxy_manager = proxy_manager
         self.site = site
@@ -50,6 +56,9 @@ class BrowserSession:
         self._context: BrowserContext | None = None
         self._proxy_conf: dict = {}
         self.persona: Persona | None = None
+        # WHY: defaults to the per-process Pacer for backward compatibility; the
+        # pipeline (task G2) injects a SharedPacer so every worker shares one gap.
+        self.pacer = pacer or pacer_for(site)
 
     async def __aenter__(self) -> "BrowserSession":
         self._pw = await async_playwright().start()
@@ -148,7 +157,7 @@ class BrowserSession:
             raise RuntimeError(
                 "BrowserSession.load() called with no open context; use `async with` (or the last rotate() failed)"
             )
-        await pacer_for(self.site).wait_turn(self.marketplace.domain)
+        await self.pacer.wait_turn(self.marketplace.domain)
         page = await self._context.new_page()
         try:
             response = await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
