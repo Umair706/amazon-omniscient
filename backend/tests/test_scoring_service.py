@@ -132,9 +132,15 @@ class TestHardFilters:
             f["passed"] for f in result2["hard_filters"] if f["filter"] == "seasonality"
         )
 
-    def test_eight_filters_returned(self, scorer, sample_metrics):
+    def test_eight_filters_without_velocity_data(self, scorer, sample_metrics):
         result = scorer.compute_score(sample_metrics)
         assert len(result["hard_filters"]) == 8
+
+    def test_nine_filters_when_velocity_gap_known(self, scorer, sample_metrics):
+        sample_metrics["avg_review_velocity_gap_ratio"] = 7.0
+        result = scorer.compute_score(sample_metrics)
+        assert len(result["hard_filters"]) == 9
+        assert result["confidence_tier"] == "FAIL"
 
 
 class TestConfidenceTiers:

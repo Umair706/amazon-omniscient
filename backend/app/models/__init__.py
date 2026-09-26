@@ -15,6 +15,7 @@ from .product import Product
 from .recommendation import Recommendation
 from .review import Review, ReviewPainPoint
 from .sales_velocity import SalesVelocitySnapshot
+from .scrape_event import ScrapeEvent
 from .stock_history import StockHistory
 from .supplier import LandedCostCalculation, ProductSupplierMatch, Supplier
 from .user_settings import UserSettings
@@ -36,6 +37,7 @@ __all__ = [
     "Review",
     "ReviewPainPoint",
     "SalesVelocitySnapshot",
+    "ScrapeEvent",
     "StockHistory",
     "Supplier",
     "UserSettings",

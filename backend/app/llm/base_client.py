@@ -1,9 +1,100 @@
 """Abstract base class for LLM providers."""
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
 
+import httpx
+
 from app.core.exceptions import LLMError
+
+# Transport failures (timeouts, connections, 5xx) are retried; bad JSON is not.
+MAX_TRANSPORT_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 2.0
+HTTP_TOO_MANY_REQUESTS = 429
+HTTP_FIRST_SERVER_ERROR = 500
+
+# The concrete clients (QwenClient, OpenAIClient, AnthropicClient) catch every
+# exception their SDK raises — including transport errors from the underlying
+# httpx client — and re-wrap it as `LLMError(...) from e`. The wrapping keeps
+# the original SDK exception as `__cause__`, but some SDK exceptions carry a
+# fixed, generic message ("Request timed out.") that doesn't repeat the word
+# "timeout" the way our own error text does — so text-matching alone is not
+# reliable. These markers are a fallback for LLMError text that has no
+# __cause__ (e.g. hand-written errors); the real signal is the type check in
+# _transient_sdk_error_types() below.
+_RETRYABLE_LLM_ERROR_MARKERS = (
+    "timeout",
+    "timed out",
+    "rate limit",
+    "overloaded",
+    "connection",
+    "503",
+    "529",
+)
+
+
+def _transient_sdk_error_types() -> tuple[type[BaseException], ...]:
+    """SDK exception classes that mean 'try again'.
+
+    Imported lazily (inside the function, not at module level) so this file
+    has no hard dependency on the openai/anthropic packages being installed.
+    """
+    types: list[type[BaseException]] = [
+        httpx.TransportError,
+        asyncio.TimeoutError,
+    ]
+    try:
+        import openai
+
+        types += [
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.RateLimitError,
+            openai.InternalServerError,
+        ]
+    except ImportError:
+        pass
+    try:
+        import anthropic
+
+        types += [
+            anthropic.APITimeoutError,
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,
+            anthropic.InternalServerError,
+        ]
+    except ImportError:
+        pass
+    return tuple(types)
+
+
+def _find_http_status_error(exc: Exception) -> httpx.HTTPStatusError | None:
+    """The httpx status error behind exc (itself or its wrapped cause), if any."""
+    for candidate in (exc, exc.__cause__):
+        if isinstance(candidate, httpx.HTTPStatusError):
+            return candidate
+    return None
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    """429 (rate limited) and 5xx (server trouble) can pass; other 4xx, like a bad API key, never will."""
+    return status_code == HTTP_TOO_MANY_REQUESTS or status_code >= HTTP_FIRST_SERVER_ERROR
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """Return True if exc is a transport-class failure worth retrying."""
+    http_error = _find_http_status_error(exc)
+    if http_error is not None:
+        return _is_retryable_status(http_error.response.status_code)
+    transient_types = _transient_sdk_error_types()
+    if isinstance(exc, transient_types) or isinstance(exc.__cause__, transient_types):
+        return True
+    if isinstance(exc, LLMError):
+        message = str(exc).lower()
+        return any(marker in message for marker in _RETRYABLE_LLM_ERROR_MARKERS)
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Expert system prompt — establishes the brutally realistic analyst persona
@@ -62,7 +153,7 @@ class BaseLLMClient(ABC):
         Strips markdown code fences if present.
         Retries once on parse failure with a corrective prompt.
         """
-        text = await self.generate(prompt, max_tokens, system_message=system_message)
+        text = await self._generate_with_retry(prompt, max_tokens, system_message)
         parsed = self._try_parse_json(text)
         if parsed is not None:
             return parsed
@@ -73,12 +164,34 @@ class BaseLLMClient(ABC):
             "Please fix the following and return ONLY valid JSON, no markdown fences:\n\n"
             f"{text}"
         )
-        text = await self.generate(retry_prompt, max_tokens, system_message=system_message)
+        text = await self._generate_with_retry(retry_prompt, max_tokens, system_message)
         parsed = self._try_parse_json(text)
         if parsed is not None:
             return parsed
 
         raise LLMError(f"Failed to parse LLM response as JSON after retry: {text[:200]}")
+
+    async def _generate_with_retry(
+        self,
+        prompt: str,
+        max_tokens: int,
+        system_message: str | None,
+    ) -> str:
+        """Call generate(), retrying transport-class failures with backoff."""
+        last_error: Exception | None = None
+        for attempt in range(1, MAX_TRANSPORT_ATTEMPTS + 1):
+            try:
+                return await self.generate(prompt, max_tokens, system_message=system_message)
+            except Exception as e:
+                if not _is_retryable(e):
+                    raise
+                last_error = e
+                if attempt < MAX_TRANSPORT_ATTEMPTS:
+                    # NOTE: RETRY_BACKOFF_SECONDS is read here (not captured as a
+                    # default argument) so tests can monkeypatch the module
+                    # attribute and run with zero delay.
+                    await asyncio.sleep(RETRY_BACKOFF_SECONDS * attempt)
+        raise LLMError(f"LLM call failed after {MAX_TRANSPORT_ATTEMPTS} attempts: {last_error}")
 
     @staticmethod
     def _try_parse_json(text: str) -> dict | list | None:

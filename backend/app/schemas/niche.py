@@ -95,13 +95,18 @@ class NicheResponse(BaseModel):
     confidence_tier: str | None = None
     demand_score: Decimal | None = None
     competition_score: Decimal | None = None
+    revenue_score: Decimal | None = None
     margin_score: Decimal | None = None
-    ad_profitability_score: Decimal | None = None
-    review_achievability_score: Decimal | None = None
-    supplier_reliability_score: Decimal | None = None
-    sales_velocity_score: Decimal | None = None
-    marketing_score: Decimal | None = None
-    brand_building_score: Decimal | None = None
+    trend_score: Decimal | None = None
+    review_feasibility_score: Decimal | None = None
+    supplier_score: Decimal | None = None
+    ppc_viability_score: Decimal | None = None
+    launch_feasibility_score: Decimal | None = None
+
+    # Market snapshot
+    avg_rating: Decimal | None = None
+    estimated_monthly_sales: int | None = None
+    last_error: str | None = None
 
     # Flags & filters
     is_seasonal: bool | None = None

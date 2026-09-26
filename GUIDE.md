@@ -521,17 +521,25 @@ flowchart TD
     BD --> SESSION["Session-Based Rotation<br/>username-session-{rand}"]
     SP --> SESSION
 
-    DIRECT --> PW["Playwright Browser"]
-    FREE --> PW
-    BD --> PW
-    SP --> PW
+    DIRECT --> BS["BrowserSession<br/>1 per pipeline run"]
+    FREE --> BS
+    BD --> BS
+    SP --> BS
 
-    PW --> AMZ["Amazon.com"]
-    PW --> ALI["1688.com"]
+    BS --> PACER["Pacer<br/>jittered per-domain gap"]
+    PACER --> LOAD["Page load<br/>(images/media/fonts blocked)"]
+    LOAD --> CLASSIFY["classify_page()<br/>ok / captcha / soft_block / server_error"]
+    CLASSIFY -->|ok| AMZ["Amazon.com"]
+    CLASSIFY -->|ok| ALI["1688.com"]
+    CLASSIFY -->|captcha or server_error| ROTATE["rotate()<br/>new proxy + new persona<br/>max 3x per session"]
+    ROTATE --> BS
+    ROTATE -->|cap exceeded| FAIL["ScrapingError<br/>niche marked failed"]
 
     style SCRAPER fill:#3b82f6,color:#fff
     style PM fill:#f59e0b,color:#fff
-    style PW fill:#10b981,color:#fff
+    style BS fill:#10b981,color:#fff
+    style CLASSIFY fill:#8b5cf6,color:#fff
+    style ROTATE fill:#ef4444,color:#fff
 ```
 
 ### Without a Proxy
@@ -540,6 +548,132 @@ If you don't configure a proxy:
 - SP-API calls still work (they don't need a proxy)
 - Playwright scraping will likely fail after 5-10 requests due to Amazon's bot detection
 - You can insert test data into the database manually for development
+
+---
+
+### Scraping resilience (how the scraper avoids getting blocked)
+
+Beyond the proxy itself, the scraper has a second layer of defenses against Amazon's
+bot detection. These live in `backend/app/scraping/` and are used by
+`ScraperService` (`backend/app/services/scraper_service.py`).
+
+**One browser session per analysis run, with a coherent persona**
+
+`BrowserSession` (`app/scraping/session.py`) launches a single Chromium browser +
+context for a whole pipeline run and reuses it for every page load. This matters
+because a mismatched user-agent/platform/locale, or a fresh cookie jar on every
+single page request, are two of the strongest signals Amazon uses to flag automated
+traffic. `app/scraping/persona.py` builds one coherent `Persona` per session — the
+user-agent, `navigator.platform`, viewport, locale and timezone are all derived
+from the same random platform choice, so they never contradict each other.
+
+**Per-domain jittered pacing**
+
+`app/scraping/pacing.py` enforces a minimum, randomized gap between requests to the
+same domain, shared process-wide:
+
+- Amazon: `AMAZON_GAP_SECONDS = (3.0, 7.0)` seconds
+- 1688.com: `ALIBABA_GAP_SECONDS = (5.0, 10.0)` seconds
+
+Each `BrowserSession.load()` call waits its turn before navigating. The pacer state
+is in-process, not shared across Celery workers — see the caveat in `TODO.md`.
+
+**Image/media/font blocking**
+
+`BrowserSession` aborts `image`, `media`, and `font` requests before they reach the
+proxy, with one exception: any URL containing `/captcha/` is always let through, in
+case a challenge image is ever needed to identify or solve a block. This exists
+because residential proxy bandwidth is billed per GB, and Omniscient never parses
+images, fonts, or media from a scraped page.
+
+**Block detection and rotation**
+
+Every loaded page is classified by `classify_page()` (`app/scraping/block_detection.py`)
+into one of four verdicts:
+
+- `ok` — the page we asked for actually rendered
+- `captcha` — Amazon's "Robot Check" / "Enter the characters you see below" challenge
+- `soft_block` — a 200 OK response, but the expected content selector never appeared
+- `server_error` — HTTP 5xx
+
+`ScraperService._load()` rotates the session (new proxy identity + new persona,
+`BrowserSession.rotate()`) whenever it sees `captcha` or `server_error`, and also
+on a Playwright navigation error (timeout, dead proxy tunnel) — that case is
+recorded as its own `timeout` verdict since `BrowserSession.load()` raises rather
+than returning a verdict for it. `soft_block` does not trigger a rotation; it is
+used for cases like "no more review pages" where a fresh identity would not help.
+
+A session can rotate at most `MAX_ROTATIONS_PER_SESSION = 3` times. On the fourth
+consecutive block, `BrowserSession.rotate()` raises, `ScraperService` wraps that in
+a `ScrapingError`, the niche's pipeline run is marked failed, and Celery's own
+retry policy for that task decides whether to try again later.
+
+**Redis page cache**
+
+`PageCache` (`app/scraping/page_cache.py`) caches parsed scrape results in Redis so
+repeated requests for the same page (sub-niche flows re-querying a parent niche's
+products, or a niche revisited soon after) don't re-scrape it:
+
+- Search result pages (`serp`, `serp_meta`): `SERP_TTL_SECONDS = 6` hours
+- Product pages (`product`): `PRODUCT_TTL_SECONDS = 24` hours
+
+Only pages classified `ok` are ever written to the cache — a captcha or soft-block
+response is never stored as if it were real data. A forced re-run (`force=true` on
+the analyze endpoints) bypasses the cache entirely and always re-scrapes. The cache
+is failure-tolerant: a Redis outage is treated as a cache miss, not an error, so
+scraping keeps working with Redis down, just without the speedup.
+
+**Telemetry: `scrape_events` and `GET /api/v1/niches/scrape-health`**
+
+Every page load attempt writes one row to the `scrape_events` table (migration
+014, `app/models/scrape_event.py`) — including ones that needed a rotation, so a
+load that took two rotations shows up as three rows. Each row records the site,
+`url_kind` (`serp` | `product` | `reviews` | `serp_meta` | `rank`), verdict (`ok` |
+`captcha` | `soft_block` | `server_error` | `timeout`), proxy label, and duration.
+Recording is fire-and-forget (`app/scraping/events.py`) — a telemetry failure never
+breaks scraping.
+
+`GET /api/v1/niches/scrape-health` returns counts by site and verdict over the
+last `SCRAPE_HEALTH_WINDOW_HOURS = 24` hours. Concrete thresholds to act on:
+
+- **`captcha` > 20% of loads in the last 24h** — the current proxy is burned out
+  or too small a pool. Switch `PROXY_PROVIDER` to a residential provider
+  (`brightdata`/`smartproxy`) if you're on `free` or `none`, or if already on a
+  paid provider, reduce concurrent analysis volume.
+- **A spike in `timeout` verdicts** — the proxy itself is dead (tunnel failures,
+  connection refused), not being blocked by Amazon. Check proxy credentials and
+  provider status before touching pacing or personas.
+
+**SP-API-first when credentials exist**
+
+When `SP_API_CLIENT_ID`, `SP_API_CLIENT_SECRET`, and `SP_API_REFRESH_TOKEN` are all
+set (`app/workers/pipeline_steps/product_source.py`), the pipeline prefers the
+official, unblockable SP-API over scraping wherever it can:
+
+- **Keyword search:** uses SP-API Catalog Items (`search_catalog_products`)
+  instead of scraping search result pages, as long as it returns at least
+  `MIN_SPAPI_SEARCH_RESULTS = 10` results. Page 1 of the SERP is still scraped
+  once, purely to enrich the catalog results with price, rating, and badges
+  (sponsored/Amazon's Choice/Best Seller/FBA) that Catalog Items doesn't provide.
+  Too few catalog results, or an SP-API error, falls back to the old 3-page SERP
+  scrape.
+- **6-hourly BSR/price tracker:** uses SP-API `get_rank_snapshot` for BSR instead
+  of scraping every product page. The page is still scraped for price/stock, but
+  only for products already below `LOW_STOCK_THRESHOLD = 20` units, since those
+  are the ones whose price/stock is likely to have moved since the last snapshot.
+
+Without SP-API credentials configured, everything falls back to full Playwright
+scraping as before.
+
+**Current Amazon limitations**
+
+- `/product-reviews/` now redirects to a sign-in page on some marketplaces (seen
+  on Amazon AU in 2026). When that happens, `scrape_reviews` returns `[]` for that
+  ASIN rather than treating the redirect as a block (rotating a proxy would not
+  help — it's a genuine sign-in wall). Review data instead comes entirely from the
+  "Top reviews" section embedded in the product page itself, capped at 10 reviews
+  per ASIN (`_MAX_PAGE_REVIEWS`) to keep one listing from dominating a niche's
+  review set.
 
 ---
 

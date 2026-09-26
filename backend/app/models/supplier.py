@@ -22,6 +22,7 @@ class Supplier(Base):
         BigInteger,
         ForeignKey("niches.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     supplier_name: Mapped[str | None] = mapped_column(String(500))
     alibaba_url: Mapped[str | None] = mapped_column(Text)

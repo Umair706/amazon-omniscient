@@ -69,7 +69,7 @@ class RecommendationResponse(BaseModel):
     competitor_landscape: dict | None = None
 
     # Rich JSONB payloads
-    marketing_channels: dict | None = None
+    marketing_channels: list | None = None
     risk_flags: dict | None = None
     launch_playbook: dict | None = None
     ppc_strategy: dict | None = None

@@ -33,6 +33,7 @@ class Review(Base):
         BigInteger,
         ForeignKey("products.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     asin: Mapped[str | None] = mapped_column(String(20))
     review_id: Mapped[str | None] = mapped_column(String(50), unique=True)

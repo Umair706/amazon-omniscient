@@ -40,13 +40,18 @@ export interface NicheDetail {
   confidence_tier: string | null;
   demand_score: string | null;
   competition_score: string | null;
+  revenue_score: string | null;
   margin_score: string | null;
-  ad_profitability_score: string | null;
-  review_achievability_score: string | null;
-  supplier_reliability_score: string | null;
-  sales_velocity_score: string | null;
-  marketing_score: string | null;
-  brand_building_score: string | null;
+  trend_score: string | null;
+  review_feasibility_score: string | null;
+  supplier_score: string | null;
+  ppc_viability_score: string | null;
+  launch_feasibility_score: string | null;
+
+  // Market snapshot
+  avg_rating: string | null;
+  estimated_monthly_sales: number | null;
+  last_error: string | null;
 
   // Flags
   is_seasonal: boolean | null;
@@ -69,6 +74,7 @@ export interface ProductSummary {
   niche_id: number | null;
   title: string | null;
   brand: string | null;
+  image_url: string | null;
   current_price: string | null;
   current_bsr: number | null;
   review_count: number | null;
@@ -179,7 +185,7 @@ export interface RecommendationDetail extends RecommendationSummary {
   competitor_landscape: Record<string, unknown> | null;
 
   // JSONB payloads
-  marketing_channels: Record<string, unknown> | null;
+  marketing_channels: Record<string, unknown>[] | null;
   risk_flags: Record<string, unknown> | null;
   launch_playbook: Record<string, unknown> | null;
   ppc_strategy: Record<string, unknown> | null;

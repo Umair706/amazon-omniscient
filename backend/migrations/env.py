@@ -31,6 +31,7 @@ from app.models import (  # noqa: F401 – side-effect imports
     Recommendation,
     Review,
     ReviewPainPoint,
+    ScrapeEvent,
     Supplier,
     UserSettings,
 )

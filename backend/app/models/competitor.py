@@ -73,7 +73,7 @@ class Competitor(Base):
 
     # Vulnerability assessment
     vulnerability: Mapped[str | None] = mapped_column(String(20))
-    vulnerability_type: Mapped[str | None] = mapped_column(String(50))
+    vulnerability_type: Mapped[str | None] = mapped_column(String(255))
 
     last_analyzed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 

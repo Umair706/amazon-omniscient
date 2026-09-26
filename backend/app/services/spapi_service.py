@@ -18,6 +18,47 @@ logger = logging.getLogger(__name__)
 SP_API_BASE = "https://sellingpartnerapi-na.amazon.com"
 TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 
+# Catalog Items v2022-04-01 tags one image per product as the primary listing photo.
+MAIN_IMAGE_VARIANT = "MAIN"
+
+
+def _main_image_link(item: dict, marketplace_id: str) -> str | None:
+    """Find this marketplace's MAIN product image link from a Catalog Items v2022-04-01 item.
+
+    The API's top-level `images` field (not `summaries[].mainImage`, which doesn't exist
+    in this API version) holds a list of images per marketplace, each tagged with a
+    `variant` like "MAIN" or "PT01". Falls back to the first image if none is tagged MAIN,
+    and to the legacy `summaries[].mainImage` shape as a last resort.
+    """
+    images_block = next((i for i in item.get("images", []) if i.get("marketplaceId") == marketplace_id), {})
+    images = images_block.get("images", [])
+    main_image = next((i for i in images if i.get("variant") == MAIN_IMAGE_VARIANT), None)
+    if main_image is None and images:
+        main_image = images[0]
+    if main_image is not None:
+        return main_image.get("link")
+
+    summary = next((s for s in item.get("summaries", []) if s.get("marketplaceId") == marketplace_id), {})
+    return (summary.get("mainImage") or {}).get("link")
+
+
+def normalise_catalog_item(item: dict, marketplace_id: str) -> dict:
+    """Map a Catalog Items v2022-04-01 item onto the dict shape ScraperService.scrape_search_results returns."""
+    summary = next((s for s in item.get("summaries", []) if s.get("marketplaceId") == marketplace_id), {})
+    ranks = next((r for r in item.get("salesRanks", []) if r.get("marketplaceId") == marketplace_id), {})
+    main = (ranks.get("displayGroupRanks") or [{}])[0]
+    sub = (ranks.get("classificationRanks") or [{}])[0]
+    return {
+        "asin": item.get("asin"),
+        "title": summary.get("itemName"),
+        "brand": summary.get("brand"),
+        "image_url": _main_image_link(item, marketplace_id),
+        "price": None, "rating": None, "review_count": None,
+        "bsr": main.get("rank"), "bsr_category": main.get("title"),
+        "current_subcategory_bsr": sub.get("rank"), "subcategory_name": sub.get("title"),
+        "is_sponsored": False, "is_amazon_choice": False, "is_best_seller": False, "is_fba": None,
+    }
+
 
 class SPAPIService:
     """
@@ -192,6 +233,23 @@ class SPAPIService:
             rate_limit_key="spapi:catalog_search",
         )
         return data
+
+    async def search_catalog_products(self, keywords: str, page_size: int = 40) -> list[dict]:
+        """Search the catalog by keywords, normalised to the scraper's search-result dict shape."""
+        data = await self.search_catalog_items(keywords, page_size=page_size)
+        return [normalise_catalog_item(i, self.marketplace_id) for i in data.get("items", [])]
+
+    async def get_rank_snapshot(self, asin: str) -> dict:
+        """Look up one ASIN's current BSR, normalised to ScraperService.scrape_rank_snapshot's dict shape.
+
+        price/stock fields come back None/True — the Catalog API carries neither, so the
+        tracker only scrapes a page for those when low stock makes them worth the request.
+        """
+        data = await self.get_catalog_item(asin)
+        n = normalise_catalog_item(data, self.marketplace_id)
+        return {"asin": asin, "price": None, "current_bsr": n["bsr"], "bsr_category": n["bsr_category"],
+                "current_subcategory_bsr": n["current_subcategory_bsr"], "subcategory_name": n["subcategory_name"],
+                "stock_level": None, "stock_text": None, "is_in_stock": True}
 
     # ------------------------------------------------------------------
     # 3. Get competitive pricing

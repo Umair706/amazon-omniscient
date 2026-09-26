@@ -53,6 +53,7 @@ class MarketplaceConfig:
     locale: str  # browser locale for scraping
     timezone: str  # IANA timezone
     sp_api_endpoint: str  # SP-API regional endpoint base URL
+    amazon_seller_id: str  # Amazon's own merchant ID; used to detect Amazon-as-seller
 
     # Fee structure
     referral_fee_pct: float  # default referral fee (e.g. 0.15)
@@ -179,6 +180,7 @@ MARKETPLACES: Dict[str, MarketplaceConfig] = {
         locale="en-US",
         timezone="America/New_York",
         sp_api_endpoint="https://sellingpartnerapi-na.amazon.com",
+        amazon_seller_id="ATVPDKIKX0DER",
         referral_fee_pct=0.15,
         fba_base_fee=3.22,
         storage_fee_monthly=0.87,
@@ -197,6 +199,7 @@ MARKETPLACES: Dict[str, MarketplaceConfig] = {
         locale="en-AU",
         timezone="Australia/Sydney",
         sp_api_endpoint="https://sellingpartnerapi-fe.amazon.com",
+        amazon_seller_id="ANEGB3WVEVKZB",
         referral_fee_pct=0.15,
         fba_base_fee=4.50,  # AUD — AU FBA base fee is higher
         storage_fee_monthly=1.10,  # AUD per cubic foot

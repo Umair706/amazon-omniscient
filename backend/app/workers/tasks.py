@@ -3,53 +3,148 @@
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.core.exceptions import ScrapingError
 from app.workers.celery_app import celery_app
 
+# Only imported for type hints — the real imports stay local to the
+# functions that use them (this file's existing lazy-import convention).
+if TYPE_CHECKING:
+    from app.scraping.session import BrowserSession
+    from app.services.bsr_tracker import BSRTracker
+    from app.services.sales_velocity_service import SalesVelocityService
+    from app.services.scraper_service import ScraperService
+    from app.services.spapi_service import SPAPIService
+
 logger = logging.getLogger(__name__)
 
+# The niches.last_error column is TEXT but we still cap what we store —
+# scraper/LLM exceptions can carry huge stack traces that would bloat the row.
+MAX_STORED_ERROR_CHARS = 2000
+
+# Per-task time limit overrides (seconds). These are tighter than the global
+# default in celery_app.py because a hung Playwright page load or scrape loop
+# should not be allowed to occupy a worker slot as long as a full analysis run.
+TRACKING_SOFT_LIMIT_SECONDS = 20 * 60
+TRACKING_HARD_LIMIT_SECONDS = 25 * 60
+COMPETITOR_REFRESH_SOFT_LIMIT_SECONDS = 10 * 60
+COMPETITOR_REFRESH_HARD_LIMIT_SECONDS = 12 * 60
+
+# Each tracked product costs one page load per 6h beat run, so we cap how
+# much work a single niche can generate and stop tracking niches nobody has
+# rescored recently — a niche the user has moved on from doesn't need a
+# live BSR chart anymore.
+TRACKED_PRODUCTS_PER_NICHE = 20
+TRACKING_WINDOW_DAYS = 30
+
+# A product this low on stock can sell out (and its price/BSR swing) before the next
+# 6h tracker run, so it earns a real page scrape even when SP-API is the BSR source.
+LOW_STOCK_THRESHOLD = 20
+
+# A thinner SP-API catalog search result is less complete than the SERP itself, so we
+# only trust it standalone at or above this size.
+MIN_SPAPI_SEARCH_RESULTS = 10
+SERP_FALLBACK_PAGES = 3
+SERP_ENRICHMENT_PAGES = 1
+
+# Each detail page is one live page load, so only the top of the SERP gets one.
+MAX_DETAILED_PRODUCTS = 20
+
+# The only page verdict that means "this is the real product page".
+REAL_PAGE_VERDICT = "ok"
+
+# How many weeks SalesForecastService projects. Also the scorer's
+# "never breaks even" value for break_even_week_base.
+FORECAST_HORIZON_WEEKS = 52
+
+
+@dataclass(frozen=True)
+class TrackingContext:
+    """Bundles the collaborators one niche's product-tracking pass shares, so per-product calls take a single object instead of three positional args."""
+
+    scraper: "ScraperService"
+    tracker: "BSRTracker"
+    velocity_svc: "SalesVelocityService"
+    # None when SP-API isn't configured for this niche's marketplace — BSR then always
+    # comes from scrape_rank_snapshot instead.
+    spapi: "SPAPIService | None" = None
+
 
 # ---------------------------------------------------------------------------
-# Async DB session helper — Celery workers run in sync context, so we need
-# our own engine + event loop to run async DB operations.
+# Worker runtime — one event loop and one async engine per worker *process*.
+# WHY: asyncpg pools are bound to the loop that created them. Creating a new
+# loop per task forced a new engine per task, which leaked connections.
+# Keeping a single loop alive for the process lifetime lets us keep one engine.
 # ---------------------------------------------------------------------------
+_loop: asyncio.AbstractEventLoop | None = None
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+WORKER_POOL_SIZE = 5
+WORKER_POOL_OVERFLOW = 5
+
+
+def _get_loop() -> asyncio.AbstractEventLoop:
+    """Return the process-wide event loop, creating it on first use."""
+    global _loop
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+    return _loop
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Create a fresh async engine + session factory for each call.
-
-    We intentionally do NOT cache the engine across calls because Celery's
-    prefork workers create new event loops for each task, and asyncpg
-    connection pools are bound to the loop that created them.
-    """
-    settings = Settings()
-    engine = create_async_engine(
-        settings.DATABASE_URL,
-        echo=False,
-        pool_size=5,
-        max_overflow=5,
-    )
-    return async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
+    """Return the process-wide session factory, creating the engine on first use."""
+    global _engine, _session_factory
+    if _session_factory is None:
+        _get_loop()
+        _engine = create_async_engine(
+            Settings().DATABASE_URL, echo=False,
+            pool_size=WORKER_POOL_SIZE, max_overflow=WORKER_POOL_OVERFLOW, pool_pre_ping=True,
+        )
+        _session_factory = async_sessionmaker(bind=_engine, class_=AsyncSession, expire_on_commit=False)
+    return _session_factory
 
 
 def _run_async(coro):
-    """Run an async coroutine in a new event loop (safe for Celery workers)."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    """Run a coroutine on the process-wide loop. Cancels it if the run is interrupted."""
+    loop = _get_loop()
+    task = loop.create_task(coro)
     try:
-        return loop.run_until_complete(coro)
+        return loop.run_until_complete(task)
+    except BaseException:
+        # WHY: Celery's SoftTimeLimitExceeded is raised from a signal handler and escapes
+        # run_until_complete while the coroutine is still pending. Left alone it would resume
+        # on the next task that touches this loop.
+        task.cancel()
+        loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+        raise
+
+
+def _dispose_runtime() -> None:
+    """Close the engine and loop. Called on worker shutdown."""
+    global _engine, _session_factory, _loop
+    try:
+        if _engine is not None and _loop is not None and not _loop.is_closed():
+            _loop.run_until_complete(_engine.dispose())
     finally:
-        loop.close()
+        if _loop is not None and not _loop.is_closed():
+            _loop.close()
+        _engine = _session_factory = _loop = None
+
+
+def _reset_runtime_for_tests() -> None:
+    """Dispose the cached runtime so the next call rebuilds it from scratch."""
+    _dispose_runtime()
 
 
 def _get_llm_client():
@@ -60,6 +155,36 @@ def _get_llm_client():
     except Exception as e:
         logger.warning("LLM client not available (LLM-powered steps will be skipped): %s", e)
         return None
+
+
+def _build_browser_session(marketplace: str) -> "BrowserSession":
+    """Return an unopened BrowserSession for this marketplace, behind the proxy configured in settings."""
+    from app.core.marketplace import get_marketplace
+    from app.scraping.session import BrowserSession
+    from app.services.scraper_service import build_proxy_manager_from_settings
+
+    return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings())
+
+
+@asynccontextmanager
+async def _page_cache_for_run(force: bool = False):
+    """Yield a PageCache backed by one Redis client for this run, or None when forced to re-scrape.
+
+    WHY: a forced re-run exists specifically to get fresh data, so it must not be served
+    stale pages from a previous run's cache.
+    """
+    if force:
+        yield None
+        return
+
+    from redis.asyncio import Redis
+    from app.scraping.page_cache import PageCache
+
+    redis = Redis.from_url(Settings().REDIS_URL, decode_responses=True)
+    try:
+        yield PageCache(redis)
+    finally:
+        await redis.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -88,11 +213,20 @@ def run_full_analysis(self, niche_id: int, keyword: str, marketplace: str = "US"
     product_asins : list[str] | None
         If provided, skip scraping and filter to only these ASINs (sub-niche flow).
     """
-    options = options or {}
+    options = dict(options or {})
+    if self.request.retries > 0:
+        # WHY: a retry after a mid-pipeline failure would otherwise duplicate suppliers/recommendations.
+        options["force"] = True
     logger.info("Starting full analysis for niche %d: %s (marketplace=%s)", niche_id, keyword, marketplace)
 
     try:
         return _run_async(_run_full_analysis_async(self, niche_id, keyword, options, product_asins=product_asins, marketplace=marketplace))
+    except SoftTimeLimitExceeded:
+        # A retry would just re-run the same slow pipeline and hit the same limit again,
+        # so mark the niche failed instead of retrying.
+        logger.error("Analysis for niche %d exceeded the soft time limit", niche_id)
+        _run_async(_update_niche_status(niche_id, "failed", "Timed out"))
+        raise
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
@@ -118,6 +252,12 @@ def run_discovery(self, niche_id: int, keyword: str, marketplace: str = "US", op
 
     try:
         return _run_async(_run_discovery_async(self, niche_id, keyword, options, marketplace=marketplace))
+    except SoftTimeLimitExceeded:
+        # A retry would just re-run the same slow pipeline and hit the same limit again,
+        # so mark the niche failed instead of retrying.
+        logger.error("Discovery for niche %d exceeded the soft time limit", niche_id)
+        _run_async(_update_niche_status(niche_id, "failed", "Timed out"))
+        raise
     except Exception as exc:
         logger.exception("Discovery failed for niche %d", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", str(exc)))
@@ -127,11 +267,23 @@ def run_discovery(self, niche_id: int, keyword: str, marketplace: str = "US", op
 async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict, marketplace: str = "US"):
     """Async implementation of the discovery pipeline."""
     from app.models.niche import Niche
+    from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
     llm_client = _get_llm_client()
 
-    async with session_factory() as db:
+    # WHY: one browser session for the whole run, so every page load shares the
+    # same cookies and fingerprint instead of looking like a brand-new visitor.
+    async with (
+        session_factory() as db,
+        _build_browser_session(marketplace) as browser,
+        _page_cache_for_run(options.get("force", False)) as page_cache,
+    ):
+        scraper = ScraperService(
+            proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
+            page_cache=page_cache, event_sink=session_factory,
+        )
+
         # Update status to discovering
         await db.execute(
             update(Niche).where(Niche.id == niche_id).values(status="discovering")
@@ -140,7 +292,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
         # ── Step 1: Scrape search results ──────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-        products_data = await _scrape_search_results(keyword, marketplace=marketplace)
+        products_data = await _scrape_search_results(scraper, keyword, marketplace)
 
         if not products_data:
             await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -152,7 +304,8 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
 
         # ── Step 3: Scrape top product details ─────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
-        detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], marketplace=marketplace)
+        from app.workers.pipeline_steps.product_details import scrape_product_details
+        detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
 
         # Merge detail data back
         detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
@@ -220,16 +373,34 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     """Async implementation of the full analysis pipeline."""
     from app.models.niche import Niche
     from app.models.product import Product
+    from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
     llm_client = _get_llm_client()
 
-    async with session_factory() as db:
+    # WHY: one browser session for the whole run (search, product pages, keyword
+    # SERPs), so every page load shares the same cookies and fingerprint. It is
+    # opened even for the sub-niche flow because keyword research still scrapes.
+    async with (
+        session_factory() as db,
+        _build_browser_session(marketplace) as browser,
+        _page_cache_for_run(options.get("force", False)) as page_cache,
+    ):
+        scraper = ScraperService(
+            proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
+            page_cache=page_cache, event_sink=session_factory,
+        )
+
         # Update status to analyzing
         await db.execute(
             update(Niche).where(Niche.id == niche_id).values(status="analyzing")
         )
         await db.commit()
+
+        if options.get("force"):
+            from app.workers.pipeline_steps.reset import reset_niche_analysis_data
+            await reset_niche_analysis_data(db, niche_id)
+            await db.commit()
 
         if product_asins:
             # ── Sub-niche flow: load products from parent niche by ASIN ──
@@ -252,18 +423,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             await db.flush()
             await db.commit()
 
-            products_data = [
-                {
-                    "asin": p.asin,
-                    "title": p.title,
-                    "price": float(p.current_price) if p.current_price else None,
-                    "bsr": p.current_bsr,
-                    "rating": float(p.rating) if p.rating else None,
-                    "review_count": p.review_count,
-                    "brand": p.brand if hasattr(p, "brand") else None,
-                }
-                for p in db_products
-            ]
+            products_data = [_stored_product_as_detail(p) for p in db_products]
             detailed_products = products_data  # Already have detail data
             task.update_state(state="PROGRESS", meta={"step": "products_scraped", "progress": 30})
 
@@ -272,7 +432,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # ── Step 1: Scrape search results ──────────────────────────────
             task.update_state(state="PROGRESS", meta={"step": "scraping_search", "progress": 5})
-            products_data = await _scrape_search_results(keyword, marketplace=marketplace)
+            products_data = await _scrape_search_results(scraper, keyword, marketplace)
 
             if not products_data:
                 await _update_niche_status(niche_id, "failed", "No products found for keyword")
@@ -283,7 +443,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             product_ids = await _save_products(db, niche_id, products_data)
 
             # Scrape individual product pages for detailed data
-            detailed_products = await _scrape_product_details(db, niche_id, products_data[:20], marketplace=marketplace)
+            from app.workers.pipeline_steps.product_details import scrape_product_details
+            detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
@@ -303,7 +464,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                     if detail.get("brand"):
                         p["brand"] = detail["brand"]
                     for key in ("bullet_count", "image_count", "has_video",
-                                "has_a_plus", "has_brand_story", "seller_id",
+                                "has_a_plus", "has_brand_story", "seller_id", "sold_by_amazon",
                                 "dimensions", "weight", "date_first_available",
                                 "star_distribution", "variation_count",
                                 "category_path", "list_price", "seller_count",
@@ -339,8 +500,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         keyword_research_summary = None
         try:
             from app.services.keyword_research import KeywordResearchService
-            kw_scraper = ScraperService(marketplace=marketplace)
-            kw_research_svc = KeywordResearchService(db, scraper=kw_scraper, marketplace=marketplace)
+            kw_research_svc = KeywordResearchService(db, scraper=scraper, marketplace=marketplace)
             keyword_research_summary = await kw_research_svc.research_keywords(
                 niche_id=niche_id,
                 seed_keyword=keyword,
@@ -357,7 +517,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # Reviews are embedded in product detail pages (top reviews section),
         # extracted during scrape_product_page(). No separate page loads needed.
         task.update_state(state="PROGRESS", meta={"step": "review_extraction", "progress": 32})
-        from app.models.review import Review as ReviewModel
+        from app.workers.pipeline_steps.reviews import save_reviews_for_product
         reviews_scraped = 0
         for detail in detailed_products[:10]:
             asin = detail.get("asin")
@@ -371,32 +531,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             if not product_obj:
                 continue
 
-            for review_data in page_reviews:
-                # Check for duplicate by review_id
-                if review_data.get("review_id"):
-                    existing = await db.execute(
-                        select(ReviewModel.id).where(
-                            ReviewModel.review_id == review_data["review_id"]
-                        ).limit(1)
-                    )
-                    if existing.scalar_one_or_none():
-                        continue
-
-                review_obj = ReviewModel(
-                    product_id=product_obj.id,
-                    asin=asin,
-                    review_id=review_data.get("review_id"),
-                    rating=review_data.get("rating", 0),
-                    title=review_data.get("title", ""),
-                    body=review_data.get("body", ""),
-                    review_date=review_data.get("review_date"),
-                    verified_purchase=review_data.get("verified_purchase", False),
-                    helpful_votes=review_data.get("helpful_votes", 0),
-                    is_vine=review_data.get("is_vine", False),
-                )
-                db.add(review_obj)
-                reviews_scraped += 1
-            await db.flush()
+            reviews_scraped += await save_reviews_for_product(db, product_obj, page_reviews)
 
         logger.info("Extracted %d reviews from product pages", reviews_scraped)
 
@@ -407,42 +542,37 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         competitor_landscape = await competitor_svc.analyze_landscape(
             niche_id=niche_id,
-            products=products_data[:20],
+            products=products_data[:MAX_DETAILED_PRODUCTS],
             category=keyword,
         )
         if competitor_landscape:
             competitor_landscape["marketplace"] = marketplace
+            try:
+                saved_competitors = await competitor_svc.persist_landscape(niche_id, competitor_landscape)
+                await db.flush()
+                logger.info("Persisted %d competitor rows for niche %d", saved_competitors, niche_id)
+            except Exception as e:
+                logger.warning("Persisting competitors failed: %s", e)
 
-        # ── Step 4: Analyze reviews (top 10 products) ──────────────────
+        # ── Step 4: Collect reviews + sentiment/pain-point analysis ─────
         task.update_state(state="PROGRESS", meta={"step": "review_analysis", "progress": 38})
         from app.services.review_analyzer import ReviewAnalyzer
-        review_analyzer = ReviewAnalyzer(llm_client)
+        from app.workers.pipeline_steps.reviews import collect_reviews_by_asin, flatten_reviews, run_review_analysis
 
-        review_insights = None
-        all_reviews = await _collect_reviews(db, niche_id)
-        if all_reviews:
-            try:
-                review_insights = await review_analyzer.analyze_reviews(all_reviews)
-            except Exception as e:
-                logger.warning("Review analysis failed: %s", e)
+        competitor_reviews_map = await collect_reviews_by_asin(db, niche_id)
+        review_insights = await run_review_analysis(llm_client, competitor_reviews_map, keyword)
 
         # ── Step 4b: Review Intelligence (deep cross-product synthesis) ──
         task.update_state(state="PROGRESS", meta={"step": "review_intelligence", "progress": 42})
         review_intelligence = None
-        competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
         product_titles_map = {
             p.get("asin", ""): p.get("title", "")
             for p in detailed_products if p.get("asin")
         }
         if competitor_reviews_map and llm_client:
             try:
-                # Build flat list of all review dicts for the intelligence method
-                all_review_dicts = []
-                for reviews_list in competitor_reviews_map.values():
-                    all_review_dicts.extend(reviews_list)
-
-                review_intelligence = await review_analyzer.generate_review_intelligence(
-                    all_reviews=all_review_dicts,
+                review_intelligence = await ReviewAnalyzer(llm_client).generate_review_intelligence(
+                    all_reviews=flatten_reviews(competitor_reviews_map),
                     product_reviews=competitor_reviews_map,
                     niche_keyword=keyword,
                     product_titles=product_titles_map,
@@ -461,7 +591,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                 intel_svc = NicheIntelligenceService(llm_client)
                 niche_intelligence = await intel_svc.generate_niche_overview(
                     keyword, detailed_products, competitor_landscape,
-                    _build_base_metrics(competitor_landscape, detailed_products),
+                    _build_base_metrics(competitor_landscape, detailed_products, marketplace=marketplace),
                 )
             except Exception as e:
                 logger.warning("Niche intelligence generation failed: %s", e)
@@ -484,9 +614,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         blueprint_svc = ProductBlueprintService(llm_client)
 
         product_blueprint = None
-        # competitor_reviews_map already collected in step 4b above
-        if not competitor_reviews_map:
-            competitor_reviews_map = await _collect_competitor_reviews(db, niche_id)
+        # competitor_reviews_map already collected in step 4 above
         competitor_meta = _build_competitor_metadata(detailed_products)
         if competitor_reviews_map:
             try:
@@ -570,6 +698,9 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         if scraped_suppliers:
             await _save_suppliers(db, niche_id, scraped_suppliers)
 
+        from app.services.market_signals import summarize_suppliers
+        supplier_summary = summarize_suppliers(scraped_suppliers, cny_to_usd_rate=_CNY_TO_USD_RATE)
+
         # ── Step 6a-ii: Translate Chinese supplier fields ─────────────
         if scraped_suppliers and llm_client:
             task.update_state(state="PROGRESS", meta={"step": "translating_suppliers", "progress": 57})
@@ -598,14 +729,18 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         # ── Step 6b: Supplier cost analysis ───────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "supplier_analysis", "progress": 58})
-        from app.services.supplier_service import SupplierService
-        supplier_svc = SupplierService(marketplace=marketplace)
 
-        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary)
-        metrics["marketplace"] = marketplace
+        from app.services.market_signals import apply_supplier_summary
+
+        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace)
+        apply_supplier_summary(metrics, supplier_summary)
+        product_dims = _extract_avg_dimensions(detailed_products)
         supplier_data = None
         try:
-            supplier_data = await _analyze_suppliers(db, niche_id, metrics, marketplace=marketplace)
+            supplier_data = await _analyze_suppliers(
+                db, niche_id, metrics, marketplace=marketplace,
+                fob_unit_cost=supplier_summary["median_fob_usd"], weight_kg=product_dims["weight_lb"] * LB_TO_KG,
+            )
         except Exception as e:
             logger.warning("Supplier analysis failed: %s", e)
 
@@ -629,29 +764,19 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         # ── Step 8: PPC strategy ───────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "ppc_strategy", "progress": 65})
         from app.services.ppc_service import PPCService
-        ppc_svc = PPCService(db, llm_client)
+        from app.workers.pipeline_steps.ppc import build_ppc_strategy, ppc_metrics_from_strategy
 
         ppc_strategy = None
         try:
-            # Build PPC inputs
-            break_even_acos = ppc_svc.calculate_break_even_acos(
-                selling_price=metrics.get("avg_price") or 30,
-                landed_cost=metrics.get("landed_cost") or 8,
-                fba_fees=metrics.get("fba_fees") or 5,
+            ppc_strategy = await build_ppc_strategy(
+                PPCService(db, llm_client),
+                niche_id=niche_id, keyword=keyword, metrics=metrics, competitor_landscape=competitor_landscape,
             )
-            keyword_portfolio = await ppc_svc.build_keyword_portfolio(niche_id=niche_id)
-            budget_plan = {
-                "daily_budget": metrics.get("ppc_daily_budget") or 30,
-                "monthly_budget": (metrics.get("ppc_daily_budget") or 30) * 30,
-            }
-
-            ppc_strategy = await ppc_svc.generate_ppc_strategy(
-                niche_keyword=keyword,
-                keyword_portfolio=keyword_portfolio,
-                budget_plan=budget_plan,
-                break_even_acos=break_even_acos,
-                competitor_landscape=competitor_landscape,
-            )
+            # Feed the deterministic budget numbers forward so steps 9/10/12 (review
+            # strategy, forecast, financial report) see real avg_cpc/budget values
+            # instead of the hard-coded defaults sprinkled through those steps.
+            metrics.update(ppc_metrics_from_strategy(ppc_strategy))
+            await db.flush()
         except Exception as e:
             logger.warning("PPC strategy generation failed: %s", e)
 
@@ -663,7 +788,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         review_strategy = None
         try:
             # Gather competitor review counts from products data
-            competitor_reviews = [p.get("review_count", 0) for p in products_data[:20] if p.get("review_count")]
+            competitor_reviews = [p.get("review_count", 0) for p in products_data[:MAX_DETAILED_PRODUCTS] if p.get("review_count")]
             review_strategy = await review_svc.generate_review_strategy(
                 niche_keyword=keyword,
                 competitor_reviews=competitor_reviews,
@@ -690,6 +815,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             )
             financial_summary = forecast_svc.summarize_forecast(forecast)
             await forecast_svc.save_projections(niche_id, forecast)
+            metrics["break_even_week_base"] = _base_case_break_even_week(financial_summary)
 
             # Calculate launch capital
             launch_capital = forecast_svc.calculate_launch_capital(
@@ -699,6 +825,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                 ppc_budget_90_days=metrics.get("ppc_budget_90d") or 2700,
             )
             metrics["total_launch_capital"] = launch_capital["total_launch_capital"]
+
+            # generate_launch_playbook (step 11) reads exactly these two keys off financial_summary.
+            financial_summary["marketplace"] = marketplace
+            financial_summary["total_launch_capital"] = launch_capital["total_launch_capital"]
         except Exception as e:
             logger.warning("Financial projections failed: %s", e)
 
@@ -727,14 +857,17 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         financial_report = None
         try:
-            # Estimate FOB cost from landed cost (reverse-engineer)
-            fob_estimate = (metrics.get("landed_cost") or 8) * 0.55  # FOB is roughly 55% of landed
-            product_dims = _extract_avg_dimensions(detailed_products)
+            from app.core.category_mapping import category_slugs
+            duty_slug, fee_slug = category_slugs(metrics.get("category"))
             financial_report = await fin_report_svc.generate_full_report(
                 selling_price=metrics.get("avg_price") or 30,
-                unit_cost_fob=fob_estimate,
+                # Use the real scraped 1688 FOB price when we have one; otherwise fall back
+                # to a rough share of landed cost (FOB is typically ~55% of total landed cost).
+                unit_cost_fob=metrics.get("fob_unit_cost") or (metrics.get("landed_cost") or DEFAULT_LANDED_COST_USD) * FOB_SHARE_OF_LANDED_FALLBACK,
                 product_dims=product_dims,
-                category=metrics.get("category", "default"),
+                category=duty_slug,
+                fee_category=fee_slug,
+                weight_kg_per_unit=product_dims["weight_lb"] * LB_TO_KG,
                 order_quantity=metrics.get("initial_order_qty") or 500,
                 estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
                 avg_cpc=metrics.get("avg_cpc") or 1.50,
@@ -800,14 +933,19 @@ def track_bsr_prices_all():
 
 
 async def _track_bsr_all_async():
-    """Fetch all active niches and track BSR/prices for their products."""
+    """Fetch recently-scored active niches and track BSR/prices for their products."""
     from app.models.niche import Niche
-    from app.models.product import Product
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
-        # Get all completed niches (actively tracked)
-        stmt = select(Niche.id).where(Niche.status == "completed")
+        # Only track niches scored within the tracking window — an older
+        # niche the user isn't actively evaluating doesn't justify the
+        # scraping cost of a fresh BSR chart every 6 hours.
+        tracking_cutoff = datetime.now(timezone.utc) - timedelta(days=TRACKING_WINDOW_DAYS)
+        stmt = select(Niche.id).where(
+            Niche.status == "completed",
+            Niche.last_scored_at >= tracking_cutoff,
+        )
         result = await db.execute(stmt)
         niche_ids = [row[0] for row in result.all()]
 
@@ -818,85 +956,164 @@ async def _track_bsr_all_async():
     logger.info("Queued BSR tracking for %d niches", len(niche_ids))
 
 
-@celery_app.task(name="app.workers.tasks.track_bsr_prices", max_retries=1)
+@celery_app.task(
+    name="app.workers.tasks.track_bsr_prices", max_retries=1,
+    soft_time_limit=TRACKING_SOFT_LIMIT_SECONDS, time_limit=TRACKING_HARD_LIMIT_SECONDS,
+)
 def track_bsr_prices(niche_id: int):
     """Track BSR and prices for all products in a specific niche."""
     logger.info("Tracking BSR/prices for niche %d", niche_id)
     _run_async(_track_bsr_niche_async(niche_id))
 
 
+async def _track_one_product(product, context: TrackingContext) -> None:
+    """Re-scrape one product's rank/price/stock and persist all three snapshots.
+
+    WHY: when SP-API is configured, BSR comes from the Catalog API — free of scraping
+    risk, but with no price or stock. The page itself is only scraped on top of that when
+    the product was already low on stock, since that is the case where price/stock can
+    move before the next tracker run and are worth the extra page load.
+    """
+    if context.spapi is not None:
+        await _track_bsr_via_spapi(product, context)
+        if product.last_stock_level is not None and product.last_stock_level < LOW_STOCK_THRESHOLD:
+            page_snapshot = await context.scraper.scrape_rank_snapshot(product.asin)
+            await _record_snapshot(product, context, page_snapshot)
+        return
+
+    snapshot = await context.scraper.scrape_rank_snapshot(product.asin)
+    await _record_snapshot(product, context, snapshot)
+
+
+async def _track_bsr_via_spapi(product, context: TrackingContext) -> None:
+    """Record BSR from the SP-API Catalog API. Does not touch stock history — SP-API has
+    no stock data, and recording a fabricated "in stock" observation would corrupt the
+    real stockout signal the velocity service reads from that history.
+    """
+    snapshot = await context.spapi.get_rank_snapshot(product.asin)
+    await context.tracker.record_product_snapshot(
+        product_id=product.id, asin=product.asin,
+        bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
+        subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
+        price=snapshot["price"],
+    )
+    if snapshot["current_bsr"]:
+        product.current_bsr = snapshot["current_bsr"]
+
+
+async def _record_snapshot(product, context: TrackingContext, snapshot: dict) -> None:
+    """Persist one page-scraped rank/price/stock snapshot and update the product row.
+
+    Skips pages that were not a real product page: a soft-blocked page parses
+    as "no rank, no price, in stock", and recording that would fake a restock.
+    """
+    if snapshot.get("verdict") != REAL_PAGE_VERDICT:
+        logger.debug("Not recording snapshot for %s: page verdict was %r", product.asin, snapshot.get("verdict"))
+        return
+    await context.tracker.record_product_snapshot(
+        product_id=product.id, asin=product.asin,
+        bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
+        subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
+        price=snapshot["price"],
+    )
+    if snapshot["current_bsr"]:
+        product.current_bsr = snapshot["current_bsr"]
+    if snapshot["price"]:
+        product.current_price = snapshot["price"]
+    await context.velocity_svc.record_stock_snapshot(
+        product_id=product.id, asin=product.asin,
+        stock_level=snapshot["stock_level"], stock_text=snapshot["stock_text"], is_in_stock=snapshot["is_in_stock"],
+    )
+    if snapshot["stock_level"] is not None:
+        product.last_stock_level = snapshot["stock_level"]
+
+
 async def _track_bsr_niche_async(niche_id: int):
-    """Scrape current BSR & price for each product in the niche, plus stock for low-stock items."""
+    """Re-scrape BSR, price, and stock for the niche's top-ranked tracked products."""
+    from app.models.niche import Niche as NicheModel
     from app.models.product import Product
     from app.services.bsr_tracker import BSRTracker
+    from app.services.sales_velocity_service import SalesVelocityService
+    from app.services.scraper_service import ScraperService
+    from app.workers.pipeline_steps.product_source import product_source_for
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
-        tracker = BSRTracker(db)
-
-        stmt = select(Product).where(Product.niche_id == niche_id)
-        result = await db.execute(stmt)
-        products = result.scalars().all()
-
-        # Determine marketplace from niche
-        from app.models.niche import Niche as NicheModel
-        niche_row = (await db.execute(
+        niche_marketplace = (await db.execute(
             select(NicheModel.marketplace).where(NicheModel.id == niche_id)
-        )).scalar_one_or_none()
-        niche_marketplace = niche_row or "US"
+        )).scalar_one_or_none() or "US"
 
-        for product in products:
-            try:
-                # Record current BSR
-                if product.current_bsr:
-                    await tracker.record_bsr(
-                        product_id=product.id,
-                        asin=product.asin,
-                        bsr=product.current_bsr,
-                        category_id=product.category_id,
-                    )
+        stmt = (
+            select(Product)
+            .where(Product.niche_id == niche_id)
+            .order_by(Product.search_position.asc().nullslast())
+            .limit(TRACKED_PRODUCTS_PER_NICHE)
+        )
+        products = (await db.execute(stmt)).scalars().all()
 
-                # Record current price
-                if product.current_price:
-                    await tracker.record_price(
-                        product_id=product.id,
-                        asin=product.asin,
-                        price=float(product.current_price),
-                    )
+        settings = Settings()
+        spapi = _build_spapi_client(settings, niche_marketplace) if product_source_for(settings) == "spapi" else None
 
-                # Track stock level for products that showed low stock (<20)
-                if product.last_stock_level is not None and product.last_stock_level < 20:
-                    try:
-                        from app.services.scraper_service import ScraperService
-                        from app.services.sales_velocity_service import SalesVelocityService
+        try:
+            # WHY: one browser session per niche, shared by every product page load.
+            async with _build_browser_session(niche_marketplace) as browser:
+                context = TrackingContext(
+                    scraper=ScraperService(
+                        proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                        # WHY page_cache=None: this scraper only calls scrape_rank_snapshot(),
+                        # which never reads the cache — a fresh BSR/price/stock read is the
+                        # whole point of the tracker, so it must never see a stale page.
+                        page_cache=None, event_sink=session_factory,
+                    ),
+                    tracker=BSRTracker(db),
+                    velocity_svc=SalesVelocityService(db),
+                    spapi=spapi,
+                )
+                await _track_products(db, products, context)
+        finally:
+            if spapi is not None:
+                await spapi.close()
 
-                        scraper = ScraperService(marketplace=niche_marketplace)
-                        stock_data = await scraper.scrape_stock_level(product.asin)
-
-                        velocity_svc = SalesVelocityService(db)
-                        await velocity_svc.record_stock_snapshot(
-                            product_id=product.id,
-                            asin=product.asin,
-                            stock_level=stock_data.get("stock_level"),
-                            stock_text=stock_data.get("stock_text"),
-                            is_in_stock=stock_data.get("is_in_stock", True),
-                        )
-                        # Update product last_stock_level
-                        if stock_data.get("stock_level") is not None:
-                            product.last_stock_level = stock_data["stock_level"]
-                    except Exception as stock_err:
-                        logger.debug("Stock tracking failed for %s: %s", product.asin, stock_err)
-            except Exception as e:
-                logger.warning("Failed to track product %s: %s", product.asin, e)
-
-        await db.commit()
         logger.info("Tracked %d products in niche %d", len(products), niche_id)
+
+
+def _build_spapi_client(settings: Settings, marketplace: str) -> "SPAPIService":
+    """Build one SP-API client for a niche's tracking run. Caller must close it."""
+    from app.services.spapi_service import SPAPIService
+
+    return SPAPIService(
+        client_id=settings.SP_API_CLIENT_ID, client_secret=settings.SP_API_CLIENT_SECRET,
+        refresh_token=settings.SP_API_REFRESH_TOKEN, marketplace=marketplace,
+    )
+
+
+async def _track_products(db: AsyncSession, products: list, context: TrackingContext) -> None:
+    """Track each product in turn. One product failing does not stop the others."""
+    for product in products:
+        # NOTE: read the ASIN up front. A savepoint rollback expires the product,
+        # and reloading it lazily is not allowed in an async session.
+        asin = product.asin
+        try:
+            # WHY: a savepoint per product, so one failed insert rolls back only
+            # that product and leaves the session usable for the rest.
+            async with db.begin_nested():
+                await _track_one_product(product, context)
+        except Exception as e:
+            logger.warning("Failed to track product %s (rolled back to savepoint): %s", asin, e)
+            continue
+        # WHY: commit after each product, not once at the end — a hard
+        # time-limit kill mid-loop would otherwise lose every snapshot
+        # recorded so far for this niche.
+        await db.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Review Scraping
 # ═══════════════════════════════════════════════════════════════════════════
-@celery_app.task(name="app.workers.tasks.scrape_reviews", max_retries=2)
+@celery_app.task(
+    name="app.workers.tasks.scrape_reviews", max_retries=2,
+    soft_time_limit=TRACKING_SOFT_LIMIT_SECONDS, time_limit=TRACKING_HARD_LIMIT_SECONDS,
+)
 def scrape_reviews(niche_id: int, asin: str, max_pages: int = 5):
     """Scrape reviews for a specific product."""
     logger.info("Scraping reviews for ASIN %s (niche %d)", asin, niche_id)
@@ -906,7 +1123,7 @@ def scrape_reviews(niche_id: int, asin: str, max_pages: int = 5):
 async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
     """Scrape and store reviews for a product."""
     from app.models.product import Product
-    from app.models.review import Review
+    from app.workers.pipeline_steps.reviews import save_reviews_for_product
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
@@ -927,30 +1144,21 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
         niche_marketplace = niche_row.marketplace if niche_row else "US"
 
         from app.services.scraper_service import ScraperService
-        scraper = ScraperService(marketplace=niche_marketplace)
 
         try:
-            reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
+            async with _build_browser_session(niche_marketplace) as browser:
+                scraper = ScraperService(
+                    proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
+                    # WHY page_cache=None: scrape_reviews() never reads the cache, so
+                    # there is nothing here for a PageCache to do.
+                    page_cache=None, event_sink=session_factory,
+                )
+                reviews_data = await scraper.scrape_reviews(asin, max_pages=max_pages)
         except Exception as e:
             logger.warning("Review scraping failed for %s: %s", asin, e)
             return
 
-        # Save to DB
-        saved = 0
-        for review_data in reviews_data:
-            review = Review(
-                product_id=product.id,
-                reviewer_name=review_data.get("reviewer_name", "Anonymous"),
-                rating=review_data.get("rating", 0),
-                title=review_data.get("title", ""),
-                body=review_data.get("body", ""),
-                review_date=review_data.get("date"),
-                verified_purchase=review_data.get("verified", False),
-                helpful_votes=review_data.get("helpful_votes", 0),
-            )
-            db.add(review)
-            saved += 1
-
+        saved = await save_reviews_for_product(db, product, reviews_data)
         await db.commit()
         logger.info("Saved %d reviews for ASIN %s", saved, asin)
 
@@ -970,7 +1178,7 @@ async def _refresh_all_competitors_async():
 
     session_factory = _get_session_factory()
     async with session_factory() as db:
-        stmt = select(Niche.id, Niche.keyword).where(Niche.status == "completed")
+        stmt = select(Niche.id, Niche.primary_keyword).where(Niche.status == "completed")
         result = await db.execute(stmt)
         niches = result.all()
 
@@ -980,7 +1188,10 @@ async def _refresh_all_competitors_async():
     logger.info("Queued competitor refresh for %d niches", len(niches))
 
 
-@celery_app.task(name="app.workers.tasks.refresh_competitor_data", max_retries=1)
+@celery_app.task(
+    name="app.workers.tasks.refresh_competitor_data", max_retries=1,
+    soft_time_limit=COMPETITOR_REFRESH_SOFT_LIMIT_SECONDS, time_limit=COMPETITOR_REFRESH_HARD_LIMIT_SECONDS,
+)
 def refresh_competitor_data(niche_id: int, keyword: str):
     """Refresh competitor analysis for a single niche."""
     logger.info("Refreshing competitors for niche %d", niche_id)
@@ -1012,7 +1223,8 @@ async def _refresh_competitor_async(niche_id: int, keyword: str):
                 }
                 for p in db_products
             ]
-            await svc.analyze_landscape(niche_id=niche_id, products=products_for_analysis, category=keyword)
+            landscape = await svc.analyze_landscape(niche_id=niche_id, products=products_for_analysis, category=keyword)
+            await svc.persist_landscape(niche_id, landscape)
             await db.commit()
             logger.info("Competitor refresh complete for niche %d", niche_id)
         except Exception as e:
@@ -1140,21 +1352,60 @@ async def _update_niche_status(niche_id: int, status: str, error: str | None = N
     async with session_factory() as db:
         values = {"status": status}
         if error:
-            values["hard_filter_fail_reasons"] = [error]
+            values["last_error"] = error[:MAX_STORED_ERROR_CHARS]
         await db.execute(update(Niche).where(Niche.id == niche_id).values(**values))
         await db.commit()
 
 
-async def _scrape_search_results(keyword: str, marketplace: str = "US") -> list[dict]:
-    """Scrape Amazon search results for a keyword."""
-    from app.services.scraper_service import ScraperService
+async def _scrape_search_results(scraper: "ScraperService", keyword: str, marketplace: str) -> list[dict]:
+    """Return search-result product dicts for *keyword*.
 
-    scraper = ScraperService(marketplace=marketplace)
+    Prefers SP-API catalog search (legal, unblockable) when credentials are configured,
+    enriched with price/rating/badges from page 1 of the SERP. Falls back to a full
+    3-page SERP scrape when SP-API isn't configured, errors, or returns too few results
+    to trust on its own. Returns [] if that fallback scrape also fails.
+    """
+    from app.workers.pipeline_steps.product_source import product_source_for
+
+    if product_source_for(Settings()) == "spapi":
+        spapi_products = await _search_via_spapi(scraper, keyword, marketplace)
+        if spapi_products is not None:
+            return spapi_products
+
     try:
-        return await scraper.scrape_search_results(keyword, pages=3)
+        return await scraper.scrape_search_results(keyword, pages=SERP_FALLBACK_PAGES)
     except Exception as e:
         logger.warning("Search scraping failed for '%s': %s", keyword, e)
         return []
+
+
+async def _search_via_spapi(scraper: "ScraperService", keyword: str, marketplace: str) -> list[dict] | None:
+    """Search the SP-API catalog and enrich from page 1 of the SERP. Returns None to signal a full-scrape fallback."""
+    from app.workers.pipeline_steps.product_source import merge_serp_enrichment
+
+    settings = Settings()
+    spapi = _build_spapi_client(settings, marketplace)
+    try:
+        catalog_items = await spapi.search_catalog_products(keyword)
+    except Exception as e:
+        logger.warning("SP-API catalog search failed for '%s', falling back to scraping: %s", keyword, e)
+        return None
+    finally:
+        await spapi.close()
+
+    if len(catalog_items) < MIN_SPAPI_SEARCH_RESULTS:
+        return None
+
+    for position, item in enumerate(catalog_items, start=1):
+        item["position"] = position
+
+    try:
+        serp_page_one = await scraper.scrape_search_results(keyword, pages=SERP_ENRICHMENT_PAGES)
+    except Exception as e:
+        logger.warning("SERP enrichment scrape failed for '%s': %s", keyword, e)
+        serp_page_one = []
+
+    return merge_serp_enrichment(catalog_items, serp_page_one)
 
 
 async def _save_products(db: AsyncSession, niche_id: int, products_data: list[dict]) -> list[int]:
@@ -1221,164 +1472,26 @@ async def _save_products(db: AsyncSession, niche_id: int, products_data: list[di
     return product_ids
 
 
-async def _scrape_product_details(
-    db: AsyncSession, niche_id: int, products_data: list[dict], marketplace: str = "US"
-) -> list[dict]:
-    """Scrape detailed product pages for enriched data and update DB rows."""
-    from app.models.product import Product
-    from app.services.scraper_service import ScraperService
+def _stored_product_as_detail(product) -> dict:
+    """Turn a stored Product row into the same dict shape a fresh detail-page scrape gives.
 
-    scraper = ScraperService(marketplace=marketplace)
-    detailed = []
-
-    for p in products_data[:20]:
-        asin = p.get("asin")
-        if not asin:
-            continue
-        try:
-            detail = await scraper.scrape_product_page(asin)
-            if detail:
-                detailed.append(detail)
-                # Write enriched data back to the product row
-                stmt = select(Product).where(Product.asin == asin)
-                existing = (await db.execute(stmt)).scalar_one_or_none()
-                if existing:
-                    if detail.get("title"):
-                        existing.title = detail["title"]
-                    if detail.get("price") is not None:
-                        existing.current_price = detail["price"]
-                    if detail.get("rating") is not None:
-                        existing.rating = detail["rating"]
-                    if detail.get("review_count") is not None:
-                        existing.review_count = detail["review_count"]
-                    if detail.get("brand"):
-                        existing.brand = detail["brand"]
-                    if detail.get("current_bsr") is not None:
-                        existing.current_bsr = detail["current_bsr"]
-                    if detail.get("bsr_category"):
-                        existing.bsr_category = detail["bsr_category"]
-                    if detail.get("current_subcategory_bsr") is not None:
-                        existing.current_subcategory_bsr = detail["current_subcategory_bsr"]
-                    if detail.get("subcategory_name"):
-                        existing.subcategory_name = detail["subcategory_name"]
-                    if detail.get("bullet_count") is not None:
-                        existing.bullet_count = detail["bullet_count"]
-                    if detail.get("image_count") is not None:
-                        existing.image_count = detail["image_count"]
-                    existing.has_video = detail.get("has_video", existing.has_video)
-                    existing.has_a_plus = detail.get("has_a_plus", existing.has_a_plus)
-                    existing.has_brand_story = detail.get("has_brand_story", existing.has_brand_story)
-                    if detail.get("seller_id"):
-                        existing.seller_id = detail["seller_id"]
-                    if detail.get("last_scraped_at"):
-                        from datetime import datetime as dt
-                        try:
-                            existing.last_scraped_at = dt.fromisoformat(detail["last_scraped_at"])
-                        except (ValueError, TypeError):
-                            pass
-                    # Save stock level
-                    if detail.get("stock_level") is not None:
-                        existing.last_stock_level = detail["stock_level"]
-
-                    # ── Save enriched product fields ──
-                    if detail.get("list_price") is not None:
-                        existing.list_price = detail["list_price"]
-                    if detail.get("date_first_available"):
-                        try:
-                            from dateutil.parser import parse as dateparse
-                            existing.date_first_available = dateparse(detail["date_first_available"]).date()
-                        except Exception:
-                            pass
-                    if detail.get("star_distribution"):
-                        existing.star_distribution = detail["star_distribution"]
-                    if detail.get("variation_count") is not None:
-                        existing.variation_count = detail["variation_count"]
-                    if detail.get("category_path"):
-                        existing.category_path = detail["category_path"]
-                    if detail.get("seller_count") is not None:
-                        existing.seller_count = detail["seller_count"]
-                    if detail.get("fbt_asins"):
-                        existing.fbt_asins = detail["fbt_asins"]
-                    if detail.get("qa_count") is not None:
-                        existing.qa_count = detail["qa_count"]
-                    if detail.get("deal_badge"):
-                        existing.deal_badge = detail["deal_badge"]
-                    if detail.get("amazons_choice_keyword"):
-                        existing.amazons_choice_keyword = detail["amazons_choice_keyword"]
-                    if detail.get("review_attributes"):
-                        existing.review_attributes = detail["review_attributes"]
-                    if detail.get("comparison_asins"):
-                        existing.comparison_asins = detail["comparison_asins"]
-                    if detail.get("weight"):
-                        existing.weight = detail["weight"]
-                    if detail.get("dimensions"):
-                        existing.product_dimensions = detail["dimensions"]
-                    # Record stock snapshot to history
-                    if detail.get("is_in_stock") is not None:
-                        try:
-                            from app.models.stock_history import StockHistory
-                            stock_entry = StockHistory(
-                                time=datetime.now(timezone.utc),
-                                product_id=existing.id,
-                                asin=asin,
-                                stock_level=detail.get("stock_level"),
-                                stock_text=detail.get("stock_text"),
-                                is_in_stock=detail.get("is_in_stock", True),
-                            )
-                            db.add(stock_entry)
-                        except Exception as stock_err:
-                            logger.debug("Stock history save failed for %s: %s", asin, stock_err)
-        except Exception as e:
-            logger.warning("Failed to scrape details for %s: %s", asin, e)
-
-    await db.commit()
-    return detailed
-
-
-async def _collect_reviews(db: AsyncSession, niche_id: int) -> list[str]:
-    """Collect review text from DB for a niche."""
-    from app.models.product import Product
-    from app.models.review import Review
-
-    stmt = (
-        select(Review.body)
-        .join(Product, Review.product_id == Product.id)
-        .where(Product.niche_id == niche_id)
-        .limit(200)
-    )
-    result = await db.execute(stmt)
-    return [row[0] for row in result.all() if row[0]]
-
-
-async def _collect_competitor_reviews(db: AsyncSession, niche_id: int) -> dict[str, list[dict]]:
-    """Collect reviews grouped by ASIN for all products in a niche."""
-    from app.models.product import Product
-    from app.models.review import Review
-
-    stmt = (
-        select(Product.asin, Review.rating, Review.title, Review.body, Review.verified_purchase, Review.helpful_votes)
-        .join(Review, Review.product_id == Product.id)
-        .where(Product.niche_id == niche_id)
-        .order_by(Product.asin, Review.helpful_votes.desc())
-    )
-    result = await db.execute(stmt)
-    rows = result.all()
-
-    reviews_by_asin: dict[str, list[dict]] = {}
-    for asin, rating, title, body, verified, helpful in rows:
-        if asin not in reviews_by_asin:
-            reviews_by_asin[asin] = []
-        # Cap at 30 reviews per ASIN to stay within LLM context limits
-        if len(reviews_by_asin[asin]) < 30:
-            reviews_by_asin[asin].append({
-                "rating": rating,
-                "title": title,
-                "body": body,
-                "verified_purchase": verified,
-                "helpful_votes": helpful or 0,
-            })
-
-    return reviews_by_asin
+    WHY: the sub-niche flow reuses the parent niche's products instead of
+    re-scraping, and category/Amazon-share/BSR signals read these keys.
+    """
+    return {
+        "asin": product.asin,
+        "title": product.title,
+        "brand": product.brand,
+        "image_url": product.image_url,
+        "price": float(product.current_price) if product.current_price is not None else None,
+        "rating": float(product.rating) if product.rating is not None else None,
+        "review_count": product.review_count,
+        "bsr": product.current_bsr,
+        "current_bsr": product.current_bsr,
+        "bsr_category": product.bsr_category,
+        "seller_id": product.seller_id,
+        "date_first_available": product.date_first_available.isoformat() if product.date_first_available else None,
+    }
 
 
 def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
@@ -1390,7 +1503,9 @@ def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
     """
     import re
 
-    DEFAULT_DIMS = {"length": 10, "width": 6, "height": 4, "weight_lb": 1.1}
+    from app.core.units import parse_weight_lb
+
+    DEFAULT_DIMS ={"length": 10, "width": 6, "height": 4, "weight_lb": 1.1}
 
     lengths, widths, heights, weights = [], [], [], []
 
@@ -1418,11 +1533,9 @@ def _extract_avg_dimensions(detailed_products: list[dict]) -> dict:
             or product.get("product_weight_lbs")
             or product.get("weight_lbs")
         )
-        if weight_val is not None:
-            try:
-                weights.append(float(weight_val))
-            except (ValueError, TypeError):
-                pass
+        weight_lb = parse_weight_lb(weight_val)
+        if weight_lb is not None:
+            weights.append(weight_lb)
 
     if not lengths:
         return DEFAULT_DIMS
@@ -1451,40 +1564,47 @@ def _build_competitor_metadata(detailed_products: list[dict]) -> list[dict]:
     ]
 
 
-async def _analyze_suppliers(db: AsyncSession, niche_id: int, metrics: dict, marketplace: str = "US") -> dict | None:
-    """Run supplier analysis."""
+async def _analyze_suppliers(
+    db: AsyncSession, niche_id: int, metrics: dict, marketplace: str = "US",
+    fob_unit_cost: float | None = None, weight_kg: float = 0.5,
+) -> dict | None:
+    """Landed cost + margins. Uses the median scraped 1688 FOB price when we have one."""
+    from app.core.category_mapping import category_slugs
     from app.services.supplier_service import SupplierService
 
     svc = SupplierService(marketplace=marketplace)
     avg_price = metrics.get("avg_price", 30)
+    unit_cost = fob_unit_cost or avg_price * FOB_FALLBACK_SHARE_OF_PRICE
+    if fob_unit_cost is None:
+        logger.info("No supplier prices scraped; estimating FOB as %.0f%% of price", FOB_FALLBACK_SHARE_OF_PRICE * 100)
+    duty_slug, _ = category_slugs(metrics.get("category"))
 
-    # Estimate FOB unit cost: roughly 15% of selling price
-    estimated_unit_cost = avg_price * 0.15
-
-    # Calculate landed cost (returns LandedCost dataclass)
-    landed = svc.calculate_landed_cost(
-        unit_cost=estimated_unit_cost,
-        quantity=500,
-        weight_kg=0.5,
-    )
-
-    # Calculate margins (pass LandedCost object directly)
+    landed = svc.calculate_landed_cost(unit_cost=unit_cost, quantity=500, weight_kg=weight_kg, category=duty_slug)
     margin = svc.calculate_margins(
-        selling_price=avg_price,
-        landed_cost=landed,
+        selling_price=avg_price, landed_cost=landed,
         fba_fulfillment_fee=metrics.get("fba_fees", 5),
-        ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,  # CPC / conversion rate
+        ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,
     )
-
+    metrics["fob_unit_cost"] = round(unit_cost, 4)
     metrics["landed_cost"] = landed.total_cost_to_amazon
     metrics["pre_ppc_margin_pct"] = margin["pre_ppc_margin_pct"]
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
-
     return {"landed_cost": {"total_landed_cost_usd_per_unit": landed.total_cost_to_amazon}, "margins": margin}
 
 
 # CNY to USD conversion rate
 _CNY_TO_USD_RATE = 7.2
+
+# Product weight is scraped in pounds; landed-cost/shipping math needs kilograms.
+LB_TO_KG = 0.4536
+
+# When no 1688 supplier prices were scraped, estimate FOB as this share of the average listing price.
+FOB_FALLBACK_SHARE_OF_PRICE = 0.15
+
+# FOB is typically about this share of total landed cost; used only when we have neither a
+# scraped supplier price nor a computed landed cost to work from.
+FOB_SHARE_OF_LANDED_FALLBACK = 0.55
+DEFAULT_LANDED_COST_USD = 8
 
 
 def _calculate_supplier_score(supplier: dict) -> float:
@@ -1566,6 +1686,7 @@ async def _save_suppliers(
 
         # Calculate supplier score
         score = _calculate_supplier_score(s)
+        s["supplier_score"] = score
 
         supplier = Supplier(
             niche_id=niche_id,
@@ -1593,7 +1714,27 @@ async def _save_suppliers(
     return supplier_ids
 
 
-def _build_base_metrics(competitor_landscape: dict | None, detailed_products: list[dict], keyword_research_summary: dict | None = None) -> dict:
+def _derive_product_signals(detailed_products: list[dict], marketplace: str) -> dict:
+    """Derive category, strong-seller count, Amazon-seller share, and avg rating from scraped products."""
+    from app.core.marketplace import get_marketplace
+    from app.services.market_signals import amazon_seller_pct, count_strong_sellers, derive_category
+
+    ratings = [float(p["rating"]) for p in detailed_products if p.get("rating")]
+    return {
+        "marketplace": marketplace,
+        "category": derive_category(detailed_products),
+        "strong_seller_count": count_strong_sellers(detailed_products),
+        "amazon_seller_pct": amazon_seller_pct(detailed_products, get_marketplace(marketplace).amazon_seller_id),
+        "avg_rating": round(sum(ratings) / len(ratings), 2) if ratings else 0,
+    }
+
+
+def _build_base_metrics(
+    competitor_landscape: dict | None,
+    detailed_products: list[dict],
+    keyword_research_summary: dict | None = None,
+    marketplace: str = "US",
+) -> dict:
     """Build base metrics dict from competitor data and scraped products."""
     metrics = {
         "avg_price": 0,
@@ -1612,6 +1753,7 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
         "avg_cpc": 1.5,
         "fba_fees": 5.0,
     }
+    metrics.update(_derive_product_signals(detailed_products, marketplace))
 
     # Use real keyword research data if available
     if keyword_research_summary:
@@ -1642,8 +1784,6 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
             "avg_review_count": review_stats.get("avg", competitor_landscape.get("avg_review_count", 0)),
             "median_competitor_reviews": review_stats.get("median", competitor_landscape.get("median_reviews", 0)),
             "avg_listing_quality": competitor_landscape.get("avg_listing_quality", 50),
-            "strong_seller_count": competitor_landscape.get("strong_seller_count", 0),
-            "amazon_seller_pct": competitor_landscape.get("amazon_seller_pct", 0),
             "estimated_monthly_sales": competitor_landscape.get("estimated_monthly_sales", 0),
         })
 
@@ -1682,12 +1822,28 @@ def _build_base_metrics(competitor_landscape: dict | None, detailed_products: li
             metrics["avg_bsr"], metrics["estimated_monthly_sales"],
         )
 
+    # WHY: computed before the 300-unit fallback below, so a made-up sales
+    # number never turns into a made-up revenue. The regression estimate is
+    # for one typical listing, which makes this revenue per seller.
+    if metrics["estimated_monthly_sales"] > 0 and metrics["avg_price"] > 0:
+        metrics["monthly_revenue_per_seller"] = round(metrics["estimated_monthly_sales"] * metrics["avg_price"])
+
     # Fallback: if still zero but we have products with prices, estimate from product count
     if not metrics["estimated_monthly_sales"]:
         metrics["estimated_monthly_sales"] = 300
         logger.info("Using fallback estimated_monthly_sales: 300")
 
     return metrics
+
+
+def _base_case_break_even_week(financial_summary: dict) -> int:
+    """The week the base-case forecast turns cumulative profit positive.
+
+    The forecast returns None when that never happens inside its horizon; we
+    report the horizon itself, which the scorer treats as its worst case.
+    """
+    break_even_week = financial_summary.get("base", {}).get("break_even_week")
+    return break_even_week if break_even_week is not None else FORECAST_HORIZON_WEEKS
 
 
 def _enrich_metrics(
@@ -1707,11 +1863,8 @@ def _enrich_metrics(
             metrics.setdefault("high_vulnerability_count", competitor_landscape.get("high_vulnerability_count"))
 
     if ppc_strategy:
-        metrics["avg_cpc"] = ppc_strategy.get("avg_cpc", metrics.get("avg_cpc", 1.5))
-        metrics["break_even_acos"] = ppc_strategy.get("break_even_acos", 0)
-        metrics["relevant_keyword_count"] = ppc_strategy.get("keyword_count", 0)
-        metrics["ppc_budget_90d"] = ppc_strategy.get("budget_90d", 0)
-        metrics["estimated_acos"] = ppc_strategy.get("estimated_acos", 35)
+        from app.workers.pipeline_steps.ppc import ppc_metrics_from_strategy
+        metrics.update(ppc_metrics_from_strategy(ppc_strategy))
 
     if review_strategy:
         metrics["review_threshold"] = review_strategy.get("review_threshold", {}).get("threshold", 50)
@@ -1725,7 +1878,8 @@ def _enrich_metrics(
         landed = supplier_data.get("landed_cost", {})
         metrics["landed_cost"] = landed.get("total_landed_cost_usd_per_unit", metrics.get("landed_cost", 0))
 
-    # Supplier score defaults
+    # NOTE: supplier defaults only apply when 1688 scraping returned nothing,
+    # so an outage does not zero the score. Tracked in TODO.md.
     metrics.setdefault("supplier_count", 5)
     metrics.setdefault("best_supplier_score", 70)
     metrics.setdefault("min_moq", 500)

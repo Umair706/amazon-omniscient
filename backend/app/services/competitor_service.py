@@ -341,6 +341,7 @@ class CompetitorService:
                 {
                     "asin": p.get("asin"),
                     "title": (p.get("title") or "")[:80],
+                    "search_position": p.get("position"),
                     "listing_scores": s,
                     "vulnerabilities": v,
                 }
@@ -405,6 +406,28 @@ class CompetitorService:
         comp.last_analyzed_at = now
         await self.db.flush()
         return comp
+
+    async def persist_landscape(self, niche_id: int, landscape: dict) -> int:
+        """Save every competitor_details entry as a Competitor row. Returns rows saved."""
+        saved = 0
+        for fallback_rank, detail in enumerate(landscape.get("competitor_details", []), start=1):
+            asin = detail.get("asin")
+            if not asin:
+                continue
+            product_id = (
+                await self.db.execute(select(Product.id).where(Product.asin == asin))
+            ).scalar_one_or_none()
+            if product_id is None:
+                continue
+            await self.save_competitor(
+                niche_id=niche_id,
+                product_id=product_id,
+                organic_rank=detail.get("search_position") or fallback_rank,
+                listing_scores=detail.get("listing_scores", {}),
+                vulnerability_info=detail.get("vulnerabilities", {}),
+            )
+            saved += 1
+        return saved
 
     # ------------------------------------------------------------------
     # 5. LLM-powered competitive insight

@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 from app.models.niche import Niche
 from app.models.recommendation import Recommendation
 from app.services.scoring_service import ScoringService
@@ -215,7 +215,7 @@ Return a JSON object:
     "comparable_opportunities": "<how this compares to typical Amazon opportunities>"
 }}"""
 
-        return await self.llm.generate_json(prompt, max_tokens=4096)
+        return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)
 
     # ------------------------------------------------------------------
     # 3. Save recommendation to DB
@@ -264,7 +264,10 @@ Return a JSON object:
             subscore_breakdown=data.get("sub_scores"),
             competitor_landscape=data.get("competitor_landscape"),
             # JSONB payloads
-            marketing_channels=data.get("marketing_plan", {}).get("channels"),
+            # marketing_plan["channels"] is itself {"channels": [...]} from recommend_channels().
+            # generate_full_marketing_plan sets it to None on LLM failure, so unwrap defensively
+            # to keep the DB column an array (or null) as the frontend expects.
+            marketing_channels=((data.get("marketing_plan") or {}).get("channels") or {}).get("channels"),
             risk_flags={"fail_reasons": data.get("fail_reasons", []), "hard_filters": data.get("hard_filters", [])},
             launch_playbook=data.get("marketing_plan", {}).get("launch_playbook"),
             ppc_strategy=data.get("ppc_strategy"),
@@ -310,20 +313,23 @@ Return a JSON object:
         sub = score_result["sub_scores"]
         niche.demand_score = Decimal(str(sub.get("demand", 0)))
         niche.competition_score = Decimal(str(sub.get("competition", 0)))
-        niche.sales_velocity_score = Decimal(str(sub.get("revenue", 0)))
+        niche.revenue_score = Decimal(str(sub.get("revenue", 0)))
         niche.margin_score = Decimal(str(sub.get("margin", 0)))
-        niche.marketing_score = Decimal(str(sub.get("trend", 0)))
-        niche.review_achievability_score = Decimal(str(sub.get("review_feasibility", 0)))
-        niche.supplier_reliability_score = Decimal(str(sub.get("supplier", 0)))
-        niche.ad_profitability_score = Decimal(str(sub.get("ppc_viability", 0)))
-        niche.brand_building_score = Decimal(str(sub.get("launch_feasibility", 0)))
+        niche.trend_score = Decimal(str(sub.get("trend", 0)))
+        niche.review_feasibility_score = Decimal(str(sub.get("review_feasibility", 0)))
+        niche.supplier_score = Decimal(str(sub.get("supplier", 0)))
+        niche.ppc_viability_score = Decimal(str(sub.get("ppc_viability", 0)))
+        niche.launch_feasibility_score = Decimal(str(sub.get("launch_feasibility", 0)))
 
         # Update market metrics (use model field names)
         niche.avg_bsr = metrics.get("avg_bsr")
         niche.avg_sale_price = Decimal(str(metrics.get("avg_price", 0))) if metrics.get("avg_price") else None
         niche.avg_review_count = metrics.get("avg_review_count")
+        niche.avg_rating = Decimal(str(metrics.get("avg_rating", 0))) if metrics.get("avg_rating") else None
+        niche.estimated_monthly_sales = metrics.get("estimated_monthly_sales")
         niche.monthly_search_volume = metrics.get("search_volume")
         niche.is_seasonal = metrics.get("is_seasonal", False)
+        niche.last_error = None
 
         niche.status = "completed"
         niche.last_scored_at = datetime.now(timezone.utc)
