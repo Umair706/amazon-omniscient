@@ -60,20 +60,23 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 class GlobalExceptionMiddleware(BaseHTTPMiddleware):
-    """Catch unhandled exceptions and return structured error responses."""
+    """Turn unhandled exceptions into structured error responses. Every one is logged.
+
+    NOTE: ValueError is deliberately NOT mapped to 400. Pydantic's ValidationError
+    is a ValueError, so a bad stored row would otherwise be reported as the
+    client's fault and never logged. Input validation already answers 422 before
+    any middleware runs.
+    """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         try:
             return await call_next(request)
-        except ValueError as exc:
-            return JSONResponse(status_code=400, content={"detail": str(exc)})
         except PermissionError as exc:
+            logger.warning("Forbidden %s %s: %s", request.method, request.url.path, exc)
             return JSONResponse(status_code=403, content={"detail": str(exc)})
         except FileNotFoundError as exc:
+            logger.warning("Not found %s %s: %s", request.method, request.url.path, exc)
             return JSONResponse(status_code=404, content={"detail": str(exc)})
         except Exception as exc:
-            logger.exception("Unhandled exception: %s", exc)
-            return JSONResponse(
-                status_code=500,
-                content={"detail": "Internal server error"},
-            )
+            logger.exception("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
