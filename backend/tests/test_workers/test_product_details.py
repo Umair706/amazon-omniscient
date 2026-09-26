@@ -49,3 +49,15 @@ def test_every_mapped_attribute_exists_on_the_product_model():
 
     for _, attribute in product_details._DETAIL_TO_PRODUCT_FIELDS:
         assert hasattr(Product, attribute), attribute
+
+
+async def test_first_snapshot_forwards_review_count(monkeypatch):
+    tracker_stub = SimpleNamespace(record_product_snapshot=AsyncMock())
+    monkeypatch.setattr(product_details, "BSRTracker", lambda db: tracker_stub)
+    db = make_fake_session()
+    product = SimpleNamespace(id=1, asin="B0A")
+
+    await product_details._record_first_snapshots(db, product, {"review_count": 1543})
+
+    kwargs = tracker_stub.record_product_snapshot.await_args.kwargs
+    assert kwargs["review_count"] == 1543

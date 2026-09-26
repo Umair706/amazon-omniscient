@@ -1014,7 +1014,7 @@ async def _record_snapshot(product, context: TrackingContext, snapshot: dict) ->
         product_id=product.id, asin=product.asin,
         bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
         subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
-        price=snapshot["price"],
+        price=snapshot["price"], review_count=snapshot.get("review_count"),
     )
     if snapshot["current_bsr"]:
         product.current_bsr = snapshot["current_bsr"]

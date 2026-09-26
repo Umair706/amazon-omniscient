@@ -106,7 +106,7 @@ async def _record_first_snapshots(db: AsyncSession, product: Product, detail: di
         product_id=product.id, asin=product.asin,
         bsr=detail.get("current_bsr"), category_name=detail.get("bsr_category"),
         subcategory_bsr=detail.get("current_subcategory_bsr"), subcategory_name=detail.get("subcategory_name"),
-        price=detail.get("price"),
+        price=detail.get("price"), review_count=detail.get("review_count"),
     )
     if detail.get("is_in_stock") is None:
         return

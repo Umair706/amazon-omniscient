@@ -719,11 +719,7 @@ class ScraperService:
             rating = self._safe_float(rating_text)
 
         # Review count
-        review_count: int | None = None
-        for selector in _PRODUCT_REVIEW_COUNT_SELECTORS:
-            review_count = self.parse_review_count_text(await self._safe_text(page, selector))
-            if review_count is not None:
-                break
+        review_count = await self._extract_review_count(page)
 
         # Brand
         brand = await self._safe_text(page, "#bylineInfo")
@@ -1315,13 +1311,13 @@ class ScraperService:
         return {"asin": asin, "verdict": verdict, **availability}
 
     async def scrape_rank_snapshot(self, asin: str) -> dict:
-        """Scrape current BSR, price, and stock for an ASIN.
+        """Scrape current BSR, price, stock and review count for an ASIN.
 
         Much lighter than a full product page scrape — only extracts the
-        details block, price, and availability, for the periodic tracker.
-        The "verdict" key is "ok" only for a real product page. Callers must not
-        record a snapshot with any other verdict — a soft-blocked page parses as
-        "no rank, no price, in stock", which would corrupt the history.
+        details block, price, availability, and review count, for the periodic
+        tracker. The "verdict" key is "ok" only for a real product page. Callers
+        must not record a snapshot with any other verdict — a soft-blocked page
+        parses as "no rank, no price, in stock", which would corrupt the history.
         """
         async with self._ensure_session():
             page, verdict = await self._load(self._product_url(asin), _PRODUCT_TITLE_SELECTOR, "rank")
@@ -1329,9 +1325,13 @@ class ScraperService:
                 price = await self._extract_first_positive_price(page)
                 parsed_bsr = await self._extract_bsr(page)
                 availability = await self._extract_availability(page)
+                review_count = await self._extract_review_count(page)
             finally:
                 await page.close()
-        return {"asin": asin, "verdict": verdict, "price": price, **parsed_bsr, **availability}
+        return {
+            "asin": asin, "verdict": verdict, "price": price,
+            "review_count": review_count, **parsed_bsr, **availability,
+        }
 
     async def _extract_first_positive_price(self, page: Page) -> float | None:
         """Price from the first price selector that yields a positive number."""
@@ -1343,6 +1343,14 @@ class ScraperService:
                 if price is not None and price > 0:
                     break
         return price
+
+    async def _extract_review_count(self, page: Page) -> int | None:
+        """Review count from the first product-page selector that yields a number."""
+        for selector in _PRODUCT_REVIEW_COUNT_SELECTORS:
+            count = self.parse_review_count_text(await self._safe_text(page, selector))
+            if count is not None:
+                return count
+        return None
 
     async def _extract_bsr(self, page: Page) -> dict:
         """Main + sub-category BSR from whichever product-details block the page uses."""

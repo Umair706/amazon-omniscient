@@ -36,6 +36,7 @@ class BSRTracker:
         category_name: str | None = None,
         is_subcategory: bool = False,
         recorded_at: datetime | None = None,
+        review_count: int | None = None,
     ) -> BSRHistory:
         """Insert a BSR snapshot into the hypertable."""
         snapshot = BSRHistory(
@@ -46,6 +47,7 @@ class BSRTracker:
             category_id=category_id,
             category_name=category_name,
             is_subcategory=is_subcategory,
+            review_count=review_count,
         )
         self.db.add(snapshot)
         await self.db.flush()
@@ -103,6 +105,7 @@ class BSRTracker:
         coupon_value: float | None = None,
         is_lightning_deal: bool = False,
         buy_box_seller_id: str | None = None,
+        review_count: int | None = None,
     ) -> dict:
         """Record BSR (main + sub-category) and price snapshots in a single call."""
         now = datetime.now(timezone.utc)
@@ -113,6 +116,7 @@ class BSRTracker:
                 product_id, asin, bsr, category_id,
                 category_name=category_name,
                 is_subcategory=False, recorded_at=now,
+                review_count=review_count,
             )
             result["bsr_recorded"] = True
 
