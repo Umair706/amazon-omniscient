@@ -438,12 +438,20 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             niche_row = (await db.execute(select(Niche).where(Niche.id == niche_id))).scalar_one_or_none()
             parent_id = niche_row.parent_niche_id if niche_row else None
 
-            # Load products from DB that match the given ASINs
+            # Load products that match the given ASINs. WHY in_([parent, child]): the first
+            # run moves these products from the parent niche to this child, so a re-run (retry,
+            # double-click, forced re-analyse) must also find the ones already reassigned —
+            # filtering on the parent alone would match zero rows the second time.
+            allowed_niche_ids = [nid for nid in (parent_id, niche_id) if nid is not None]
             product_query = select(Product).where(Product.asin.in_(product_asins))
-            if parent_id:
-                product_query = product_query.where(Product.niche_id == parent_id)
+            if allowed_niche_ids:
+                product_query = product_query.where(Product.niche_id.in_(allowed_niche_ids))
             result = await db.execute(product_query)
             db_products = result.scalars().all()
+
+            if not db_products:
+                await _update_niche_status(niche_id, "failed", "No products found for this sub-niche")
+                raise ScrapingError(f"No products found for sub-niche {niche_id} (ASINs: {product_asins})")
 
             # Reassign products to child niche
             for p in db_products:
@@ -2006,7 +2014,18 @@ async def _translate_supplier_fields(llm_client, suppliers: list[dict]) -> list[
                 # Strip leading number + dot/parenthesis
                 cleaned = re.sub(r"^\d+[\.\)\]]\s*", "", line)
                 parsed.append(cleaned)
-            translated.extend(parsed)
+            # WHY: translations are matched back to fields by position across all chunks.
+            # If the LLM merges, splits, or drops a line, this chunk's count is wrong and
+            # every later chunk would be written to the wrong supplier/field. Fall back to
+            # the untranslated chunk on a count mismatch so the misalignment can't propagate.
+            if len(parsed) != len(chunk):
+                logger.warning(
+                    "Translation chunk returned %d lines for %d inputs; keeping originals",
+                    len(parsed), len(chunk),
+                )
+                translated.extend(chunk)
+            else:
+                translated.extend(parsed)
         except Exception as e:
             logger.warning("Translation chunk failed: %s", e)
             # Keep originals for failed chunks

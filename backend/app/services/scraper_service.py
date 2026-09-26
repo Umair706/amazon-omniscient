@@ -462,6 +462,7 @@ class ScraperService:
 
         all_results: list[dict] = []
         cards_seen = 0
+        completed_all_pages = True
         async with self._ensure_session():
             for page_num in range(1, pages + 1):
                 url = f"{self._search_url(keyword)}&page={page_num}"
@@ -470,6 +471,7 @@ class ScraperService:
                 try:
                     if verdict == "soft_block":
                         logger.warning("No search results found on page %d for '%s'", page_num, keyword)
+                        completed_all_pages = False
                         break
                     page_results, cards_seen = await self._extract_search_page(page, cards_seen)
                 finally:
@@ -477,7 +479,10 @@ class ScraperService:
                 all_results.extend(page_results)
 
         logger.info("Scraped %d results for '%s'", len(all_results), keyword)
-        if all_results:
+        # WHY only cache a complete scrape: the cache key includes the page count, so a run
+        # that soft-blocked partway would otherwise serve a truncated result set as if it
+        # were the full N pages for the whole 6h TTL, starving scoring even after the block clears.
+        if all_results and completed_all_pages:
             await self._store("serp", cache_key, all_results)
         return all_results
 
