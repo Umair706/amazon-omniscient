@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 
 import { useLicense } from "@/lib/use-license";
+import { ThemeToggle } from "@/components/theme-toggle";
 import {
   BarChart3,
   Search,
@@ -82,11 +83,14 @@ export function Sidebar() {
           </Link>
         ))}
       </nav>
-      <div className="mt-auto pt-6 border-t">
-        <p className="text-xs font-medium capitalize">{license.tier} tier</p>
-        {!has("white_label") && (
-          <p className="text-xs text-muted-foreground mt-1">Powered by Omniscient</p>
-        )}
+      <div className="mt-auto pt-6 border-t space-y-2">
+        <ThemeToggle />
+        <div className="px-3">
+          <p className="text-xs font-medium capitalize">{license.tier} tier</p>
+          {!has("white_label") && (
+            <p className="text-xs text-muted-foreground mt-1">Powered by Omniscient</p>
+          )}
+        </div>
       </div>
     </>
   );
