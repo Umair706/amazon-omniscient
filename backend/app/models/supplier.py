@@ -58,9 +58,15 @@ class Supplier(Base):
     last_updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
 
     # ----- Relationships -----
+    # NOTE: relationships never load on their own. A query that needs one must say so
+    # with .options(selectinload(...)); accessing an unloaded one raises instead of
+    # silently issuing an extra query (that is what selectin did here before).
+    # NOTE passive_deletes: the database cascades every child FK on delete; without
+    # this SQLAlchemy would load the landed_cost_calculations collection just to
+    # null its FK.
     niche: Mapped["Niche"] = relationship(back_populates="suppliers")
     landed_cost_calculations: Mapped[list["LandedCostCalculation"]] = relationship(
-        back_populates="supplier", lazy="selectin"
+        back_populates="supplier", lazy="raise", passive_deletes=True
     )
 
 

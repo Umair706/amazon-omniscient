@@ -93,16 +93,21 @@ class Product(TimestampMixin, Base):
     weight: Mapped[str | None] = mapped_column(String(100))
 
     # ----- Relationships -----
-    niche: Mapped["Niche | None"] = relationship(back_populates="products")
+    # NOTE: relationships never load on their own. A query that needs one must say so
+    # with .options(selectinload(...)); accessing an unloaded one raises instead of
+    # silently issuing extra queries (that is what selectin/select did here before).
+    # NOTE passive_deletes: the database cascades (or nulls) every child FK on delete;
+    # without this SQLAlchemy would load every child collection just to null its FK.
+    niche: Mapped["Niche | None"] = relationship(back_populates="products", lazy="raise")
     bsr_history: Mapped[list["BSRHistory"]] = relationship(
-        back_populates="product", lazy="selectin"
+        back_populates="product", lazy="raise", passive_deletes=True
     )
     price_history: Mapped[list["PriceHistory"]] = relationship(
-        back_populates="product", lazy="selectin"
+        back_populates="product", lazy="raise", passive_deletes=True
     )
     reviews: Mapped[list["Review"]] = relationship(
-        back_populates="product", lazy="selectin"
+        back_populates="product", lazy="raise", passive_deletes=True
     )
     competitor_entries: Mapped[list["Competitor"]] = relationship(
-        back_populates="product", lazy="selectin"
+        back_populates="product", lazy="raise", passive_deletes=True
     )
