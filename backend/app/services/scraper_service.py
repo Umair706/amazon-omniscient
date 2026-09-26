@@ -59,6 +59,40 @@ _SERP_REVIEW_COUNT_SELECTORS = (
 )
 # "#acrCustomerReviewCount" is the older template; the 2026 AU template only has the text span.
 _PRODUCT_REVIEW_COUNT_SELECTORS = ("#acrCustomerReviewCount", "#acrCustomerReviewText")
+
+# Product-detail containers, in priority order. Amazon uses different ones per marketplace
+# and template: AU product pages carry a #prodDetails <th>/<td> table; US pages often use
+# the #detailBullets_feature_div bullet list. We read label->value pairs from whichever exists.
+_DETAIL_CONTAINERS = (
+    "#productDetails_techSpec_section_1",
+    "#productDetails_detailBullets_sections1",
+    "#detailBulletsWrapper_feature_div",
+    "#detailBullets_feature_div",
+    "#productDetails_db_sections",
+    "#prodDetails",
+)
+# Amazon pads detail-bullet labels with directional marks around the colon ("Item Weight ‏ : ‎").
+_ZERO_WIDTH_MARKS = ("‎", "‏", "‪", "‬")
+_DETAIL_BULLET_PAIR = re.compile(r"^(.{2,60}?)\s*[:：]\s*(.+)$", re.DOTALL)
+
+
+def _clean_detail_text(text: str) -> str:
+    """Strip whitespace and the directional marks Amazon sprinkles through detail labels."""
+    for mark in _ZERO_WIDTH_MARKS:
+        text = text.replace(mark, "")
+    return " ".join(text.split())
+
+
+def _detail_value(pairs: dict[str, str], keywords: tuple[str, ...]) -> str | None:
+    """Return the value whose label contains the first matching keyword, keywords in priority order."""
+    lowered = {label.lower(): value for label, value in pairs.items()}
+    for keyword in keywords:
+        for label, value in lowered.items():
+            if keyword in label and value:
+                return value
+    return None
+
+
 _STAR_RATING_TEXT = re.compile(r"out of \d", re.IGNORECASE)
 # Amazon abbreviates big counts on search pages: "(6.6K)".
 _THOUSANDS_ABBREVIATION = re.compile(r"(\d+(?:\.\d+)?)\s*K\b", re.IGNORECASE)
@@ -869,51 +903,16 @@ class ScraperService:
         except Exception:
             pass
 
-        # ── Product Dimensions & Weight from detail table ──
-        dimensions: str | None = None
-        weight: str | None = None
-        date_first_available: str | None = None
-        try:
-            for detail_sel in (
-                "#productDetails_techSpec_section_1",
-                "#productDetails_detailBullets_sections1",
-                "#detailBulletsWrapper_feature_div",
-                "#productDetails_db_sections",
-                "#prodDetails",
-            ):
-                detail_el = page.locator(detail_sel).first
-                if await detail_el.count():
-                    detail_text = await detail_el.inner_text()
-                    if detail_text:
-                        # Dimensions
-                        dim_match = re.search(
-                            r"(?:Product|Package|Item)\s*Dimensions?\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*([\d.]+\s*x\s*[\d.]+\s*x\s*[\d.]+\s*(?:inches|cm|in|Centimetres|centimeters)?)",
-                            detail_text,
-                            re.IGNORECASE,
-                        )
-                        if dim_match and not dimensions:
-                            dimensions = dim_match.group(1).strip()
-
-                        # Weight
-                        weight_match = re.search(
-                            r"(?:Item|Product)\s*Weight\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*([\d.]+\s*(?:pounds|ounces|lbs|oz|kg|g|Kilograms|Grams|kilograms|grams))",
-                            detail_text,
-                            re.IGNORECASE,
-                        )
-                        if weight_match and not weight:
-                            weight = weight_match.group(1).strip()
-
-                        # Date First Available — multiple formats
-                        for date_re in (
-                            r"Date\s+First\s+Available\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*(\d{1,2}\s+\w+\s+\d{4})",
-                            r"Date\s+First\s+Available\s*[:\u200f\-]*\s*:?\s*[:\u200e\s]*(\w+\s+\d{1,2},?\s+\d{4})",
-                        ):
-                            date_match = re.search(date_re, detail_text, re.IGNORECASE)
-                            if date_match and not date_first_available:
-                                date_first_available = date_match.group(1).strip()
-                                break
-        except Exception:
-            pass
+        # ── Product dimensions, weight, and listing date from the detail table ──
+        # WHY structured, not regex over the whole text: labels and formats vary by
+        # marketplace. Amazon.com.au uses a #prodDetails <th>/<td> table with "Item Weight"
+        # = "363 Grams" and "Item Dimensions L x W" = "26.5L x 4W centimetres" (two dims, cm),
+        # which the old three-number-inches regex never matched. Reading label->value pairs
+        # captures whatever the page actually shows.
+        detail_pairs = await self._extract_detail_pairs(page)
+        dimensions = _detail_value(detail_pairs, ("item dimensions", "product dimensions", "package dimensions", "dimensions"))
+        weight = _detail_value(detail_pairs, ("item weight", "product weight", "shipping weight", "weight"))
+        date_first_available = _detail_value(detail_pairs, ("date first available",))
 
         # ── Star Distribution Histogram ──
         star_distribution: dict | None = None
@@ -1371,6 +1370,48 @@ class ScraperService:
             if count is not None:
                 return count
         return None
+
+    async def _extract_detail_pairs(self, page: Page) -> dict[str, str]:
+        """Read label->value pairs from the product-detail table and bullet list.
+
+        Handles both layouts: the <th>/<td> spec table (AU) and the <li> detail bullets
+        (US). The first value seen for a label wins, so higher-priority containers set it first.
+        """
+        pairs: dict[str, str] = {}
+        for selector in _DETAIL_CONTAINERS:
+            root = page.locator(selector).first
+            try:
+                if not await root.count():
+                    continue
+                await self._collect_table_pairs(root, pairs)
+                await self._collect_bullet_pairs(root, pairs)
+            except PlaywrightError:
+                continue
+        return pairs
+
+    @staticmethod
+    async def _collect_table_pairs(root, pairs: dict[str, str]) -> None:
+        """Add <tr><th>label</th><td>value</td></tr> pairs from a spec table."""
+        rows = root.locator("tr")
+        for i in range(await rows.count()):
+            header = rows.nth(i).locator("th")
+            data = rows.nth(i).locator("td")
+            if await header.count() and await data.count():
+                label = _clean_detail_text(await header.first.inner_text())
+                value = _clean_detail_text(await data.first.inner_text())
+                if label and label not in pairs:
+                    pairs[label] = value
+
+    @staticmethod
+    async def _collect_bullet_pairs(root, pairs: dict[str, str]) -> None:
+        """Add "Label : value" pairs from a <li> detail-bullet list."""
+        items = root.locator("li")
+        for i in range(await items.count()):
+            match = _DETAIL_BULLET_PAIR.match(_clean_detail_text(await items.nth(i).inner_text()))
+            if match:
+                label = match.group(1).strip()
+                if label and label not in pairs:
+                    pairs[label] = match.group(2).strip()
 
     async def _extract_bsr(self, page: Page) -> dict:
         """Main + sub-category BSR from whichever product-details block the page uses."""
