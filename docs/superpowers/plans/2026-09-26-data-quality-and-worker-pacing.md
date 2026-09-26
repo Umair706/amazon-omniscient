@@ -754,6 +754,107 @@ Frontend: `page.tsx` replaces the three requests with `api.get<NicheStats>("/api
 
 - [ ] **Step 3: pytest (with DB) + `npx tsc --noEmit` + restore tsbuildinfo. Commit.** `feat(dashboard): compute headline stats server-side`
 
+### Task F4: Server-side failures are logged 500s, not silent 400s (found by F1)
+
+**Files:**
+- Modify: `backend/app/core/middleware.py:62-80` (`GlobalExceptionMiddleware`)
+- Test: `backend/tests/test_api/test_exception_middleware.py` (new; no DB needed)
+
+**Why:** `GlobalExceptionMiddleware` maps every `ValueError` to an unlogged 400. Pydantic's `ValidationError` subclasses `ValueError`, so one stored row that fails a response model (e.g. an ASIN that is not 10 characters) makes `GET /niches/{id}/products` answer "400 client error" with no log line. The only intentional `ValueError` in the API (`jobs.py:76`) sits inside a Pydantic validator and is already a 422 before any middleware runs, so the 400 branch protects nothing.
+
+**Interfaces:**
+- `PermissionError` → 403 and `FileNotFoundError` → 404 stay, but are logged at WARNING with the path. Every other exception (including `ValueError`/`ValidationError`) → `logger.exception(...)` + 500 `{"detail": "Internal server error"}`.
+
+- [ ] **Step 1: Failing test**
+
+```python
+"""GlobalExceptionMiddleware turns server-side failures into logged 500s, never silent 400s."""
+
+import logging
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel
+
+from app.core.middleware import GlobalExceptionMiddleware
+
+
+class Asin(BaseModel):
+    asin: str = ""
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if len(self.asin) != 10:
+            raise ValueError(f"ASIN must be 10 characters, got {self.asin!r}")
+
+
+def _app() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(GlobalExceptionMiddleware)
+
+    @app.get("/bad-row")
+    async def bad_row():
+        return Asin(asin="SHORT")
+
+    @app.get("/forbidden")
+    async def forbidden():
+        raise PermissionError("no")
+
+    return app
+
+
+@pytest.fixture
+async def client():
+    async with AsyncClient(transport=ASGITransport(app=_app()), base_url="http://test") as http:
+        yield http
+
+
+async def test_value_error_from_bad_data_is_a_logged_500(client, caplog):
+    with caplog.at_level(logging.ERROR, logger="app.core.middleware"):
+        response = await client.get("/bad-row")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert "ASIN must be 10 characters" in caplog.text
+
+
+async def test_permission_error_is_a_logged_403(client, caplog):
+    with caplog.at_level(logging.WARNING, logger="app.core.middleware"):
+        response = await client.get("/forbidden")
+    assert response.status_code == 403
+    assert "/forbidden" in caplog.text
+```
+
+- [ ] **Step 2: Run, expect the first test to fail with 400.**
+
+- [ ] **Step 3: Implement**
+
+```python
+class GlobalExceptionMiddleware(BaseHTTPMiddleware):
+    """Turn unhandled exceptions into structured error responses. Every one is logged.
+
+    NOTE: ValueError is deliberately NOT mapped to 400. Pydantic's ValidationError
+    is a ValueError, so a bad stored row would otherwise be reported as the
+    client's fault and never logged. Input validation already answers 422 before
+    any middleware runs.
+    """
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        try:
+            return await call_next(request)
+        except PermissionError as exc:
+            logger.warning("Forbidden %s %s: %s", request.method, request.url.path, exc)
+            return JSONResponse(status_code=403, content={"detail": str(exc)})
+        except FileNotFoundError as exc:
+            logger.warning("Not found %s %s: %s", request.method, request.url.path, exc)
+            return JSONResponse(status_code=404, content={"detail": str(exc)})
+        except Exception as exc:
+            logger.exception("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+```
+
+- [ ] **Step 4: `pytest -q`; commit.** `fix(api): log server-side failures as 500s instead of blaming the client with a silent 400`
+
 ---
 
 # Part G — Pacing that holds across worker processes
@@ -1006,6 +1107,6 @@ Delete `_page_cache_for_run`.
 
 ## Self-review
 
-- Spec coverage: F15→D1, F16→E2, F17→E1, F18→F2, F19→F3, F20→G1+G2, F21→F1. ✔
+- Spec coverage: F15→D1, F16→E2, F17→E1, F18→F2, F19→F3, F20→G1+G2, F21→F1, middleware defect found by F1→F4. ✔
 - Placeholder scan: no TBD/TODO; each step has code or an exact edit. ✔
 - Type consistency: `Snapshot = tuple[datetime, int]` used by E2's two functions and `windows_from_rows`; `SharedPacer(redis, min, max, fallback)` matches G1 tests, G2 helper and `BrowserSession(pacer=)`; `_page_cache_for(redis, force)` matches its test; `risk_flags["data_gaps"]` matches frontend read. ✔
