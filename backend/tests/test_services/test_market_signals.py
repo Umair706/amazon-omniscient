@@ -1,9 +1,10 @@
-from datetime import date
+from datetime import datetime, timedelta, timezone
 
 from app.core.bsr_regression import BSRSalesEstimator
 from app.services.market_signals import (
-    amazon_seller_pct, apply_supplier_summary, average_review_velocity_gap, count_strong_sellers,
-    derive_category, summarize_suppliers,
+    MIN_PRODUCTS_FOR_VELOCITY, MIN_VELOCITY_WINDOW_DAYS,
+    amazon_seller_pct, apply_supplier_summary, average_recent_velocity_gap, count_strong_sellers,
+    derive_category, recent_review_velocity_per_month, summarize_suppliers,
 )
 
 PRODUCTS = [
@@ -38,12 +39,29 @@ def test_amazon_seller_pct_counts_sold_by_amazon_flag_without_seller_id():
     assert amazon_seller_pct(products, "ATVPDKIKX0DER") == 50.0
 
 
-def test_average_review_velocity_gap_skips_products_without_dates_or_bsr():
+T0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+
+def _snap(days: float, count: int):
+    return (T0 + timedelta(days=days), count)
+
+
+def test_velocity_needs_a_two_week_window():
+    assert recent_review_velocity_per_month(_snap(0, 100), _snap(MIN_VELOCITY_WINDOW_DAYS - 1, 130)) is None
+    assert recent_review_velocity_per_month(_snap(0, 100), _snap(30.4, 130)) == 30.0
+
+
+def test_removed_reviews_count_as_zero_velocity():
+    assert recent_review_velocity_per_month(_snap(0, 100), _snap(20, 90)) == 0.0
+
+
+def test_gap_needs_enough_products():
     estimator = BSRSalesEstimator("US")
-    fixed_today = date(2026, 9, 25)
-    gap = average_review_velocity_gap(PRODUCTS, estimator, "Home & Kitchen", today=fixed_today)
-    assert gap == 28.94
-    assert average_review_velocity_gap([PRODUCTS[2]], estimator, "Home & Kitchen", today=fixed_today) is None
+    window = {"bsr": 1000, "first": _snap(0, 100), "last": _snap(30.4, 130)}
+    assert average_recent_velocity_gap([window] * (MIN_PRODUCTS_FOR_VELOCITY - 1), estimator, "Home & Kitchen") is None
+    gap = average_recent_velocity_gap([window] * MIN_PRODUCTS_FOR_VELOCITY, estimator, "Home & Kitchen")
+    monthly_sales = estimator.estimate_monthly_sales(1000, "Home & Kitchen")
+    assert gap == round(30.0 / monthly_sales * 100, 2)
 
 
 def test_summarize_suppliers():
