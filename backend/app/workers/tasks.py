@@ -643,7 +643,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         product_blueprint = None
         # competitor_reviews_map already collected in step 4 above
         competitor_meta = _build_competitor_metadata(detailed_products)
-        if competitor_reviews_map:
+        if competitor_reviews_map and llm_client:
             try:
                 product_blueprint = await blueprint_svc.generate_blueprint(
                     niche_keyword=keyword,
@@ -666,16 +666,17 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         competitor_list = competitor_landscape.get("competitors", []) if competitor_landscape else []
 
         product_spec = None
-        try:
-            product_spec = await spec_gen.generate_product_spec(
-                niche_keyword=keyword,
-                pain_points=pain_points,
-                positive_themes=positive_themes,
-                competitor_data=competitor_list,
-                price_range=price_range,
-            )
-        except Exception as e:
-            logger.warning("Product spec generation failed: %s", e)
+        if llm_client:
+            try:
+                product_spec = await spec_gen.generate_product_spec(
+                    niche_keyword=keyword,
+                    pain_points=pain_points,
+                    positive_themes=positive_themes,
+                    competitor_data=competitor_list,
+                    price_range=price_range,
+                )
+            except Exception as e:
+                logger.warning("Product spec generation failed: %s", e)
 
         # ── Step 5b: Product Ideas ──────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "product_ideas", "progress": 53})
