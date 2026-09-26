@@ -12,6 +12,28 @@ decision engine bolted to a weak front door. The tranches below fix that, in pri
 
 ---
 
+## Status (as of 2026-09-27)
+
+- **Tranche 1 — done.** Explanatory empty states, tab-in-URL navigation, breadcrumbs, theme
+  toggle, starrable niches, and metric info hints all shipped.
+- **Tranche 2 — done.** Seed-to-shortlist discovery: `/discover` ranks candidate niches from a
+  broad seed by an opportunity pre-score, and one click hands the winner to the full analysis.
+  (The best-sellers feed and saved watchlist are still open ideas.)
+- **Tranche 4 — configurable thesis done.** A seller can tune the min-margin, max-review-moat,
+  and seasonal thresholds in Settings, per marketplace, and scoring honours them. Sales-model
+  calibration still needs real reference data (see "Needs the user" below).
+- **Tranche 5 — done.** In-app docs now teach the workflow and how to read every result.
+- **Tranche 3 — open.** Supplier data still depends on Alibaba API access; see that tranche.
+
+**Needs the user (cannot be finished autonomously):**
+
+- **Alibaba API keys** to make supplier data real (Tranche 3).
+- **Reference sales data** (known ASINs with real monthly units, per marketplace) to calibrate
+  the AU sales model (Tranche 4). Until then AU volumes stay flagged as uncalibrated.
+- **Visual QA** of the new Discover page, Settings thresholds, and docs tabs in a browser.
+
+---
+
 ## Tranche 1 — Trust & UX polish (fast, makes it feel production-grade)
 
 The loudest recent feedback: tabs are empty with no reason, navigation is clunky, no theme,
