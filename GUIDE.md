@@ -603,12 +603,23 @@ images, fonts, or media from a scraped page.
 **Block detection and rotation**
 
 Every loaded page is classified by `classify_page()` (`app/scraping/block_detection.py`)
-into one of four verdicts:
+into one of five verdicts:
 
 - `ok` — the page we asked for actually rendered
 - `captcha` — Amazon's "Robot Check" / "Enter the characters you see below" challenge
 - `soft_block` — a 200 OK response, but the expected content selector never appeared
 - `server_error` — HTTP 5xx
+- `wrong_marketplace` — Amazon redirected the request to another country's store
+
+**Geo-redirects.** Amazon serves the visitor's local store: a request for
+`amazon.com` from an Australian IP lands on `amazon.com.au` (the URL carries
+`ref_=mr_direct_us_au_au`). The page parses perfectly, so nothing downstream would
+notice that a "US" analysis was filled with Australian prices and ranks. The session
+compares the final URL's host with the marketplace domain and returns
+`wrong_marketplace`; `ScraperService` then fails the load immediately with a
+message naming the fix. Rotating proxies does not help unless the proxy exits in
+the marketplace's own country, so to scrape a marketplace you are not in you need
+either a proxy located there (`PROXY_PROVIDER`) or SP-API credentials.
 
 `ScraperService._load()` rotates the session (new proxy identity + new persona,
 `BrowserSession.rotate()`) whenever it sees `captcha` or `server_error`, and also
@@ -645,7 +656,7 @@ Every page load attempt writes one row to the `scrape_events` table (migration
 014, `app/models/scrape_event.py`) — including ones that needed a rotation, so a
 load that took two rotations shows up as three rows. Each row records the site,
 `url_kind` (`serp` | `product` | `reviews` | `serp_meta` | `rank`), verdict (`ok` |
-`captcha` | `soft_block` | `server_error` | `timeout`), proxy label, and duration.
+`captcha` | `soft_block` | `server_error` | `timeout` | `wrong_marketplace`), proxy label, and duration.
 Recording is fire-and-forget (`app/scraping/events.py`) — a telemetry failure never
 breaks scraping.
 

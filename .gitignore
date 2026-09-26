@@ -43,3 +43,6 @@ coverage.xml
 
 # Superpowers SDD scratch workspace (ledger, briefs, review packages)
 .superpowers/
+
+# Local compose overrides (machine-specific ports etc.)
+docker-compose.override.yml

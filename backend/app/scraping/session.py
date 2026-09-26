@@ -12,7 +12,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.core.marketplace import MarketplaceConfig
 from app.core.proxy_manager import ProxyManager
-from app.scraping.block_detection import PageVerdict, classify_page
+from app.scraping.block_detection import PageVerdict, classify_page, is_on_marketplace
 from app.scraping.pacing import Pacer, SharedPacer, pacer_for
 from app.scraping.persona import Persona, build_persona
 
@@ -172,6 +172,11 @@ class BrowserSession:
 
     async def _classify_loaded_page(self, page: Page, response, expected_selector: str, wait_ms: int) -> PageVerdict:
         """Wait for the expected content, then classify the page as ok/captcha/soft_block/server_error."""
+        # NOTE: checked before anything else. Amazon geo-redirects to the visitor's local store
+        # (amazon.com -> amazon.com.au from an Australian IP); the result is a perfectly
+        # parseable page for the wrong market, which no selector check would catch.
+        if not is_on_marketplace(page.url, self.marketplace.domain):
+            return "wrong_marketplace"
         found = True
         try:
             await page.wait_for_selector(expected_selector, timeout=wait_ms)

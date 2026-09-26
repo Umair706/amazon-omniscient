@@ -67,6 +67,9 @@ _REVIEW_SELECTOR = 'div[data-hook="review"]'
 
 # Verdicts that mean Amazon is blocking this proxy + persona. A fresh identity may get through.
 _ROTATE_ON_VERDICTS = ("captcha", "server_error")
+# WHY no rotation: a geo-redirect is decided by the exit IP's country. Rotating within the
+# same proxy pool lands in the same country, so we fail at once with an actionable message.
+_WRONG_MARKETPLACE_VERDICT = "wrong_marketplace"
 
 # scrape_events.site for every page this service loads — it only ever talks to Amazon.
 _SITE_AMAZON = "amazon"
@@ -236,7 +239,8 @@ class ScraperService:
     async def _load(self, url: str, expected_selector: str, url_kind: str) -> tuple[Page, PageVerdict]:
         """Load url through the session, rotating proxy + persona on a captcha, 5xx or navigation error.
 
-        Returns (page, verdict) where verdict is "ok" or "soft_block".
+        Returns (page, verdict) where verdict is "ok" or "soft_block". Raises ScrapingError
+        at once (no rotation) when Amazon redirected us to another country's store.
         The caller must close the page. Records one scrape_events row per attempt
         (see _record_load_event), so a load that needed two rotations shows up as
         three rows — that is what makes block rates visible on /scrape-health.
@@ -253,6 +257,9 @@ class ScraperService:
                 await self._rotate_session(url)
                 continue
             await self._record_load_event(verdict, started_at, url_kind)
+            if verdict == _WRONG_MARKETPLACE_VERDICT:
+                await page.close()
+                raise ScrapingError(self._wrong_marketplace_message(url, getattr(page, "url", "")))
             if verdict not in _ROTATE_ON_VERDICTS:
                 return page, verdict
             await page.close()
@@ -260,6 +267,14 @@ class ScraperService:
             await self._rotate_session(url)
         # NOTE: defensive guard only — rotate() raises at the cap before the loop can end.
         raise ScrapingError(f"Still blocked after {MAX_ROTATIONS_PER_SESSION} rotations: {url}")
+
+    def _wrong_marketplace_message(self, requested_url: str, final_url: str) -> str:
+        """Explain a geo-redirect in terms of what the operator can do about it."""
+        return (
+            f"{self._marketplace.domain} redirected {requested_url} to {final_url or 'another Amazon store'}. "
+            f"Amazon serves the visitor's local store, so scraping the {self._marketplace.code} marketplace "
+            f"needs a proxy located in {self._marketplace.name} (PROXY_PROVIDER) or SP-API credentials."
+        )
 
     async def _record_load_event(self, verdict: str, started_at: float, url_kind: str) -> None:
         """Record how long this page load took and what we got. No-op unless a sink is configured."""
