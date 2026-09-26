@@ -18,6 +18,7 @@ MIN_VELOCITY_WINDOW_DAYS = 14
 # Fewer products than this and one grey-hat listing would decide the whole niche.
 MIN_PRODUCTS_FOR_VELOCITY = 3
 DAYS_PER_MONTH = 30.4
+SECONDS_PER_DAY = 86_400
 
 
 def derive_category(products: list[dict]) -> str:
@@ -52,7 +53,7 @@ def amazon_seller_pct(products: list[dict], amazon_seller_id: str) -> float:
 
 def recent_review_velocity_per_month(first: Snapshot, last: Snapshot) -> float | None:
     """Reviews gained per month between two snapshots. None if the window is shorter than MIN_VELOCITY_WINDOW_DAYS."""
-    days = (last[0] - first[0]).total_seconds() / 86400
+    days = (last[0] - first[0]).total_seconds() / SECONDS_PER_DAY
     if days < MIN_VELOCITY_WINDOW_DAYS:
         return None
     # Amazon removes reviews too; a shrinking count is "no growth", not negative growth.

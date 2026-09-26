@@ -70,7 +70,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Average Score"
-          value={stats ? `${Math.round(stats.avg_score ?? 0)}/100` : "\u2014"}
+          value={stats?.avg_score == null ? "\u2014" : `${Math.round(stats.avg_score)}/100`}
           icon={Target}
           index={1}
         />

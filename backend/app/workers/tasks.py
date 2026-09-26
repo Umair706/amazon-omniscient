@@ -177,9 +177,6 @@ async def _redis_for_run():
     """Yield one Redis client for this run; the page cache and the shared pacer both use it."""
     from redis.asyncio import Redis
 
-    # WHY: a hung Redis must not occupy a worker slot forever — a short socket
-    # timeout makes a dead Redis fail fast so the shared pacer can fall back
-    # to pacing locally instead of the run stalling.
     redis = Redis.from_url(
         Settings().REDIS_URL,
         decode_responses=True,
@@ -204,8 +201,10 @@ def _shared_pacer(redis, site: str) -> "SharedPacer":
     """Pacer for `site` ('amazon' or '1688') shared across worker processes through Redis."""
     from app.scraping.pacing import ALIBABA_GAP_SECONDS, AMAZON_GAP_SECONDS, SharedPacer, pacer_for
 
-    gaps = {"amazon": AMAZON_GAP_SECONDS, "1688": ALIBABA_GAP_SECONDS}[site]
-    return SharedPacer(redis, *gaps, fallback=pacer_for(site))
+    gaps = {"amazon": AMAZON_GAP_SECONDS, "1688": ALIBABA_GAP_SECONDS}
+    if site not in gaps:
+        raise ValueError(f"Unknown pacing site {site!r}; expected one of {sorted(gaps)}")
+    return SharedPacer(redis, *gaps[site], fallback=pacer_for(site))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -755,7 +754,9 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         from app.services.market_signals import apply_supplier_summary
 
-        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace)
+        metrics = _build_base_metrics(
+            competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace,
+        )
 
         from app.workers.pipeline_steps.review_velocity import apply_review_velocity
         await apply_review_velocity(

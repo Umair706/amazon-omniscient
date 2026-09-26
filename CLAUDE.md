@@ -28,7 +28,7 @@ omniscient/
 │   │   ├── core/              # Utilities (BSR regression, FBA calc, proxy, cache)
 │   │   ├── llm/               # LLM provider abstraction + implementations
 │   │   └── workers/           # Celery app, tasks, beat schedule
-│   ├── migrations/            # Alembic migrations (001-004)
+│   ├── migrations/            # Alembic migrations (001-016)
 │   ├── tests/                 # pytest suite
 │   └── pyproject.toml         # Python deps
 ├── frontend/

@@ -97,7 +97,7 @@ quadrantChart
 - [ ] **`/product-reviews/` requires sign-in on AU** — reviews are product-page-only (≤10/ASIN); the standalone `scrape_reviews` task saves nothing there
 - [ ] **1688 login browser is not on the shared pacer** — `AlibabaLoginService` paces itself per process; only used when stored cookies are invalid, so the exposure is small, but it should take a `SharedPacer` like `SupplierScraper` does
 - [ ] **Keyword-research scraper session is not on the shared pacer** — the `BrowserSession` behind `POST /niches/{id}/keywords/research` paces per process only
-- [x] **Pacer/rotation state is per worker process** — fixed: `SharedPacer` (`app/scraping/pacing.py`) holds the "last request" slot in Redis (`pace:{domain}`) so all worker processes share one gap; every `BrowserSession` and the 1688 `SupplierScraper` pace through it, falling back to the old per-process `Pacer` if Redis is unreachable
+- [x] **Pacer/rotation state is per worker process** — fixed: `SharedPacer` (`app/scraping/pacing.py`) holds the "last request" slot in Redis (`pace:{domain}`) so all worker processes share one gap; every pipeline/worker `BrowserSession` and the 1688 `SupplierScraper` pace through it, falling back to the old per-process `Pacer` if Redis is unreachable
 - [x] **Supplier sub-score uses assumed defaults** (count 5 / score 70 / MOQ 500) when 1688 scraping returns nothing — fixed: `_score_supplier` returns a neutral `SUPPLIER_UNKNOWN_SCORE = 50.0` instead, and `apply_assumed_defaults()` records every assumed input (including this one) in `recommendation.risk_flags["data_gaps"]`
 
 ## LOW

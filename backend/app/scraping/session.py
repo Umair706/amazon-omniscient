@@ -57,7 +57,7 @@ class BrowserSession:
         self._proxy_conf: dict = {}
         self.persona: Persona | None = None
         # WHY: defaults to the per-process Pacer for backward compatibility; the
-        # pipeline (task G2) injects a SharedPacer so every worker shares one gap.
+        # pipeline (`tasks._shared_pacer`) injects a SharedPacer so every worker shares one gap.
         self.pacer = pacer or pacer_for(site)
 
     async def __aenter__(self) -> "BrowserSession":

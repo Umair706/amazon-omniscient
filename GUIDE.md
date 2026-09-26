@@ -581,11 +581,12 @@ Each `BrowserSession.load()` call waits its turn before navigating.
 
 With Celery running at `--concurrency=4`, four in-process `Pacer` instances used
 to let four workers hit Amazon at once — four times the configured rate. Every
-`BrowserSession` and the 1688 `SupplierScraper` (including `SupplierMatchService`
-searches) now pace through `SharedPacer` (`app/scraping/pacing.py`) instead: it
-holds the "last request wins" slot in Redis under the key `pace:{domain}` (a
-`SET pace:{domain} NX PX <gap>`), so one gap is shared by every worker process,
-not one gap per process. `REDIS_URL` must be reachable from every worker for
+pipeline/worker `BrowserSession` and the 1688 `SupplierScraper` (including
+`SupplierMatchService` searches) now pace through `SharedPacer`
+(`app/scraping/pacing.py`) instead: it holds a slot in Redis under the key
+`pace:{domain}` (a `SET pace:{domain} NX PX <gap>`) — whoever claims the slot
+goes; the slot expires after one random gap — so one gap is shared by every
+worker process, not one gap per process. `REDIS_URL` must be reachable from every worker for
 this coordination to happen. If a `SharedPacer` call to Redis fails for any
 reason, that instance switches to its local `Pacer` fallback for the rest of the
 run and logs "Shared pacing unavailable" once — pacing degrades back to
@@ -634,7 +635,9 @@ Only pages classified `ok` are ever written to the cache — a captcha or soft-b
 response is never stored as if it were real data. A forced re-run (`force=true` on
 the analyze endpoints) bypasses the cache entirely and always re-scrapes. The cache
 is failure-tolerant: a Redis outage is treated as a cache miss, not an error, so
-scraping keeps working with Redis down, just without the speedup.
+scraping keeps working with Redis down, just without the speedup. With Redis
+unreachable (not refusing connections), each cached-page lookup waits up to the
+2 s socket timeout (`REDIS_SOCKET_TIMEOUT_SECONDS`) before degrading to a miss.
 
 **Telemetry: `scrape_events` and `GET /api/v1/niches/scrape-health`**
 
