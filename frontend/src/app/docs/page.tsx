@@ -157,27 +157,29 @@ interface EndpointGroup {
 const API_GROUPS: EndpointGroup[] = [
   {
     name: "Niches",
-    count: 10,
+    count: 11,
     endpoints: [
-      { method: "GET", path: "/api/v1/niches", description: "List all analyzed niches with pagination and filtering" },
-      { method: "POST", path: "/api/v1/niches/analyze", description: "Start a new niche analysis job" },
+      { method: "GET", path: "/api/v1/niches", description: "List analyzed niches with pagination and filtering" },
+      { method: "GET", path: "/api/v1/niches/stats", description: "Dashboard headline stats (counts, average score)" },
+      { method: "GET", path: "/api/v1/niches/scrape-health", description: "Scrape outcome counts for the last 24h" },
       { method: "GET", path: "/api/v1/niches/{id}", description: "Get full niche details and scores" },
       { method: "DELETE", path: "/api/v1/niches/{id}", description: "Delete a niche and all associated data" },
       { method: "GET", path: "/api/v1/niches/{id}/products", description: "List products scraped for a niche" },
       { method: "GET", path: "/api/v1/niches/{id}/competitors", description: "Get competitor analysis results" },
-      { method: "GET", path: "/api/v1/niches/{id}/reviews", description: "Get review analysis and pain points" },
+      { method: "GET", path: "/api/v1/niches/{id}/keywords", description: "Get keyword research results" },
+      { method: "GET", path: "/api/v1/niches/{id}/reviews", description: "Get review pain points" },
       { method: "GET", path: "/api/v1/niches/{id}/suppliers", description: "Get supplier sourcing results" },
-      { method: "GET", path: "/api/v1/niches/{id}/ppc", description: "Get PPC strategy and keyword data" },
-      { method: "GET", path: "/api/v1/niches/{id}/forecast", description: "Get 52-week financial projections" },
+      { method: "GET", path: "/api/v1/niches/{id}/financials", description: "Get 52-week financial projections" },
     ],
   },
   {
     name: "Products",
-    count: 3,
+    count: 4,
     endpoints: [
-      { method: "GET", path: "/api/v1/products", description: "List all tracked products" },
       { method: "GET", path: "/api/v1/products/{asin}", description: "Get product details by ASIN" },
-      { method: "GET", path: "/api/v1/products/{asin}/history", description: "Get BSR and price history time-series" },
+      { method: "GET", path: "/api/v1/products/{asin}/bsr-history", description: "BSR history time-series" },
+      { method: "GET", path: "/api/v1/products/{asin}/price-history", description: "Price history time-series" },
+      { method: "GET", path: "/api/v1/products/{asin}/velocity", description: "Sales-velocity snapshot time-series" },
     ],
   },
   {
@@ -190,11 +192,12 @@ const API_GROUPS: EndpointGroup[] = [
   },
   {
     name: "Jobs",
-    count: 3,
+    count: 4,
     endpoints: [
-      { method: "GET", path: "/api/v1/jobs", description: "List all background analysis jobs" },
-      { method: "GET", path: "/api/v1/jobs/{id}", description: "Get job status and progress" },
-      { method: "POST", path: "/api/v1/jobs/{id}/cancel", description: "Cancel a running analysis job" },
+      { method: "POST", path: "/api/v1/jobs/analyze", description: "Start a keyword analysis (creates the niche)" },
+      { method: "POST", path: "/api/v1/jobs/discover", description: "Start sub-niche discovery for a keyword" },
+      { method: "POST", path: "/api/v1/jobs/analyze-sub-niche", description: "Analyze a discovered sub-niche" },
+      { method: "GET", path: "/api/v1/jobs/{id}/status", description: "Get job status and progress" },
     ],
   },
   {
@@ -217,7 +220,7 @@ const API_GROUPS: EndpointGroup[] = [
     name: "Health",
     count: 1,
     endpoints: [
-      { method: "GET", path: "/api/v1/health", description: "Service health check with dependency status" },
+      { method: "GET", path: "/health", description: "Service health check" },
     ],
   },
 ];

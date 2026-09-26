@@ -45,9 +45,9 @@ interface ProductItem {
 interface CompetitorItem {
   id: number;
   asin: string;
-  title: string;
+  title: string | null;
   listing_quality_score: number | null;
-  review_count: number;
+  review_count: number | null;
   rating: number | null;
   vulnerabilities: string[];
 }
@@ -418,9 +418,9 @@ export default function NicheDetailPage() {
               <CardContent>
                 <CompetitorBarChart
                   competitors={competitors.map((c) => ({
-                    name: c.title.substring(0, 30),
+                    name: (c.title || c.asin || "Unknown").substring(0, 30),
                     listing_quality_score: c.listing_quality_score ?? 0,
-                    review_count: c.review_count,
+                    review_count: c.review_count ?? 0,
                     rating: c.rating ?? 0,
                   }))}
                   metric="listing_quality_score"

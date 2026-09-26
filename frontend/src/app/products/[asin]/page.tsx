@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/stat-card";
+import { BSRChart, PriceChart } from "@/components/charts";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import api from "@/lib/api";
 import {
@@ -84,6 +85,23 @@ interface Product {
   }> | null;
   comparison_asins: string[] | null;
   weight: string | null;
+}
+
+// Matches BSRHistoryPoint in backend/app/api/products.py
+interface BSRHistoryPoint {
+  time: string;
+  bsr: number;
+  category_id: string | null;
+}
+
+// Matches PriceHistoryPoint in backend/app/api/products.py
+interface PriceHistoryPoint {
+  time: string;
+  price: number | null;
+  has_coupon: boolean | null;
+  coupon_value: number | null;
+  is_lightning_deal: boolean | null;
+  buy_box_seller_id: string | null;
 }
 
 function RatingStars({ rating }: { rating: number }) {
@@ -171,6 +189,8 @@ export default function ProductDetailPage() {
 
   const [product, setProduct] = useState<Product | null>(null);
   const [velocity, setVelocity] = useState<any>(null);
+  const [bsrHistory, setBsrHistory] = useState<BSRHistoryPoint[]>([]);
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -180,6 +200,16 @@ export default function ProductDetailPage() {
     setError(null);
 
     api.get(`/api/v1/products/${asin}/velocity`).then((res) => setVelocity(res.data)).catch(() => {});
+
+    api
+      .get(`/api/v1/products/${asin}/bsr-history`)
+      .then((res) => setBsrHistory(res.data.items || []))
+      .catch(() => setBsrHistory([]));
+
+    api
+      .get(`/api/v1/products/${asin}/price-history`)
+      .then((res) => setPriceHistory(res.data.items || []))
+      .catch(() => setPriceHistory([]));
 
     api
       .get(`/api/v1/products/${asin}`)
@@ -248,6 +278,19 @@ export default function ProductDetailPage() {
     product.list_price && product.current_price && product.list_price > product.current_price
       ? (((product.list_price - product.current_price) / product.list_price) * 100).toFixed(0)
       : null;
+
+  // BSRChart just needs {time, bsr} — pass the history points through as-is.
+  const bsrChartData = bsrHistory.map((point) => ({ time: point.time, bsr: point.bsr }));
+
+  // PriceChart requires a numeric price, but the API allows a null price
+  // (e.g. a scrape that failed to read the buy box). Drop those points.
+  const priceChartData = priceHistory
+    .filter((point) => point.price != null)
+    .map((point) => ({
+      time: point.time,
+      price: Number(point.price),
+      has_coupon: point.has_coupon ?? undefined,
+    }));
 
   return (
     <div className="space-y-6">
@@ -545,6 +588,35 @@ export default function ProductDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* BSR & Price History */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader><CardTitle className="text-lg">BSR History</CardTitle></CardHeader>
+          <CardContent>
+            {bsrChartData.length > 0 ? (
+              <BSRChart data={bsrChartData} />
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-12">
+                No history yet — tracking runs every 6 hours.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="text-lg">Price History</CardTitle></CardHeader>
+          <CardContent>
+            {priceChartData.length > 0 ? (
+              <PriceChart data={priceChartData} />
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-12">
+                No history yet — tracking runs every 6 hours.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Product Details */}
       <Card>
