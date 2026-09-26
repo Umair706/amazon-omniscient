@@ -7,42 +7,20 @@ import { RecentNichesTable } from "@/components/recent-niches-table";
 import { BarChart3, TrendingUp, Target, DollarSign, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import api from "@/lib/api";
-
-interface DashboardStats {
-  total_niches: number;
-  avg_score: number;
-  high_confidence_count: number;
-  total_recommendations: number;
-}
+import type { NicheStats } from "@/types";
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [stats, setStats] = useState<NicheStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
     setError(null);
     try {
-      const [nichesRes, recsRes, allNiches] = await Promise.all([
-        api.get("/api/v1/niches/", { params: { per_page: 1 } }),
-        api.get("/api/v1/recommendations/", { params: { per_page: 1 } }),
-        api.get("/api/v1/niches/", { params: { per_page: 100 } }),
-      ]);
-      const items = allNiches.data.items || [];
-      const scores = items
-        .filter((n: any) => n.opportunity_score != null)
-        .map((n: any) => n.opportunity_score);
-      const avgScore =
-        scores.length > 0
-          ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length)
-          : 0;
-      const highConf = items.filter((n: any) => n.confidence_tier === "HIGH").length;
-
-      setStats({
-        total_niches: nichesRes.data.total || 0,
-        avg_score: avgScore,
-        high_confidence_count: highConf,
-        total_recommendations: recsRes.data.total || 0,
-      });
+      // The database computes these totals in one query, so this stays
+      // correct no matter how many niches exist (the old version averaged
+      // only the first 100 niches in the browser).
+      const response = await api.get<NicheStats>("/api/v1/niches/stats");
+      setStats(response.data);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Failed to load dashboard data");
     }
@@ -92,7 +70,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Average Score"
-          value={stats?.avg_score ? `${stats.avg_score}/100` : "\u2014"}
+          value={stats ? `${Math.round(stats.avg_score ?? 0)}/100` : "\u2014"}
           icon={Target}
           index={1}
         />

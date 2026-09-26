@@ -8,11 +8,15 @@ import os
 
 import pytest
 from sqlalchemy import event, func, select
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models.competitor import Competitor
+from app.models.niche import Niche
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL not set; needs a real TimescaleDB"
+    not TEST_DATABASE_URL, reason="TEST_DATABASE_URL not set; needs a real TimescaleDB"
 )
 
 UNKNOWN_NICHE_ID = 999_999_999
@@ -41,6 +45,32 @@ async def test_recommendations_list(client, seeded_niche):
 
 async def test_unknown_niche_is_404(client):
     assert (await client.get(f"/api/v1/niches/{UNKNOWN_NICHE_ID}")).status_code == 404
+
+
+async def test_niche_stats(client, seeded_niche):
+    body = (await client.get("/api/v1/niches/stats")).json()
+    assert body["total_niches"] >= 1
+    assert body["total_recommendations"] >= 1
+    assert set(body) == {"total_niches", "avg_score", "high_confidence_count", "total_recommendations"}
+
+
+async def test_a_commit_inside_a_test_never_reaches_the_database(db_session):
+    """Regression net for the savepoint-based rollback the fixtures rely on.
+
+    db_session.commit() only releases a savepoint (see conftest.py), so a
+    second, independent connection must never see this row.
+    """
+    db_session.add(Niche(name="commit isolation", primary_keyword="commit isolation"))
+    await db_session.commit()
+    other_engine = create_async_engine(TEST_DATABASE_URL)
+    try:
+        async with other_engine.connect() as other:
+            count = (await other.execute(
+                select(func.count()).select_from(Niche).where(Niche.primary_keyword == "commit isolation")
+            )).scalar_one()
+    finally:
+        await other_engine.dispose()
+    assert count == 0
 
 
 async def test_get_niche_runs_one_query(client, seeded_niche, db_session):

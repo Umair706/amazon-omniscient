@@ -19,7 +19,7 @@ export function RecentNichesTable() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "analyzed_at", sort_dir: "desc" } });
+      const res = await api.get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "created_at", sort_dir: "desc" } });
       setNiches(res.data.items || []);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Failed to load niches");

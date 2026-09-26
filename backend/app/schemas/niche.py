@@ -126,3 +126,12 @@ class NicheListResponse(PaginatedResponse):
     """Paginated list of niche summaries."""
 
     items: list[NicheSummary]
+
+
+class NicheStatsResponse(BaseModel):
+    """Dashboard headline numbers, computed across all niches."""
+
+    total_niches: int
+    avg_score: float | None
+    high_confidence_count: int
+    total_recommendations: int

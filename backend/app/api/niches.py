@@ -16,13 +16,20 @@ from app.models.financial_projection import FinancialProjection
 from app.models.keyword import NicheKeyword
 from app.models.niche import Niche
 from app.models.product import Product
+from app.models.recommendation import Recommendation
 from app.models.review import ReviewPainPoint
 from app.models.scrape_event import ScrapeEvent
 from app.models.supplier import Supplier
 from app.schemas.competitor import CompetitorListResponse, CompetitorResponse
 from app.schemas.financial import FinancialProjectionResponse, ProjectionListResponse
 from app.schemas.keyword import KeywordResearchSummary, KeywordResponse
-from app.schemas.niche import NicheCreate, NicheListResponse, NicheResponse, NicheSummary
+from app.schemas.niche import (
+    NicheCreate,
+    NicheListResponse,
+    NicheResponse,
+    NicheStatsResponse,
+    NicheSummary,
+)
 from app.schemas.product import ProductListResponse, ProductResponse
 from app.schemas.review import ReviewPainPointResponse
 from app.schemas.supplier import SupplierListResponse, SupplierResponse
@@ -153,9 +160,10 @@ async def list_niches(
 
 # ---------------------------------------------------------------------------
 # GET /niches/scrape-health — Scrape outcome counts for the last 24h
+# GET /niches/stats — Dashboard headline numbers
 # WHY here, before /{niche_id}: FastAPI matches routes in registration order,
-# and "/{niche_id}" would otherwise swallow "/scrape-health" first and fail
-# trying to parse "scrape-health" as an int.
+# and "/{niche_id}" would otherwise swallow these static paths first and fail
+# trying to parse them as an int.
 # ---------------------------------------------------------------------------
 
 
@@ -169,6 +177,28 @@ async def scrape_health(db: AsyncSession = Depends(get_db)) -> dict:
         .group_by(ScrapeEvent.site, ScrapeEvent.verdict)
     )).all()
     return {"since": since.isoformat(), **summarise_scrape_counts(rows)}
+
+
+HIGH_CONFIDENCE_TIER = "HIGH"
+
+
+@router.get("/stats", response_model=NicheStatsResponse)
+async def niche_stats(db: AsyncSession = Depends(get_db)) -> NicheStatsResponse:
+    """Dashboard headline numbers, computed in the database so they stay right past 100 niches."""
+    total_niches, average_score, high_confidence_count = (await db.execute(
+        select(
+            func.count(Niche.id),
+            func.avg(Niche.opportunity_score),
+            func.count(Niche.id).filter(Niche.confidence_tier == HIGH_CONFIDENCE_TIER),
+        )
+    )).one()
+    total_recommendations = (await db.execute(select(func.count(Recommendation.id)))).scalar_one()
+    return NicheStatsResponse(
+        total_niches=total_niches,
+        avg_score=round(float(average_score), 1) if average_score is not None else None,
+        high_confidence_count=high_confidence_count,
+        total_recommendations=total_recommendations,
+    )
 
 
 # ---------------------------------------------------------------------------

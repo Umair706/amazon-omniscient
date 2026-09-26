@@ -24,6 +24,13 @@ export interface NicheListItem {
   created_at: string;
 }
 
+export interface NicheStats {
+  total_niches: number;
+  avg_score: number | null;
+  high_confidence_count: number;
+  total_recommendations: number;
+}
+
 export interface NicheDetail {
   id: number;
   name: string;
