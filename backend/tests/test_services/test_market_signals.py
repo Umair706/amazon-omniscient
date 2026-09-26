@@ -102,8 +102,8 @@ def test_apply_supplier_summary_sets_all_known_fields():
 
 
 def test_apply_supplier_summary_never_writes_a_none_that_would_crash_scoring():
-    # Regression: an unknown min_moq must be left for ScoringService's own default (9999),
-    # never written as a literal None that a numeric comparison would blow up on.
+    # Regression: an unknown min_moq must be left unset for apply_assumed_defaults to fill
+    # and record as a gap, never written as a literal None that a numeric comparison would blow up on.
     metrics = {}
     apply_supplier_summary(metrics, {"count": 2, "best_score": 60, "min_moq": None, "median_fob_usd": None})
     assert "min_moq" not in metrics

@@ -848,6 +848,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             financial_summary = forecast_svc.summarize_forecast(forecast)
             await forecast_svc.save_projections(niche_id, forecast)
             metrics["break_even_week_base"] = _base_case_break_even_week(financial_summary)
+            from app.workers.pipeline_steps.assumptions import GAP_BREAK_EVEN, clear_data_gap
+            clear_data_gap(metrics, GAP_BREAK_EVEN)
 
             # Calculate launch capital
             launch_capital = forecast_svc.calculate_launch_capital(
