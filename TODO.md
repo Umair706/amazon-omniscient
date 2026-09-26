@@ -67,15 +67,15 @@ quadrantChart
 
 ## CRITICAL
 
-- [ ] **DB session/engine leak** — `tasks.py` creates `create_async_engine()` + `async_sessionmaker()` inside every task invocation; engines accumulate and never close
+- [x] **DB session/engine leak** — fixed: one engine + event loop per Celery worker process, disposed on shutdown (`tasks.py` runtime helpers)
 - [ ] **Pipeline atomicity** — `tasks.py` 13-step pipeline commits after each step; if step 8 fails, steps 1-7 are already committed with partial data
 - [ ] **No authentication** — All API endpoints are public; anyone can trigger analyses, delete data, access all results
-- [ ] **Permissive CORS** — `main.py` uses `allow_origins=["*"]` in production
+- [x] **Permissive CORS** — fixed: `ALLOWED_ORIGINS` allow-list (default `http://localhost:3000`)
 
 ## HIGH
 
-- [ ] **No task timeouts** — Celery tasks have no `time_limit` or `soft_time_limit`; a stuck scrape blocks the worker forever
-- [ ] **No idempotency** — Re-running an analysis duplicates all data
+- [x] **No task timeouts** — fixed: soft/hard time limits on every task, no retry after `SoftTimeLimitExceeded`
+- [x] **No idempotency** — fixed: forced re-runs and automatic retries reset derived rows first (`pipeline_steps/reset.py`)
 - [ ] **Review duplicate race** — `SELECT` then `INSERT` without unique constraint allows duplicates under concurrency
 - [ ] **Niche eager loading** — `Niche` queries load all related products, reviews, recommendations eagerly
 - [ ] **Unbounded API responses** — List endpoints return all rows with no pagination
