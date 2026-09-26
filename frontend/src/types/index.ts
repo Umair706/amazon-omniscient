@@ -14,6 +14,7 @@ export interface NicheListItem {
   id: number;
   name: string;
   primary_keyword: string;
+  marketplace: string | null;
   monthly_search_volume: number | null;
   avg_sale_price: string | number | null;
   avg_review_count: number | null;
@@ -35,6 +36,7 @@ export interface NicheDetail {
   id: number;
   name: string;
   primary_keyword: string;
+  marketplace: string | null;
   category_id: string | null;
   monthly_search_volume: number | null;
   avg_sale_price: string | null;

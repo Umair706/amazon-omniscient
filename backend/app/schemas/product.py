@@ -33,6 +33,9 @@ class ProductResponse(BaseModel):
     id: int
     asin: str
     niche_id: int | None = None
+    # The Amazon store this product's data came from (e.g. "AU"). Populated from the
+    # product's niche so the product page can state which marketplace it is showing.
+    marketplace: str | None = None
     title: str | None = None
     brand: str | None = None
     image_url: str | None = None

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScoreBadge } from "@/components/score-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
+import { marketplaceLabel } from "@/lib/marketplace";
 import api from "@/lib/api";
 import type { NicheListItem } from "@/types";
 import { AlertTriangle, RefreshCw } from "lucide-react";
@@ -71,6 +72,7 @@ export function RecentNichesTable() {
             <thead>
               <tr className="border-b text-left text-muted-foreground">
                 <th className="pb-3 font-medium">Niche</th>
+                <th className="pb-3 font-medium">Market</th>
                 <th className="pb-3 font-medium">Score</th>
                 <th className="pb-3 font-medium">Avg Price</th>
                 <th className="pb-3 font-medium">Search Volume</th>
@@ -80,7 +82,7 @@ export function RecentNichesTable() {
             <tbody>
               {niches.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={6} className="py-8 text-center text-muted-foreground">
                     No niches analyzed yet. Start by entering a keyword above.
                   </td>
                 </tr>
@@ -96,6 +98,11 @@ export function RecentNichesTable() {
                       <p className="font-medium">{niche.name || niche.primary_keyword}</p>
                       <p className="text-xs text-muted-foreground">{niche.primary_keyword}</p>
                     </div>
+                  </td>
+                  <td className="py-3">
+                    <Badge variant="outline" title={marketplaceLabel(niche.marketplace)}>
+                      {niche.marketplace || "—"}
+                    </Badge>
                   </td>
                   <td className="py-3">
                     {niche.opportunity_score != null ? (

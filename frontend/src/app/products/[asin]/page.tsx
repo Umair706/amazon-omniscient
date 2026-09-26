@@ -9,6 +9,7 @@ import { StatCard } from "@/components/stat-card";
 import { BSRChart, PriceChart } from "@/components/charts";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import api from "@/lib/api";
+import { marketplaceLabel } from "@/lib/marketplace";
 import {
   ArrowLeft,
   DollarSign,
@@ -42,6 +43,7 @@ interface Product {
   id: number;
   asin: string;
   niche_id: number | null;
+  marketplace: string | null;
   title: string | null;
   brand: string | null;
   category_id: string | null;
@@ -302,6 +304,9 @@ export default function ProductDetailPage() {
       <div className="space-y-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline" className="font-mono text-xs">{product.asin}</Badge>
+          {product.marketplace && (
+            <Badge variant="outline" title={marketplaceLabel(product.marketplace)}>{marketplaceLabel(product.marketplace)}</Badge>
+          )}
           {product.brand && <Badge variant="secondary">{product.brand}</Badge>}
           {product.deal_badge && (
             <Badge className="bg-red-500 text-white">{product.deal_badge}</Badge>

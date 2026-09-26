@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
+import { marketplaceLabel } from "@/lib/marketplace";
 import { StatCard } from "@/components/stat-card";
 import { ScoreRadar, ProfitChart, SalesChart, CompetitorBarChart } from "@/components/charts";
 import { formatCurrency } from "@/lib/utils";
@@ -199,6 +200,9 @@ export default function NicheDetailPage() {
           </button>
           <h1 className="text-3xl font-bold">{niche.name}</h1>
           <p className="text-muted-foreground mt-1">{niche.primary_keyword}</p>
+          <Badge variant="outline" className="mt-2" title={marketplaceLabel(niche.marketplace)}>
+            {marketplaceLabel(niche.marketplace)}
+          </Badge>
         </div>
         {niche.opportunity_score != null && (
           <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
@@ -322,6 +326,9 @@ export default function NicheDetailPage() {
       {tab === "products" && (
         <Card>
           <CardContent className="p-0">
+            <p className="px-4 pt-4 text-xs text-muted-foreground">
+              Products and prices from {marketplaceLabel(niche.marketplace)}
+            </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -412,6 +419,9 @@ export default function NicheDetailPage() {
 
       {tab === "competitors" && (
         <div className="space-y-6">
+          <p className="text-xs text-muted-foreground">
+            Competitors from {marketplaceLabel(niche.marketplace)}
+          </p>
           {competitors.length > 0 && (
             <Card>
               <CardHeader><CardTitle className="text-lg">Listing Quality Comparison</CardTitle></CardHeader>

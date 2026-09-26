@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScoreBadge } from "@/components/score-badge";
+import { marketplaceLabel } from "@/lib/marketplace";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
 import api from "@/lib/api";
@@ -156,6 +157,7 @@ export default function NicheExplorerPage() {
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="p-4"><SortButton field="name" label="Niche" /></th>
+                  <th className="p-4">Market</th>
                   <th className="p-4"><SortButton field="opportunity_score" label="Score" /></th>
                   <th className="p-4"><SortButton field="avg_sale_price" label="Avg Price" /></th>
                   <th className="p-4"><SortButton field="monthly_search_volume" label="Search Vol" /></th>
@@ -168,12 +170,12 @@ export default function NicheExplorerPage() {
                 {loading ? (
                   Array.from({ length: 8 }).map((_, i) => (
                     <tr key={i} className="border-b">
-                      <td colSpan={7} className="p-4"><Skeleton className="h-8 w-full" /></td>
+                      <td colSpan={8} className="p-4"><Skeleton className="h-8 w-full" /></td>
                     </tr>
                   ))
                 ) : niches.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-12 text-center text-muted-foreground">
+                    <td colSpan={8} className="p-12 text-center text-muted-foreground">
                       No niches found. Try adjusting your filters.
                     </td>
                   </tr>
@@ -189,6 +191,11 @@ export default function NicheExplorerPage() {
                           <p className="font-medium">{niche.name || niche.primary_keyword}</p>
                           <p className="text-xs text-muted-foreground">{niche.primary_keyword}</p>
                         </div>
+                      </td>
+                      <td className="p-4">
+                        <Badge variant="outline" title={marketplaceLabel(niche.marketplace)}>
+                          {niche.marketplace || "—"}
+                        </Badge>
                       </td>
                       <td className="p-4">
                         {niche.opportunity_score != null ? (
