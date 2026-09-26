@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -117,12 +117,19 @@ function CompetitionBadge({ level }: { level: string | null }) {
   );
 }
 
+const TAB_IDS: TabId[] = ["overview", "products", "competitors", "keywords", "financials"];
+
 export default function NicheDetailPage() {
   const params = useParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const nicheId = params.nicheId as string;
 
   const { isStarred, toggle } = useStars();
-  const [tab, setTab] = useState<TabId>("overview");
+  // The active tab lives in the URL (?tab=products) so it survives refresh and is shareable.
+  const urlTab = searchParams.get("tab") as TabId | null;
+  const tab: TabId = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "overview";
+  const setTab = (id: TabId) => router.replace(`/niches/${nicheId}?tab=${id}`, { scroll: false });
   const [niche, setNiche] = useState<NicheDetail | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [competitors, setCompetitors] = useState<CompetitorItem[]>([]);
