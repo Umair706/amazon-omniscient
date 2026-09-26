@@ -1575,6 +1575,7 @@ async def _analyze_suppliers(
     svc = SupplierService(marketplace=marketplace)
     avg_price = metrics.get("avg_price", 30)
     unit_cost = fob_unit_cost or avg_price * FOB_FALLBACK_SHARE_OF_PRICE
+    metrics["fob_unit_cost_estimated"] = fob_unit_cost is None
     if fob_unit_cost is None:
         logger.info("No supplier prices scraped; estimating FOB as %.0f%% of price", FOB_FALLBACK_SHARE_OF_PRICE * 100)
     duty_slug, _ = category_slugs(metrics.get("category"))
@@ -1878,16 +1879,10 @@ def _enrich_metrics(
         landed = supplier_data.get("landed_cost", {})
         metrics["landed_cost"] = landed.get("total_landed_cost_usd_per_unit", metrics.get("landed_cost", 0))
 
-    # NOTE: supplier defaults only apply when 1688 scraping returned nothing,
-    # so an outage does not zero the score. Tracked in TODO.md.
-    metrics.setdefault("supplier_count", 5)
-    metrics.setdefault("best_supplier_score", 70)
-    metrics.setdefault("min_moq", 500)
-    metrics.setdefault("break_even_week_base", 16)
-    # Only fall back to 3000 if keyword research didn't populate search_volume
-    if not metrics.get("search_volume"):
-        metrics.setdefault("search_volume", 3000)
-    metrics.setdefault("monthly_revenue_per_seller", 5000)
+    # Fill any scoring inputs we could not measure, and record each one as a
+    # data gap instead of a silent fake default (see assumptions.py).
+    from app.workers.pipeline_steps.assumptions import apply_assumed_defaults
+    apply_assumed_defaults(metrics)
 
 
 def _has_chinese(text: str | None) -> bool:

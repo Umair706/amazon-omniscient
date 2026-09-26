@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
 import { StatCard } from "@/components/stat-card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+import { labelForDataGap } from "@/lib/data-gaps";
 import api from "@/lib/api";
 import {
   ArrowLeft,
@@ -380,6 +381,17 @@ export default function OpportunityBriefPage() {
                         <Badge variant={f.passed ? "outline" : "destructive"} className="text-[10px]">
                           {f.passed ? "Pass" : "Fail"}
                         </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {rec.risk_flags?.data_gaps?.length > 0 && (
+                  <div className="mt-4 pt-4 border-t space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Data gaps — these inputs are assumptions</p>
+                    {rec.risk_flags.data_gaps.map((gap: string) => (
+                      <div key={gap} className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>{labelForDataGap(gap)}</span>
                       </div>
                     ))}
                   </div>

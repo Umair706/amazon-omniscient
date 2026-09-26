@@ -4,6 +4,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Sub-score used when 1688 returned no suppliers at all. WHY 50: neutral, so an
+# outage neither sinks nor inflates the niche; the brief shows the data gap instead.
+SUPPLIER_UNKNOWN_SCORE = 50.0
+
 
 class ScoringService:
     """
@@ -380,9 +384,11 @@ class ScoringService:
 
     @staticmethod
     def _score_supplier(m: dict) -> float:
-        """Supplier availability and costs."""
+        """Supplier availability and costs. Neutral score when no supplier data exists."""
+        if m.get("supplier_count") is None:
+            return SUPPLIER_UNKNOWN_SCORE
         score = 0
-        supplier_count = m.get("supplier_count", 0)
+        supplier_count = m["supplier_count"]
         best_supplier_score = m.get("best_supplier_score", 0)
         moq = m.get("min_moq", 9999)
 

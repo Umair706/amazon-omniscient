@@ -71,6 +71,7 @@ class RecommendationEngine:
             "hard_filters": score_result["hard_filters"],
             "pass_all_filters": score_result["pass_all_filters"],
             "fail_reasons": score_result["fail_reasons"],
+            "data_gaps": metrics.get("data_gaps", []),
         }
 
         # Step 3: Add strategy data
@@ -268,7 +269,11 @@ Return a JSON object:
             # generate_full_marketing_plan sets it to None on LLM failure, so unwrap defensively
             # to keep the DB column an array (or null) as the frontend expects.
             marketing_channels=((data.get("marketing_plan") or {}).get("channels") or {}).get("channels"),
-            risk_flags={"fail_reasons": data.get("fail_reasons", []), "hard_filters": data.get("hard_filters", [])},
+            risk_flags={
+                "fail_reasons": data.get("fail_reasons", []),
+                "hard_filters": data.get("hard_filters", []),
+                "data_gaps": data.get("data_gaps", []),
+            },
             launch_playbook=data.get("marketing_plan", {}).get("launch_playbook"),
             ppc_strategy=data.get("ppc_strategy"),
             product_blueprint=data.get("product_blueprint"),
