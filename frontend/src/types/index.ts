@@ -330,7 +330,22 @@ export interface UserSettings {
   has_ads_api_credentials: boolean;
   has_alibaba_credentials: boolean;
   default_marketplace: string | null;
-  min_margin_threshold: string | null;
-  max_review_moat: number | null;
-  allow_seasonal: boolean | null;
+  scoring_config: ScoringConfig | null;
+}
+
+// The seller's tuning of the scoring thesis. Every part is optional; a missing
+// part means "use the built-in default". Mirrors backend scoring_config.py.
+export interface ScoringConfig {
+  thresholds?: Record<string, Record<string, number>>;
+  weights?: Record<string, number>;
+  sales_multiplier?: Record<string, number>;
+  allow_seasonal?: Record<string, boolean>;
+}
+
+// The built-in defaults, from GET /settings/scoring-defaults.
+export interface ScoringDefaults {
+  thresholds: Record<string, Record<string, number>>;
+  weights: Record<string, number>;
+  sales_multiplier: number;
+  allow_seasonal: boolean;
 }
