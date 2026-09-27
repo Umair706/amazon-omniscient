@@ -57,7 +57,7 @@ const GLOSSARY = [
   {
     term: "Opportunity pre-score (Discover)",
     meaning: "A fast demand-versus-ease pre-screen shown on Discover cards. It only looks at search-result signals.",
-    read: "It is a filter to decide what to analyse fully, not the real score. Always run a full analysis before deciding.",
+    read: "It is a filter to decide what to analyze fully, not the real score. Always run a full analysis before deciding.",
   },
   {
     term: "Data gap",

@@ -94,9 +94,9 @@ export default function DiscoverPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2"><Compass className="h-7 w-7 text-primary" /> Discover niches</h1>
+        <h1 className="text-3xl font-bold flex items-center gap-2"><Compass className="h-7 w-7 text-primary" /> Discover Niches</h1>
         <p className="text-muted-foreground mt-1">
-          Enter a broad seed and get candidate niches ranked by a quick opportunity pre-score, then analyse the best.
+          Enter a broad seed and get candidate niches ranked by a quick opportunity pre-score, then analyze the best.
         </p>
       </div>
 
@@ -145,7 +145,7 @@ export default function DiscoverPage() {
       )}
 
       {candidates.length > 0 && (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {candidates.map((c) => (
             <Card key={c.keyword}>
               <CardContent className="p-4">
@@ -165,13 +165,13 @@ export default function DiscoverPage() {
                 </div>
                 <Button size="sm" className="mt-3" onClick={() => analyze(c.keyword)}>
                   <Sparkles className="h-4 w-4 mr-2" />
-                  Analyse this niche
+                  Analyze this niche
                 </Button>
               </CardContent>
             </Card>
           ))}
           <p className="col-span-full text-xs text-muted-foreground flex items-center gap-1">
-            <InfoHint text="A quick pre-screen from demand vs. ease of entry — not the full Omniscient Score. Analyse a candidate for the real verdict." />
+            <InfoHint text="A quick pre-screen from demand vs. ease of entry — not the full Omniscient Score. Analyze a candidate for the real verdict." />
             Opportunity pre-score: a quick pre-screen, not the full analysis.
           </p>
         </div>

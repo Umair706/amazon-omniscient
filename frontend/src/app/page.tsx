@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useState, useCallback, Suspense } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { StatCard } from "@/components/stat-card";
 import { AnalyzeDialog } from "@/components/analyze-dialog";
 import { RecentNichesTable } from "@/components/recent-niches-table";
-import { BarChart3, TrendingUp, Target, DollarSign, AlertTriangle, RefreshCw } from "lucide-react";
+import { BarChart3, TrendingUp, Target, DollarSign, AlertTriangle, RefreshCw, Compass, Search, FileText, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import api from "@/lib/api";
 import type { NicheStats } from "@/types";
 
@@ -43,7 +45,10 @@ export default function DashboardPage() {
         transition={{ duration: 0.3 }}
       >
         <h1 className="text-3xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">Overview of your Amazon product research</p>
+        <p className="text-muted-foreground mt-1">
+          Your Amazon product research at a glance.{" "}
+          <Link href="/docs" className="text-primary hover:underline">New here? Read the 2-minute guide</Link>.
+        </p>
       </motion.div>
 
       {error && (
@@ -107,15 +112,36 @@ export default function DashboardPage() {
         transition={{ duration: 0.4, delay: 0.5 }}
       >
         {stats && stats.total_niches === 0 && !error ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center space-y-4">
-            <div className="p-4 rounded-full bg-primary/10">
-              <BarChart3 className="h-12 w-12 text-primary" />
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Start here</h2>
+              <p className="text-muted-foreground mt-1">Three steps from an idea to a go/no-go decision.</p>
             </div>
-            <h2 className="text-xl font-semibold">No Niches Analyzed Yet</h2>
-            <p className="text-muted-foreground max-w-md">
-              Enter a keyword above to start your first niche analysis. Omniscient will scrape Amazon,
-              analyze competitors, find suppliers, and generate a scored recommendation.
-            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              {[
+                { n: 1, icon: Compass, title: "Discover niches", body: "No keyword yet? Enter a broad idea and get ranked candidates.", href: "/discover", cta: "Open Discover" },
+                { n: 2, icon: Search, title: "Analyze a keyword", body: "Know the product? Enter its keyword in the box above to run a full analysis.", href: null, cta: "Use the box above" },
+                { n: 3, icon: FileText, title: "Read your brief", body: "Get a scored recommendation with financials, suppliers, and a launch plan.", href: "/recommendations", cta: "View briefs" },
+              ].map((s) => (
+                <Card key={s.n} className="flex flex-col">
+                  <CardContent className="p-5 flex flex-col h-full">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">{s.n}</span>
+                      <s.icon className="h-4 w-4 text-primary" />
+                      <h3 className="font-semibold">{s.title}</h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-2 flex-1">{s.body}</p>
+                    {s.href ? (
+                      <Link href={s.href} className="mt-3">
+                        <Button variant="outline" size="sm" className="w-full">{s.cta}<ArrowRight className="ml-2 h-4 w-4" /></Button>
+                      </Link>
+                    ) : (
+                      <p className="mt-3 text-xs text-muted-foreground italic">{s.cta}</p>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </div>
         ) : (
           <RecentNichesTable />

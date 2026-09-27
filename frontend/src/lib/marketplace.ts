@@ -1,4 +1,4 @@
-// Amazon marketplaces this tool analyses. Keep in sync with backend/app/core/marketplace.py.
+// Amazon marketplaces this tool analyzes. Keep in sync with backend/app/core/marketplace.py.
 export const MARKETPLACE_LABELS: Record<string, string> = {
   AU: "Amazon.com.au (Australia)",
   US: "Amazon.com (United States)",

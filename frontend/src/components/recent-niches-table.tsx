@@ -36,7 +36,7 @@ export function RecentNichesTable() {
   if (loading) {
     return (
       <Card>
-        <CardHeader><CardTitle>Recent Analyses</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Recent Analyzes</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-12 w-full" />
@@ -49,7 +49,7 @@ export function RecentNichesTable() {
   if (error) {
     return (
       <Card>
-        <CardHeader><CardTitle>Recent Analyses</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Recent Analyzes</CardTitle></CardHeader>
         <CardContent className="text-center space-y-3 py-8">
           <AlertTriangle className="h-8 w-8 text-destructive mx-auto" />
           <p className="text-sm text-destructive">{error}</p>
@@ -64,7 +64,7 @@ export function RecentNichesTable() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recent Analyses</CardTitle>
+        <CardTitle>Recent Analyzes</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">

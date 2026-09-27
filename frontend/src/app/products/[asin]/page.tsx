@@ -703,8 +703,6 @@ export default function ProductDetailPage() {
         {product.last_scraped_at
           ? `Data updated ${new Date(product.last_scraped_at).toLocaleString()}`
           : `Added ${new Date(product.created_at).toLocaleDateString()}`}
-        {" | "}Product ID: {product.id}
-        {product.niche_id && <span> | Niche ID: {product.niche_id}</span>}
       </div>
     </div>
   );

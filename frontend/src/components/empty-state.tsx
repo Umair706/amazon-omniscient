@@ -28,8 +28,8 @@ export function EmptyState({
 
 // Reusable reasons so the copy is consistent wherever a section can be empty.
 export const EMPTY_REASONS = {
-  llm: "This section is AI-generated. Add an LLM key (Settings, or run a local model) and re-analyse to populate it.",
-  suppliers: "No supplier data. 1688 was unreachable (it blocks datacenter IPs). Add a proxy or Alibaba API key, then re-analyse.",
+  llm: "This section is AI-generated. Add an LLM key (Settings, or run a local model) and re-analyze to populate it.",
+  suppliers: "No supplier data. 1688 was unreachable (it blocks datacenter IPs). Add a proxy or Alibaba API key, then re-analyze.",
   tracking: "This appears once the 6-hourly tracker has built history for these products — it is empty on a fresh analysis.",
   noProducts: "No products were captured for this niche. Re-run the analysis, or check the marketplace and network.",
   competitors: "No competitor analysis yet. This is a separate step that scores listing quality and vulnerabilities; it needs an LLM key and a completed analysis.",

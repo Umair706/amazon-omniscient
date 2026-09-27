@@ -11,7 +11,7 @@ const START_PATHS = [
   },
   {
     icon: Search,
-    title: "Start from a keyword you already have (Analyse)",
+    title: "Start from a keyword you already have (Analyze)",
     body: "On the Dashboard, enter a specific keyword like \"silicone baking mat\". Omniscient runs the full analysis and produces a scored recommendation. Use this when you already know the product you want to check.",
   },
 ];
@@ -36,7 +36,7 @@ const DECISION_CHECKLIST = [
   },
 ];
 
-// Turn a broad seed into a shortlist, then analyse the best, then decide.
+// Turn a broad seed into a shortlist, then analyze the best, then decide.
 export function GettingStartedTab() {
   return (
     <div className="space-y-6">

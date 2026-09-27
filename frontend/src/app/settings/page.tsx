@@ -136,7 +136,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-6xl">
       <div>
         <h1 className="text-3xl font-bold">Settings</h1>
         <p className="text-muted-foreground mt-1">Configure API credentials and preferences</p>
@@ -154,6 +154,8 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* API credentials, two-up on wide screens */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* Amazon SP-API */}
       <Card>
         <CardHeader>
@@ -241,6 +243,10 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      </div>
+
+      {/* Model + preferences, two-up on wide screens */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* LLM Config */}
       <Card>
         <CardHeader>
@@ -288,7 +294,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Analysis preferences</CardTitle>
-          <CardDescription>The marketplace new analyses default to.</CardDescription>
+          <CardDescription>The marketplace new analyzes default to.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
@@ -304,6 +310,8 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      </div>
 
       {/* Scoring rules (saves itself) */}
       <ScoringConfigEditor />

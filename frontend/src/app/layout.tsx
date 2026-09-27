@@ -24,8 +24,12 @@ export default function RootLayout({
       <body className="min-h-screen antialiased">
         <div className="flex min-h-screen">
           <Sidebar />
-          <main className="flex-1 p-8 md:p-8 pt-16 md:pt-8">
-            {children}
+          <main className="flex-1 px-4 py-8 sm:px-6 md:px-10 pt-16 md:pt-8">
+            {/* Cap and center content: wide screens stay filled by grids below,
+                and text never runs edge-to-edge into unreadable line lengths. */}
+            <div className="mx-auto w-full max-w-screen-2xl">
+              {children}
+            </div>
           </main>
         </div>
       </body>

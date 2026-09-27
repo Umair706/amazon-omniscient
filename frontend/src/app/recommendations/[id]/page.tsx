@@ -217,7 +217,7 @@ export default function OpportunityBriefPage() {
             <Card>
               <CardHeader><CardTitle className="text-lg">Omniscient Score Breakdown</CardTitle></CardHeader>
               <CardContent>
-                <div className="grid grid-cols-3 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-3">
                   {Object.entries(rec.subscore_breakdown).map(([key, value]) => {
                     const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
                     const score = typeof value === "number" ? value : 0;

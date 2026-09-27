@@ -68,7 +68,7 @@ interface StoredJob {
   subNiches?: SubNiche[];
 }
 
-// Amazon stores this tool can analyse. Default is AU.
+// Amazon stores this tool can analyze. Default is AU.
 const MARKETPLACES = [
   { code: "AU", label: "Amazon.com.au (Australia)" },
   { code: "US", label: "Amazon.com (United States)" },
@@ -425,7 +425,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Analysing {MARKETPLACES.find((m) => m.code === marketplace)?.label ?? marketplace}
+            Analyzing {MARKETPLACES.find((m) => m.code === marketplace)?.label ?? marketplace}
           </p>
         </form>
 
