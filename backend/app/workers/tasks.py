@@ -1692,25 +1692,50 @@ async def _analyze_suppliers(
     from app.core.category_mapping import category_slugs
     from app.services.supplier_service import SupplierService
 
+    from dataclasses import replace as _dc_replace
+
+    from app.core.currency import convert_from_usd, convert_to_usd, is_converted_marketplace
+
     svc = SupplierService(marketplace=marketplace)
     avg_price = metrics.get("avg_price", 30)
-    unit_cost = fob_unit_cost or avg_price * FOB_FALLBACK_SHARE_OF_PRICE
-    metrics["fob_unit_cost_estimated"] = fob_unit_cost is None
-    if fob_unit_cost is None:
+
+    # Supplier FOB is quoted in USD. When we have no scraped price we estimate it
+    # from the sale price (which is in the marketplace currency), so convert that
+    # estimate to USD too — the whole landed-cost math runs in USD, then converts once.
+    if fob_unit_cost is not None:
+        unit_cost_usd = fob_unit_cost
+    else:
+        unit_cost_usd = convert_to_usd(avg_price * FOB_FALLBACK_SHARE_OF_PRICE, marketplace)
         logger.info("No supplier prices scraped; estimating FOB as %.0f%% of price", FOB_FALLBACK_SHARE_OF_PRICE * 100)
+    metrics["fob_unit_cost_estimated"] = fob_unit_cost is None
     duty_slug, _ = category_slugs(metrics.get("category"))
 
-    landed = svc.calculate_landed_cost(unit_cost=unit_cost, quantity=500, weight_kg=weight_kg, category=duty_slug)
+    landed = svc.calculate_landed_cost(unit_cost=unit_cost_usd, quantity=500, weight_kg=weight_kg, category=duty_slug)
+
+    # Convert the USD landed cost into the marketplace currency so the margin is
+    # computed against a same-currency sale price. Referral/fulfilment fees and
+    # CPC are already in the marketplace currency (they scale off the AUD price
+    # or come from the AU fee tables), so only the landed cost needs converting.
+    landed_usd = landed.total_cost_to_amazon
+    landed_in_marketplace = convert_from_usd(landed_usd, marketplace)
+    landed_for_margin = _dc_replace(landed, total_cost_to_amazon=landed_in_marketplace)
+
     margin = svc.calculate_margins(
-        selling_price=avg_price, landed_cost=landed,
+        selling_price=avg_price, landed_cost=landed_for_margin,
         fba_fulfillment_fee=metrics.get("fba_fees", 5),
         ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,
     )
-    metrics["fob_unit_cost"] = round(unit_cost, 4)
-    metrics["landed_cost"] = landed.total_cost_to_amazon
+    metrics["fob_unit_cost"] = round(convert_from_usd(unit_cost_usd, marketplace), 4)
+    metrics["landed_cost"] = round(landed_in_marketplace, 4)
     metrics["pre_ppc_margin_pct"] = margin["pre_ppc_margin_pct"]
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
-    return {"landed_cost": {"total_landed_cost_usd_per_unit": landed.total_cost_to_amazon}, "margins": margin}
+
+    # A fixed FX rate was applied, so flag it for the seller to sanity-check.
+    if is_converted_marketplace(marketplace):
+        from app.workers.pipeline_steps.assumptions import GAP_FX_ASSUMED, record_data_gap
+        record_data_gap(metrics, GAP_FX_ASSUMED)
+
+    return {"landed_cost": {"total_landed_cost_per_unit": landed_in_marketplace}, "margins": margin}
 
 
 # CNY to USD conversion rate

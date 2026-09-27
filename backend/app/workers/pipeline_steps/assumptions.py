@@ -16,12 +16,20 @@ GAP_MOQ_ASSUMED = "moq_assumed"
 GAP_BSR = "bsr_unavailable"
 GAP_SALES_ESTIMATED = "sales_estimate_assumed"
 GAP_SALES_UNCALIBRATED = "sales_estimate_uncalibrated"
+GAP_FX_ASSUMED = "fx_rate_assumed"
 
 # Typical values for a mid-range niche; used only when the real signal is missing.
 ASSUMED_BREAK_EVEN_WEEK = 16
 ASSUMED_SEARCH_VOLUME = 3000
 ASSUMED_REVENUE_PER_SELLER = 5000
 ASSUMED_MOQ = 500
+
+
+def record_data_gap(metrics: dict, gap: str) -> None:
+    """Add `gap` to metrics["data_gaps"] once (creating the list if needed)."""
+    gaps = metrics.setdefault("data_gaps", [])
+    if gap not in gaps:
+        gaps.append(gap)
 
 
 def clear_data_gap(metrics: dict, gap: str) -> None:
