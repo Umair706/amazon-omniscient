@@ -19,9 +19,11 @@ decision engine bolted to a weak front door. The tranches below fix that, in pri
 - **Tranche 2 — done.** Seed-to-shortlist discovery: `/discover` ranks candidate niches from a
   broad seed by an opportunity pre-score, and one click hands the winner to the full analysis.
   (The best-sellers feed and saved watchlist are still open ideas.)
-- **Tranche 4 — configurable thesis done.** A seller can tune the min-margin, max-review-moat,
-  and seasonal thresholds in Settings, per marketplace, and scoring honours them. Sales-model
-  calibration still needs real reference data (see "Needs the user" below).
+- **Tranche 4 — configurable thesis done.** A seller can tune the entire scoring thesis in
+  Settings and reset it to the built-in defaults: every hard-filter threshold and the seasonal
+  allowance (per marketplace), the nine sub-score weights, and a per-marketplace sales multiplier.
+  Scoring honours all of them. The sales multiplier lets a seller calibrate the estimate by hand;
+  a fitted model still needs real reference data (see "Needs the user" below).
 - **Tranche 5 — done.** In-app docs now teach the workflow and how to read every result.
 - **Tranche 3 — open.** Supplier data still depends on Alibaba API access; see that tranche.
 

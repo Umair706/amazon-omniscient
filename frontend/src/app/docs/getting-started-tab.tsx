@@ -20,7 +20,7 @@ const START_PATHS = [
 const DECISION_CHECKLIST = [
   {
     label: "Does it pass every hard filter?",
-    body: "One failed filter sets the tier to FAIL no matter how good the score is. A FAIL means walk away, or change your own thresholds in Settings if the filter does not match your strategy.",
+    body: "One failed filter sets the tier to FAIL no matter how good the score is. A FAIL means walk away, or retune the rule in Settings > Scoring rules if the filter does not match your strategy. Every threshold, the sub-score weights, and the sales estimate are yours to change, per marketplace, with our defaults built in.",
   },
   {
     label: "Is the money real after all costs?",
