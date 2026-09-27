@@ -100,6 +100,14 @@ async def update_settings(
     if "default_marketplace" in update_data:
         settings.default_marketplace = update_data["default_marketplace"]
 
+    # LLM config. The key is stored as bytes and never returned.
+    if "llm_provider" in update_data:
+        settings.llm_provider = update_data["llm_provider"]
+    if "llm_model" in update_data:
+        settings.llm_model = update_data["llm_model"]
+    if update_data.get("llm_api_key"):
+        settings.llm_api_key_encrypted = update_data["llm_api_key"].encode("utf-8")
+
     # The scoring config is validated before storage so a seller can never save
     # a thesis that would make scoring nonsense. A null value resets to defaults.
     if "scoring_config" in update_data:

@@ -20,6 +20,12 @@ class UserSettings(TimestampMixin, Base):
     ads_api_credentials_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     alibaba_credentials_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
 
+    # LLM provider choice. NULL provider/model means "use the server default".
+    # The key is stored as bytes and never returned (only a has_* flag is).
+    llm_provider: Mapped[str | None] = mapped_column(String(30))
+    llm_model: Mapped[str | None] = mapped_column(String(100))
+    llm_api_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+
     # Preferences
     default_marketplace: Mapped[str | None] = mapped_column(
         String(20), server_default="US"

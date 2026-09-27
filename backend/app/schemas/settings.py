@@ -33,6 +33,11 @@ class UserSettingsUpdate(BaseModel):
         description="Alibaba API credentials object (will be encrypted)",
     )
 
+    # LLM provider config (the key is write-only; only a has_* flag is returned)
+    llm_provider: str | None = Field(default=None, max_length=30)
+    llm_model: str | None = Field(default=None, max_length=100)
+    llm_api_key: str | None = None
+
     # Preferences
     default_marketplace: str | None = Field(default=None, max_length=20)
     # The seller's scoring thesis. Shape and validation live in
@@ -70,6 +75,11 @@ class UserSettingsResponse(BaseModel):
     has_ads_api_credentials: bool = False
     has_alibaba_credentials: bool = False
 
+    # LLM config (key never exposed — only whether one is set)
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    has_llm_api_key: bool = False
+
     # Preferences
     default_marketplace: str | None = None
     scoring_config: dict | None = None
@@ -88,4 +98,7 @@ class UserSettingsResponse(BaseModel):
             has_alibaba_credentials=obj.alibaba_credentials_encrypted is not None,  # type: ignore[attr-defined]
             default_marketplace=obj.default_marketplace,  # type: ignore[attr-defined]
             scoring_config=obj.scoring_config,  # type: ignore[attr-defined]
+            llm_provider=obj.llm_provider,  # type: ignore[attr-defined]
+            llm_model=obj.llm_model,  # type: ignore[attr-defined]
+            has_llm_api_key=obj.llm_api_key_encrypted is not None,  # type: ignore[attr-defined]
         )

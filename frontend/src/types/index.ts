@@ -332,6 +332,9 @@ export interface UserSettings {
   has_alibaba_credentials: boolean;
   default_marketplace: string | null;
   scoring_config: ScoringConfig | null;
+  llm_provider: string | null;
+  llm_model: string | null;
+  has_llm_api_key: boolean;
 }
 
 // The seller's tuning of the scoring thesis. Every part is optional; a missing

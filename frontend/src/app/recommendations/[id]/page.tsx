@@ -14,6 +14,7 @@ import { amazonProductUrl } from "@/lib/marketplace";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { labelForDataGap } from "@/lib/data-gaps";
 import { ScoredUnder } from "./scored-under";
+import { PpcPlan } from "./ppc-plan";
 import api from "@/lib/api";
 import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
 import {
@@ -1623,6 +1624,7 @@ export default function OpportunityBriefPage() {
       {/* Marketing Tab */}
       {tab === "marketing" && (
         <div className="space-y-6">
+          <PpcPlan ppc={rec.ppc_strategy} marketplace={rec.marketplace ?? undefined} />
           {rec.marketing_channels ? (
             <Card>
               <CardHeader><CardTitle className="text-lg">Marketing Channels</CardTitle></CardHeader>

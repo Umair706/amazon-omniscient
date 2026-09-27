@@ -35,6 +35,8 @@ export default function SettingsPage() {
   const syncFormFromSettings = (data: UserSettings) => {
     setSettings(data);
     setDefaultMarketplace(data.default_marketplace || "AU");
+    setLlmProvider(data.llm_provider || "qwen");
+    setLlmModel(data.llm_model || "");
   };
 
   useEffect(() => {
@@ -71,6 +73,11 @@ export default function SettingsPage() {
 
       // Preferences (the scoring rules save themselves in their own editor).
       if (defaultMarketplace) payload.default_marketplace = defaultMarketplace;
+
+      // LLM config — send provider/model always, key only when entered.
+      payload.llm_provider = llmProvider;
+      payload.llm_model = llmModel || null;
+      if (llmApiKey) payload.llm_api_key = llmApiKey;
 
       await api.put("/api/v1/settings/", payload);
       setMessage({ type: "success", text: "Settings saved successfully" });
@@ -237,8 +244,15 @@ export default function SettingsPage() {
       {/* LLM Config */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">LLM Provider</CardTitle>
-          <CardDescription>Configure the AI model used for analysis</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">LLM Provider</CardTitle>
+              <CardDescription>The AI model used for review analysis, blueprints, and strategy.</CardDescription>
+            </div>
+            <Badge variant={settings?.has_llm_api_key ? "default" : "secondary"}>
+              {settings?.has_llm_api_key ? "Configured" : "Not Configured"}
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>

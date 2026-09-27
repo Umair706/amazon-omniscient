@@ -155,10 +155,55 @@ def _reset_runtime_for_tests() -> None:
 
 
 def _get_llm_client():
-    """Create an LLM client from settings. Returns None if no API key is configured."""
+    """Create an LLM client from env settings. Returns None if no API key is configured."""
     from app.llm.factory import create_llm_client
     try:
         return create_llm_client(Settings())
+    except Exception as e:
+        logger.warning("LLM client not available (LLM-powered steps will be skipped): %s", e)
+        return None
+
+
+# Which Settings field holds the API key for each provider, so a seller's saved
+# key lands where the factory looks for it.
+_LLM_KEY_FIELD_BY_PROVIDER = {
+    "qwen": "DASHSCOPE_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "local": "OPENAI_API_KEY",
+    "ollama": "OPENAI_API_KEY",
+}
+
+
+async def _effective_llm_settings():
+    """Return Settings with the seller's saved LLM provider/model/key overlaid on env."""
+    base = Settings()
+    from app.models.user_settings import UserSettings
+
+    session_factory = _get_session_factory()
+    async with session_factory() as db:
+        row = (
+            await db.execute(select(UserSettings).where(UserSettings.user_id == "default"))
+        ).scalar_one_or_none()
+
+    if row is None or not row.llm_provider:
+        return base
+
+    updates: dict = {"LLM_PROVIDER": row.llm_provider}
+    if row.llm_model:
+        updates["LLM_MODEL"] = row.llm_model
+    if row.llm_api_key_encrypted:
+        field = _LLM_KEY_FIELD_BY_PROVIDER.get(row.llm_provider.lower())
+        if field:
+            updates[field] = row.llm_api_key_encrypted.decode("utf-8")
+    return base.model_copy(update=updates)
+
+
+async def _get_llm_client_async():
+    """Build the LLM client, preferring the seller's saved settings over env."""
+    from app.llm.factory import create_llm_client
+    try:
+        return create_llm_client(await _effective_llm_settings())
     except Exception as e:
         logger.warning("LLM client not available (LLM-powered steps will be skipped): %s", e)
         return None
@@ -296,7 +341,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
     from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
-    llm_client = _get_llm_client()
+    llm_client = await _get_llm_client_async()
 
     # WHY: one browser session for the whole run, so every page load shares the
     # same cookies and fingerprint instead of looking like a brand-new visitor.
@@ -440,7 +485,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
-    llm_client = _get_llm_client()
+    llm_client = await _get_llm_client_async()
 
     # WHY: one browser session for the whole run (search, product pages, keyword
     # SERPs), so every page load shares the same cookies and fingerprint. It is
@@ -1318,7 +1363,7 @@ async def _refresh_competitor_async(niche_id: int, keyword: str):
     from app.services.competitor_service import CompetitorService
 
     session_factory = _get_session_factory()
-    llm_client = _get_llm_client()
+    llm_client = await _get_llm_client_async()
 
     async with session_factory() as db:
         svc = CompetitorService(db, llm_client)
