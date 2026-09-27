@@ -69,6 +69,10 @@ class RecommendationResponse(BaseModel):
     subscore_breakdown: dict | None = None
     competitor_landscape: dict | None = None
 
+    # The exact rules this niche was scored under, and a short fingerprint of them.
+    scoring_snapshot: dict | None = None
+    scoring_fingerprint: str | None = None
+
     # Rich JSONB payloads
     marketing_channels: list | None = None
     risk_flags: dict | None = None

@@ -10,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 from app.models.niche import Niche
 from app.models.recommendation import Recommendation
+from app.services.scoring_config import (
+    fingerprint_effective_config,
+    resolve_effective_config,
+)
 from app.services.scoring_service import ScoringService
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,12 @@ class RecommendationEngine:
         # Step 1: Compute Omniscient Score
         score_result = self.scorer.compute_score(metrics)
 
+        # Snapshot the exact rules this score was computed under, so the result
+        # stays reproducible and explainable after the settings change.
+        effective_config = resolve_effective_config(
+            metrics.get("marketplace", "US"), metrics.get("scoring_config")
+        )
+
         # Step 2: Build recommendation data
         recommendation_data = {
             "niche_id": niche_id,
@@ -73,6 +83,8 @@ class RecommendationEngine:
             "fail_reasons": score_result["fail_reasons"],
             "data_gaps": metrics.get("data_gaps", []),
             "review_velocity_gap_ratio": metrics.get("review_velocity_gap_ratio"),
+            "scoring_snapshot": effective_config,
+            "scoring_fingerprint": fingerprint_effective_config(effective_config),
         }
 
         # Step 3: Add strategy data
@@ -265,6 +277,9 @@ Return a JSON object:
             # Scoring breakdown
             subscore_breakdown=data.get("sub_scores"),
             competitor_landscape=data.get("competitor_landscape"),
+            # The rules this niche was scored under
+            scoring_snapshot=data.get("scoring_snapshot"),
+            scoring_fingerprint=data.get("scoring_fingerprint"),
             # JSONB payloads
             # marketing_plan["channels"] is itself {"channels": [...]} from recommend_channels().
             # generate_full_marketing_plan sets it to None on LLM failure, so unwrap defensively

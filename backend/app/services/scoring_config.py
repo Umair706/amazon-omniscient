@@ -18,6 +18,14 @@ Four groups of knobs:
 
 from __future__ import annotations
 
+import hashlib
+import json
+
+# Bump ONLY when the scoring logic itself changes (new sub-score, changed
+# formula), not when a default value changes. A recommendation stores this so a
+# result computed under old logic is never silently compared to a new one.
+SCORING_ENGINE_VERSION = "1.0.0"
+
 # ---------------------------------------------------------------------------
 # Built-in defaults (the app's own opinion of a good product)
 # ---------------------------------------------------------------------------
@@ -140,6 +148,34 @@ def resolve_sales_multiplier(marketplace: str, config: dict | None) -> float:
     if value is None:
         return DEFAULT_SALES_MULTIPLIER
     return float(value)
+
+
+def resolve_effective_config(marketplace: str, config: dict | None) -> dict:
+    """Return the fully-resolved rules a niche was scored under (defaults + overrides).
+
+    This is the snapshot stored on a recommendation so the result is reproducible
+    and self-explanatory. `is_custom` says whether the seller overrode anything.
+    """
+    return {
+        "engine_version": SCORING_ENGINE_VERSION,
+        "marketplace": (marketplace or "US").strip().upper(),
+        "is_custom": bool(config),
+        "thresholds": resolve_thresholds(marketplace, config),
+        "weights": resolve_weights(config),
+        "sales_multiplier": resolve_sales_multiplier(marketplace, config),
+        "allow_seasonal": resolve_allow_seasonal(marketplace, config),
+    }
+
+
+def fingerprint_effective_config(effective: dict) -> str:
+    """Return a short stable fingerprint of a resolved config.
+
+    Two recommendations with the same fingerprint were scored under identical
+    rules, so their scores are directly comparable. Different fingerprints are a
+    warning that they are not.
+    """
+    canonical = json.dumps(effective, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
 def validate_scoring_config(config: dict | None) -> list[str]:

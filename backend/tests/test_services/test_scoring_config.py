@@ -2,7 +2,10 @@
 
 from app.services.scoring_config import (
     DEFAULT_WEIGHTS,
+    SCORING_ENGINE_VERSION,
+    fingerprint_effective_config,
     resolve_allow_seasonal,
+    resolve_effective_config,
     resolve_sales_multiplier,
     resolve_thresholds,
     resolve_weights,
@@ -45,6 +48,32 @@ class TestResolve:
     def test_allow_seasonal_defaults_false(self):
         assert resolve_allow_seasonal("AU", None) is False
         assert resolve_allow_seasonal("AU", {"allow_seasonal": {"AU": True}}) is True
+
+
+class TestSnapshot:
+    def test_effective_config_with_no_overrides_is_not_custom(self):
+        eff = resolve_effective_config("AU", None)
+        assert eff["is_custom"] is False
+        assert eff["engine_version"] == SCORING_ENGINE_VERSION
+        assert eff["marketplace"] == "AU"
+        assert eff["thresholds"]["price_max"] == 100
+
+    def test_effective_config_with_overrides_is_custom(self):
+        eff = resolve_effective_config("AU", {"thresholds": {"AU": {"price_max": 150}}})
+        assert eff["is_custom"] is True
+        assert eff["thresholds"]["price_max"] == 150
+
+    def test_same_rules_share_a_fingerprint(self):
+        a = fingerprint_effective_config(resolve_effective_config("AU", None))
+        b = fingerprint_effective_config(resolve_effective_config("AU", None))
+        assert a == b
+
+    def test_different_rules_differ_in_fingerprint(self):
+        default = fingerprint_effective_config(resolve_effective_config("AU", None))
+        custom = fingerprint_effective_config(
+            resolve_effective_config("AU", {"thresholds": {"AU": {"price_max": 150}}})
+        )
+        assert default != custom
 
 
 class TestValidate:
