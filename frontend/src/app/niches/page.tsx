@@ -221,7 +221,7 @@ export default function NicheExplorerPage() {
                           <span className="text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="p-4">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "—"}</td>
+                      <td className="p-4">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price, niche.marketplace ?? undefined) : "—"}</td>
                       <td className="p-4">{niche.monthly_search_volume?.toLocaleString() || "—"}</td>
                       <td className="p-4">{niche.avg_review_count?.toLocaleString() || "—"}</td>
                       <td className="p-4">

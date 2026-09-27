@@ -10,6 +10,7 @@ import { BSRChart, PriceChart } from "@/components/charts";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import api from "@/lib/api";
 import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
+import { InfoHint } from "@/components/info-hint";
 import {
   ArrowLeft,
   DollarSign,
@@ -67,6 +68,7 @@ interface Product {
   product_weight_lbs: number | null;
   product_dimensions: string | null;
   created_at: string;
+  last_scraped_at: string | null;
   // Search position
   search_position: number | null;
   // Enriched fields
@@ -271,6 +273,9 @@ export default function ProductDetailPage() {
     );
   }
 
+  // Prices are in the product's marketplace currency (an AU listing is in AUD).
+  const money = (value: number | string | null | undefined) => formatCurrency(value, product.marketplace ?? undefined);
+
   const estimatedMarginPct =
     product.current_price && product.fba_fee && product.referral_fee_pct
       ? (((product.current_price - product.fba_fee - product.current_price * (product.referral_fee_pct / 100)) / product.current_price) * 100).toFixed(1)
@@ -330,10 +335,10 @@ export default function ProductDetailPage() {
         <div className="flex items-center gap-4 flex-wrap">
           {product.current_price != null && (
             <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold text-primary">{formatCurrency(product.current_price)}</span>
+              <span className="text-2xl font-bold text-primary">{money(product.current_price)}</span>
               {product.list_price != null && product.list_price > product.current_price && (
                 <>
-                  <span className="text-sm text-muted-foreground line-through">{formatCurrency(product.list_price)}</span>
+                  <span className="text-sm text-muted-foreground line-through">{money(product.list_price)}</span>
                   {discountPct && <Badge variant="destructive" className="text-xs">-{discountPct}%</Badge>}
                 </>
               )}
@@ -365,10 +370,10 @@ export default function ProductDetailPage() {
 
       {/* Key Metrics Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard title="Monthly Revenue" value={product.estimated_monthly_revenue ? formatCurrency(product.estimated_monthly_revenue) : "\u2014"} icon={DollarSign} />
+        <StatCard title="Monthly Revenue" value={product.estimated_monthly_revenue ? money(product.estimated_monthly_revenue) : "\u2014"} icon={DollarSign} />
         <StatCard title="Monthly Units" value={product.estimated_monthly_units ? product.estimated_monthly_units.toLocaleString() : "\u2014"} icon={ShoppingCart} />
         <StatCard title="Listing Quality" value={product.listing_quality_score != null ? `${product.listing_quality_score}/100` : "\u2014"} icon={BarChart3} />
-        <StatCard title="FBA Fee" value={product.fba_fee ? formatCurrency(product.fba_fee) : "\u2014"} icon={Truck} />
+        <StatCard title="FBA Fee" value={product.fba_fee ? money(product.fba_fee) : "\u2014"} icon={Truck} />
       </div>
 
       {/* Quick stats row */}
@@ -461,18 +466,21 @@ export default function ProductDetailPage() {
               <div className="space-y-3">
                 <div className="flex justify-between text-sm">
                   <span>Selling Price</span>
-                  <span className="font-semibold">{product.current_price != null ? formatCurrency(product.current_price) : "\u2014"}</span>
+                  <span className="font-semibold">{product.current_price != null ? money(product.current_price) : "\u2014"}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span>FBA Fee</span>
-                  <span className="font-semibold">{product.fba_fee != null ? formatCurrency(product.fba_fee) : "\u2014"}</span>
+                  <span className="font-semibold">{product.fba_fee != null ? money(product.fba_fee) : "\u2014"}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span>Referral Fee</span>
                   <span className="font-semibold">{product.referral_fee_pct != null ? formatPercent(product.referral_fee_pct) : "\u2014"}</span>
                 </div>
                 <div className="border-t pt-3 flex justify-between text-sm">
-                  <span className="font-semibold">Estimated Margin</span>
+                  <span className="font-semibold flex items-center gap-1">
+                    Margin after Amazon fees
+                    <InfoHint text="Price minus FBA and referral fees, over price. It does NOT subtract your product/landed cost, so true net margin is lower." />
+                  </span>
                   <span className={`font-bold ${estimatedMarginPct ? (Number(estimatedMarginPct) >= 30 ? "text-green-600 dark:text-green-400" : Number(estimatedMarginPct) >= 15 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400") : ""}`}>
                     {estimatedMarginPct ? `${estimatedMarginPct}%` : "\u2014"}
                   </span>
@@ -491,24 +499,24 @@ export default function ProductDetailPage() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div>
                 <p className="text-xs text-muted-foreground">Selling Price</p>
-                <p className="text-lg font-bold">{product.current_price != null ? formatCurrency(product.current_price) : "\u2014"}</p>
+                <p className="text-lg font-bold">{product.current_price != null ? money(product.current_price) : "\u2014"}</p>
               </div>
               {product.list_price != null && (
                 <div>
                   <p className="text-xs text-muted-foreground">List Price</p>
-                  <p className="text-lg font-bold text-muted-foreground line-through">{formatCurrency(product.list_price)}</p>
+                  <p className="text-lg font-bold text-muted-foreground line-through">{money(product.list_price)}</p>
                 </div>
               )}
               <div>
                 <p className="text-xs text-muted-foreground">FBA Fee</p>
-                <p className="text-lg font-bold">{product.fba_fee != null ? formatCurrency(product.fba_fee) : "\u2014"}</p>
+                <p className="text-lg font-bold">{product.fba_fee != null ? money(product.fba_fee) : "\u2014"}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Referral Fee</p>
                 <p className="text-lg font-bold">{product.referral_fee_pct != null ? `${product.referral_fee_pct}%` : "\u2014"}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Est. Margin</p>
+                <p className="text-xs text-muted-foreground">Margin after fees</p>
                 <p className={`text-lg font-bold ${estimatedMarginPct ? (Number(estimatedMarginPct) >= 30 ? "text-green-600 dark:text-green-400" : Number(estimatedMarginPct) >= 15 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400") : ""}`}>
                   {estimatedMarginPct ? `${estimatedMarginPct}%` : "\u2014"}
                 </p>
@@ -613,7 +621,7 @@ export default function ProductDetailPage() {
           <CardHeader><CardTitle className="text-lg">Price History</CardTitle></CardHeader>
           <CardContent>
             {priceChartData.length > 0 ? (
-              <PriceChart data={priceChartData} />
+              <PriceChart data={priceChartData} marketplace={product.marketplace ?? undefined} />
             ) : (
               <p className="text-sm text-muted-foreground text-center py-12">
                 No history yet — tracking runs every 6 hours.
@@ -689,9 +697,13 @@ export default function ProductDetailPage() {
         </Card>
       )}
 
-      {/* Footer metadata */}
+      {/* Footer metadata. Show data freshness (last scrape), not just when the
+          row was first created — a seller needs to know how stale the price/BSR is. */}
       <div className="text-xs text-muted-foreground text-right">
-        Added {new Date(product.created_at).toLocaleDateString()} | Product ID: {product.id}
+        {product.last_scraped_at
+          ? `Data updated ${new Date(product.last_scraped_at).toLocaleString()}`
+          : `Added ${new Date(product.created_at).toLocaleDateString()}`}
+        {" | "}Product ID: {product.id}
         {product.niche_id && <span> | Niche ID: {product.niche_id}</span>}
       </div>
     </div>

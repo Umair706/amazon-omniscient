@@ -156,6 +156,7 @@ export interface RecommendationSummary {
   id: number;
   niche_id: number;
   niche_name?: string;
+  marketplace: string | null;
   omniscient_score: string | number;
   confidence_tier: string;
   recommended_sale_price: string | number | null;

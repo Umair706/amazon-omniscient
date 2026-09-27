@@ -225,9 +225,9 @@ export default function NicheDetailPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "—"} icon={DollarSign} hint="Average selling price across the top products scraped for this niche." />
+        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price, niche.marketplace ?? undefined) : "—"} icon={DollarSign} hint="Average selling price across the top products scraped for this niche." />
         <StatCard title="Avg BSR" value={niche.avg_bsr?.toLocaleString() || "—"} icon={TrendingUp} hint="Average Best Sellers Rank of the scraped products. Lower means higher demand." />
-        <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} hint="Estimated units/month for a typical listing, from the average BSR via a category sales curve. Uncalibrated for non-US stores." />
+        <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} hint={`Estimated units/month for a typical listing, from the average BSR via a category sales curve.${niche.marketplace && niche.marketplace !== "US" ? " Uncalibrated for this marketplace — treat as a rough guide." : ""}`} />
         <StatCard title="Search Volume" value={niche.monthly_search_volume?.toLocaleString() || "—"} icon={BarChart3} hint="Monthly searches for the top keyword, from Amazon autocomplete depth. An estimate, not an exact figure." />
         <StatCard title="Avg Rating" value={niche.avg_rating ? `${niche.avg_rating}/5` : "—"} icon={Star} hint="Average star rating across the scraped products." />
         <StatCard title="Avg Reviews" value={niche.avg_review_count?.toLocaleString() || "—"} icon={Users} hint="Average review count across the scraped products — the review moat a new entrant faces." />
@@ -351,7 +351,7 @@ export default function NicheDetailPage() {
                     <th className="p-4">Product</th>
                     <th className="p-4">Price</th>
                     <th className="p-4 whitespace-nowrap">BSR <InfoHint text="Best Sellers Rank scraped from the product page. Lower = sells more. #1 is the category best-seller." /></th>
-                    <th className="p-4 whitespace-nowrap">Est. Sales/mo <InfoHint text="Estimated monthly units, derived from this product's BSR via a category sales curve. Uncalibrated for non-US stores — treat as a rough guide." /></th>
+                    <th className="p-4 whitespace-nowrap">Est. Sales/mo <InfoHint text={`Estimated monthly units, derived from this product's BSR via a category sales curve.${niche.marketplace && niche.marketplace !== "US" ? " Uncalibrated for this marketplace — treat as a rough guide." : ""}`} /></th>
                     <th className="p-4 whitespace-nowrap">Velocity <InfoHint text="Direction of the product's BSR over time. Appears once the 6-hourly tracker has built at least two snapshots; blank on a fresh analysis." /></th>
                     <th className="p-4">Rating</th>
                     <th className="p-4">Reviews</th>
@@ -381,7 +381,7 @@ export default function NicheDetailPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="p-4">{p.current_price ? formatCurrency(p.current_price) : "—"}</td>
+                        <td className="p-4">{p.current_price ? formatCurrency(p.current_price, niche.marketplace ?? undefined) : "—"}</td>
                         <td className="p-4">{(p.bsr_current || p.current_bsr)?.toLocaleString() || "—"}</td>
                         <td className="p-4">{p.estimated_monthly_units != null ? p.estimated_monthly_units.toLocaleString() : "—"}</td>
                         <td className="p-4"><VelocityBadge trend={p.sales_velocity_trend} /></td>
@@ -469,7 +469,7 @@ export default function NicheDetailPage() {
                   </thead>
                   <tbody>
                     {competitors.length === 0 ? (
-                      <tr><td colSpan={6}><EmptyState title="No competitor data" reason={EMPTY_REASONS.noProducts} /></td></tr>
+                      <tr><td colSpan={6}><EmptyState title="No competitor data" reason={EMPTY_REASONS.competitors} /></td></tr>
                     ) : (
                       competitors.map((c) => (
                         <tr key={c.id} className="border-b last:border-0 hover:bg-muted/50">
@@ -535,7 +535,7 @@ export default function NicheDetailPage() {
                         <td className="p-4">{k.search_volume?.toLocaleString() || "—"}</td>
                         <td className="p-4"><CompetitionBadge level={k.competition_level} /></td>
                         <td className="p-4">{k.sponsored_result_count ?? "—"}</td>
-                        <td className="p-4">{k.avg_cpc != null ? `$${Number(k.avg_cpc).toFixed(2)}` : "—"}</td>
+                        <td className="p-4">{k.avg_cpc != null ? formatCurrency(k.avg_cpc, niche.marketplace ?? undefined) : "—"}</td>
                         <td className="p-4"><RelevanceBar score={k.relevance_score != null ? Number(k.relevance_score) : null} /></td>
                         <td className="p-4">
                           <Badge variant="outline" className="text-xs">{k.source || "—"}</Badge>
@@ -557,7 +557,7 @@ export default function NicheDetailPage() {
               <Card>
                 <CardHeader><CardTitle className="text-lg">Cumulative Profit — Bull / Base / Bear</CardTitle></CardHeader>
                 <CardContent>
-                  <ProfitChart bull={bullData} base={baseData} bear={bearData} />
+                  <ProfitChart bull={bullData} base={baseData} bear={bearData} marketplace={niche.marketplace ?? undefined} />
                 </CardContent>
               </Card>
 

@@ -11,7 +11,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, currencySymbol } from "@/lib/utils";
 import type { WeeklyProjection } from "@/types";
 
 interface ProfitChartProps {
@@ -19,9 +19,10 @@ interface ProfitChartProps {
   base: WeeklyProjection[];
   bear: WeeklyProjection[];
   className?: string;
+  marketplace?: string;
 }
 
-export function ProfitChart({ bull, base, bear, className }: ProfitChartProps) {
+export function ProfitChart({ bull, base, bear, className, marketplace }: ProfitChartProps) {
   const data = base.map((week, i) => ({
     week: week.week_number,
     bull: bull[i]?.cumulative_profit ?? 0,
@@ -41,7 +42,7 @@ export function ProfitChart({ bull, base, bear, className }: ProfitChartProps) {
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
           />
           <YAxis
-            tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+            tickFormatter={(v) => `${currencySymbol(marketplace)}${(v / 1000).toFixed(0)}k`}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
           />
           <Tooltip
@@ -51,7 +52,7 @@ export function ProfitChart({ bull, base, bear, className }: ProfitChartProps) {
               borderRadius: "0.5rem",
             }}
             formatter={(value: number, name: string) => [
-              formatCurrency(value),
+              formatCurrency(value, marketplace),
               name.charAt(0).toUpperCase() + name.slice(1),
             ]}
             labelFormatter={(label) => `Week ${label}`}

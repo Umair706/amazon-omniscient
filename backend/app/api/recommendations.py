@@ -63,19 +63,22 @@ async def list_recommendations(
     result = await db.execute(stmt)
     recs = result.scalars().all()
 
-    # Fetch niche names for all recommendations
+    # Fetch niche name + marketplace for all recommendations. The list shows
+    # prices, so it needs the marketplace to format them in the right currency.
     niche_ids = list({r.niche_id for r in recs})
-    niche_names: dict[int, str] = {}
+    niche_info: dict[int, tuple] = {}
     if niche_ids:
         niche_result = await db.execute(
-            select(Niche.id, Niche.name).where(Niche.id.in_(niche_ids))
+            select(Niche.id, Niche.name, Niche.marketplace).where(Niche.id.in_(niche_ids))
         )
-        niche_names = {row.id: row.name for row in niche_result.all()}
+        niche_info = {row.id: (row.name, row.marketplace) for row in niche_result.all()}
 
     items = []
     for r in recs:
         data = RecommendationResponse.model_validate(r)
-        data.niche_name = niche_names.get(r.niche_id)
+        name, marketplace = niche_info.get(r.niche_id, (None, None))
+        data.niche_name = name
+        data.marketplace = marketplace
         items.append(data)
 
     return RecommendationListResponse(

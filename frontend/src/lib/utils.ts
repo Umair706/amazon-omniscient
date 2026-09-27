@@ -10,6 +10,11 @@ const MARKETPLACE_CURRENCY: Record<string, { currency: string; locale: string; s
   AU: { currency: "AUD", locale: "en-AU", symbol: "A$" },
 };
 
+// The currency symbol alone (e.g. "A$"), for compact chart axes.
+export function currencySymbol(marketplace: string = "US"): string {
+  return (MARKETPLACE_CURRENCY[marketplace] || MARKETPLACE_CURRENCY.US).symbol;
+}
+
 export function formatCurrency(
   value: number | string | null | undefined,
   marketplace: string = "US",

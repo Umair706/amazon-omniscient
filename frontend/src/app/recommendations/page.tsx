@@ -88,16 +88,16 @@ export default function RecommendationsPage() {
                     <div>
                       <h3 className="font-semibold">{rec.niche_name}</h3>
                       <div className="flex gap-4 text-sm text-muted-foreground mt-1">
-                        <span>Price: {formatCurrency(rec.recommended_sale_price)}</span>
+                        <span>Price: {formatCurrency(rec.recommended_sale_price, rec.marketplace ?? undefined)}</span>
                         <span>Margin: {rec.estimated_net_margin_pct != null ? `${parseFloat(String(rec.estimated_net_margin_pct)).toFixed(1)}%` : "N/A"}</span>
                         <span>Break-even: Week {rec.break_even_week_base || "N/A"}</span>
-                        <span>Capital: {formatCurrency(rec.total_launch_capital)}</span>
+                        <span>Capital: {formatCurrency(rec.total_launch_capital, rec.marketplace ?? undefined)}</span>
                       </div>
                     </div>
                   </div>
                   <div className="text-right">
                     <Badge variant={rec.confidence_tier === "HIGH" ? "default" : "secondary"}>
-                      {rec.confidence_tier}
+                      {rec.confidence_tier?.replace(/_/g, " ")}
                     </Badge>
                     <p className="text-xs text-muted-foreground mt-1">
                       {rec.generated_at ? new Date(rec.generated_at).toLocaleDateString() : "N/A"}

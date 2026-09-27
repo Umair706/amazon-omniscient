@@ -161,6 +161,7 @@ export default function DiscoverPage() {
                   <span>Demand: {c.volume_tier.replace("_", " ")}</span>
                   <span>{c.total_results.toLocaleString()} listings</span>
                   <span>{c.brand_count} brands</span>
+                  <span>{c.sponsored_count} sponsored</span>
                 </div>
                 <Button size="sm" className="mt-3" onClick={() => analyze(c.keyword)}>
                   <Sparkles className="h-4 w-4 mr-2" />

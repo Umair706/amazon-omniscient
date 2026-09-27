@@ -111,7 +111,7 @@ export function RecentNichesTable() {
                       <span className="text-muted-foreground">&mdash;</span>
                     )}
                   </td>
-                  <td className="py-3">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "\u2014"}</td>
+                  <td className="py-3">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price, niche.marketplace ?? undefined) : "\u2014"}</td>
                   <td className="py-3">{niche.monthly_search_volume?.toLocaleString() || "\u2014"}</td>
                   <td className="py-3">
                     <Badge variant={niche.confidence_tier === "HIGH" ? "default" : "secondary"}>

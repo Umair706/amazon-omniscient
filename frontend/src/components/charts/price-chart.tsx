@@ -20,9 +20,10 @@ interface PriceDataPoint {
 interface PriceChartProps {
   data: PriceDataPoint[];
   className?: string;
+  marketplace?: string;
 }
 
-export function PriceChart({ data, className }: PriceChartProps) {
+export function PriceChart({ data, className, marketplace }: PriceChartProps) {
   const formatted = data.map((d) => ({
     time: new Date(d.time).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     price: d.price,
@@ -39,7 +40,7 @@ export function PriceChart({ data, className }: PriceChartProps) {
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
           />
           <YAxis
-            tickFormatter={(v) => `$${v}`}
+            tickFormatter={(v) => formatCurrency(v, marketplace)}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
             domain={["auto", "auto"]}
           />
@@ -49,7 +50,7 @@ export function PriceChart({ data, className }: PriceChartProps) {
               border: "1px solid hsl(var(--border))",
               borderRadius: "0.5rem",
             }}
-            formatter={(value: number) => [formatCurrency(value), "Price"]}
+            formatter={(value: number) => [formatCurrency(value, marketplace), "Price"]}
           />
           <Line
             type="monotone"
