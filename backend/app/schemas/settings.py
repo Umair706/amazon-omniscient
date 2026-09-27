@@ -4,8 +4,6 @@ SECURITY: Encrypted API credentials are NEVER exposed in responses.
 Only boolean has_* flags indicate whether credentials have been configured.
 """
 
-from decimal import Decimal
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -37,9 +35,10 @@ class UserSettingsUpdate(BaseModel):
 
     # Preferences
     default_marketplace: str | None = Field(default=None, max_length=20)
-    min_margin_threshold: Decimal | None = Field(default=None, ge=0, le=100)
-    max_review_moat: int | None = Field(default=None, ge=0)
-    allow_seasonal: bool | None = None
+    # The seller's scoring thesis. Shape and validation live in
+    # app/services/scoring_config.py; the settings route validates it before
+    # storing. None here means "not provided" (leave the stored value alone).
+    scoring_config: dict | None = None
 
     @field_validator("default_marketplace")
     @classmethod
@@ -73,9 +72,7 @@ class UserSettingsResponse(BaseModel):
 
     # Preferences
     default_marketplace: str | None = None
-    min_margin_threshold: Decimal | None = None
-    max_review_moat: int | None = None
-    allow_seasonal: bool | None = None
+    scoring_config: dict | None = None
 
     @classmethod
     def from_orm_model(cls, obj: object) -> "UserSettingsResponse":
@@ -90,7 +87,5 @@ class UserSettingsResponse(BaseModel):
             has_ads_api_credentials=obj.ads_api_credentials_encrypted is not None,  # type: ignore[attr-defined]
             has_alibaba_credentials=obj.alibaba_credentials_encrypted is not None,  # type: ignore[attr-defined]
             default_marketplace=obj.default_marketplace,  # type: ignore[attr-defined]
-            min_margin_threshold=obj.min_margin_threshold,  # type: ignore[attr-defined]
-            max_review_moat=obj.max_review_moat,  # type: ignore[attr-defined]
-            allow_seasonal=obj.allow_seasonal,  # type: ignore[attr-defined]
+            scoring_config=obj.scoring_config,  # type: ignore[attr-defined]
         )

@@ -144,7 +144,7 @@ class TestHardFilters:
 
 
 class TestSellerThresholdOverrides:
-    """A seller's own thresholds replace the marketplace defaults."""
+    """A seller's own thresholds (in scoring_config) replace the marketplace defaults."""
 
     def test_margin_override_can_reject_a_normally_passing_margin(self, scorer, sample_metrics):
         # A 30% margin passes the default 25% floor, but a seller who demands
@@ -152,7 +152,7 @@ class TestSellerThresholdOverrides:
         sample_metrics["pre_ppc_margin_pct"] = 30
         assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
 
-        sample_metrics["min_margin_override"] = 40
+        sample_metrics["scoring_config"] = {"thresholds": {"US": {"margin_min": 40}}}
         result = scorer.compute_score(sample_metrics)
         assert result["pass_all_filters"] is False
         assert any("margin" in r.lower() for r in result["fail_reasons"])
@@ -163,8 +163,16 @@ class TestSellerThresholdOverrides:
         sample_metrics["median_competitor_reviews"] = 3000
         assert scorer.compute_score(sample_metrics)["pass_all_filters"] is False
 
-        sample_metrics["review_moat_override"] = 5000
+        sample_metrics["scoring_config"] = {"thresholds": {"US": {"review_moat_max": 5000}}}
         assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+
+    def test_price_band_override_can_reject_a_normally_passing_price(self, scorer, sample_metrics):
+        # Whatever the sample price is, a narrow band above it should reject it.
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+        sample_metrics["scoring_config"] = {"thresholds": {"US": {"price_min": 200, "price_max": 300}}}
+        result = scorer.compute_score(sample_metrics)
+        assert result["pass_all_filters"] is False
+        assert any("price" in r.lower() for r in result["fail_reasons"])
 
     def test_no_override_leaves_marketplace_default_untouched(self, scorer, sample_metrics):
         # A missing override must not change the shared class-level defaults.
@@ -172,6 +180,20 @@ class TestSellerThresholdOverrides:
         result = scorer.compute_score(sample_metrics)
         assert result["pass_all_filters"] is False
         assert ScoringService.MARKETPLACE_THRESHOLDS["US"]["review_moat_max"] == 2000
+
+
+class TestWeightOverrides:
+    """A seller can retune how the sub-scores combine."""
+
+    def test_full_weight_override_changes_the_score(self, scorer, sample_metrics):
+        base = scorer.compute_score(sample_metrics)["omniscient_score"]
+        # Put all the weight on demand; the composite becomes the demand score.
+        weights = {k: 0.0 for k in ScoringService.WEIGHTS}
+        weights["demand"] = 1.0
+        sample_metrics["scoring_config"] = {"weights": weights}
+        retuned = scorer.compute_score(sample_metrics)
+        assert retuned["omniscient_score"] != base
+        assert retuned["omniscient_score"] == round(retuned["sub_scores"]["demand"], 1)
 
 
 class TestConfidenceTiers:

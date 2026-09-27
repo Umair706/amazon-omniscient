@@ -462,6 +462,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         )
         await db.commit()
 
+        # Load the seller's scoring config once for this run. It tunes the hard
+        # filters and sub-score weights (applied later, at scoring) and the sales
+        # multiplier (applied wherever a BSR becomes a unit estimate).
+        from app.services.scoring_config import resolve_sales_multiplier
+        from app.workers.pipeline_steps.seller_overrides import load_scoring_config
+        scoring_config = await load_scoring_config(db)
+        sales_multiplier = resolve_sales_multiplier(marketplace, scoring_config)
+
         if options.get("force"):
             from app.workers.pipeline_steps.reset import reset_niche_analysis_data
             await reset_niche_analysis_data(db, niche_id)
@@ -517,7 +525,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # Scrape individual product pages for detailed data
             from app.workers.pipeline_steps.product_details import scrape_product_details
-            detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper, marketplace)
+            detailed_products = await scrape_product_details(
+                db, products_data[:MAX_DETAILED_PRODUCTS], scraper, marketplace,
+                sales_multiplier=sales_multiplier,
+            )
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
@@ -813,16 +824,13 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         from app.services.market_signals import apply_supplier_summary
 
         metrics = _build_base_metrics(
-            competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace,
+            competitor_landscape, detailed_products, keyword_research_summary,
+            marketplace=marketplace, sales_multiplier=sales_multiplier,
         )
 
-        # A seller's own thresholds (min margin, max review moat, seasonal) override
-        # the marketplace defaults. NULL settings fall back to those defaults.
-        from app.workers.pipeline_steps.seller_overrides import (
-            apply_seller_overrides,
-            load_seller_overrides,
-        )
-        apply_seller_overrides(metrics, await load_seller_overrides(db))
+        # Carry the seller's config into the metrics so ScoringService applies
+        # their thresholds and weights. None means the built-in defaults apply.
+        metrics["scoring_config"] = scoring_config
 
         from app.workers.pipeline_steps.review_velocity import apply_review_velocity
         await apply_review_velocity(
@@ -1847,6 +1855,7 @@ def _build_base_metrics(
     detailed_products: list[dict],
     keyword_research_summary: dict | None = None,
     marketplace: str = "US",
+    sales_multiplier: float = 1.0,
 ) -> dict:
     """Build base metrics dict from competitor data and scraped products."""
     metrics = {
@@ -1936,7 +1945,9 @@ def _build_base_metrics(
     # Compute estimated_monthly_sales from BSR using regression model
     if not metrics["estimated_monthly_sales"] and metrics.get("avg_bsr"):
         from app.core.bsr_regression import BSRSalesEstimator
-        estimator = BSRSalesEstimator(marketplace=metrics.get("marketplace", "US"))
+        estimator = BSRSalesEstimator(
+            marketplace=metrics.get("marketplace", "US"), sales_multiplier=sales_multiplier,
+        )
         metrics["estimated_monthly_sales"] = estimator.estimate_monthly_sales(
             bsr=int(metrics["avg_bsr"]),
             category=metrics.get("category", "default"),

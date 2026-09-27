@@ -1,8 +1,7 @@
 """User settings model — per-user API credentials and preferences."""
 
-from decimal import Decimal
-
-from sqlalchemy import BigInteger, Boolean, Integer, LargeBinary, Numeric, String
+from sqlalchemy import BigInteger, LargeBinary, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, TimestampMixin
@@ -25,10 +24,7 @@ class UserSettings(TimestampMixin, Base):
     default_marketplace: Mapped[str | None] = mapped_column(
         String(20), server_default="US"
     )
-    # NULL means "use the smart per-marketplace default" (US and AU differ).
-    # A value here is a deliberate seller override of that default.
-    min_margin_threshold: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
-    max_review_moat: Mapped[int | None] = mapped_column(Integer)
-    allow_seasonal: Mapped[bool | None] = mapped_column(
-        Boolean, server_default="false"
-    )
+    # The seller's tuning of the scoring thesis: thresholds, weights, sales
+    # multiplier, and seasonal allowance. Shape and defaults live in
+    # app/services/scoring_config.py. NULL means "use the built-in defaults".
+    scoring_config: Mapped[dict | None] = mapped_column(JSONB)

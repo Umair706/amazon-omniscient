@@ -37,7 +37,8 @@ _EMPTY_VALUES = (None, "", [], {})
 
 
 async def scrape_product_details(
-    db: AsyncSession, products_data: list[dict], scraper: ScraperService, marketplace: str = "US"
+    db: AsyncSession, products_data: list[dict], scraper: ScraperService,
+    marketplace: str = "US", sales_multiplier: float = 1.0,
 ) -> list[dict]:
     """Scrape each product's detail page, save it onto its Product row, and return the detail dicts."""
     detailed = []
@@ -49,7 +50,7 @@ async def scrape_product_details(
         if not detail:
             continue
         detailed.append(detail)
-        await _save_detail_in_savepoint(db, asin, detail, marketplace)
+        await _save_detail_in_savepoint(db, asin, detail, marketplace, sales_multiplier)
     await db.commit()
     return detailed
 
@@ -63,24 +64,28 @@ async def _scrape_one_product_page(scraper: ScraperService, asin: str) -> dict |
         return None
 
 
-async def _save_detail_in_savepoint(db: AsyncSession, asin: str, detail: dict, marketplace: str) -> None:
+async def _save_detail_in_savepoint(
+    db: AsyncSession, asin: str, detail: dict, marketplace: str, sales_multiplier: float = 1.0,
+) -> None:
     """Save one product's detail. A failure rolls back only this product's changes."""
     # WHY: without a savepoint one failed insert leaves the whole session
     # unusable, so every later product and the final commit would fail too.
     try:
         async with db.begin_nested():
-            await _save_detail(db, asin, detail, marketplace)
+            await _save_detail(db, asin, detail, marketplace, sales_multiplier)
     except Exception as e:
         logger.warning("Failed to save details for %s (rolled back to savepoint): %s", asin, e)
 
 
-async def _save_detail(db: AsyncSession, asin: str, detail: dict, marketplace: str) -> None:
+async def _save_detail(
+    db: AsyncSession, asin: str, detail: dict, marketplace: str, sales_multiplier: float = 1.0,
+) -> None:
     """Copy the detail onto the stored product and record its first history snapshot."""
     product = (await db.execute(select(Product).where(Product.asin == asin))).scalar_one_or_none()
     if product is None:
         return
     apply_detail_to_product(product, detail)
-    _apply_derived_economics(db, product, detail, marketplace)
+    _apply_derived_economics(db, product, detail, marketplace, sales_multiplier)
     # WHY: a cache hit returns a page that may be up to 24h old. Recording it
     # under today's timestamp would corrupt the BSR/price/stock history the
     # velocity and trend code reads, so only a live scrape gets a snapshot.
@@ -102,7 +107,9 @@ def apply_detail_to_product(product: Product, detail: dict) -> None:
         product.date_first_available = date_first_available
 
 
-def _apply_derived_economics(db: AsyncSession, product: Product, detail: dict, marketplace: str) -> None:
+def _apply_derived_economics(
+    db: AsyncSession, product: Product, detail: dict, marketplace: str, sales_multiplier: float = 1.0,
+) -> None:
     """Fill the per-product economics the UI shows: monthly units/revenue, listing quality, fees.
 
     These are derived from data already on the product (BSR, price, category, listing
@@ -124,7 +131,7 @@ def _apply_derived_economics(db: AsyncSession, product: Product, detail: dict, m
     bsr = detail.get("current_bsr")
     category_name = detail.get("bsr_category")
     if bsr:
-        units = BSRSalesEstimator(marketplace).estimate_monthly_sales(int(bsr), category_name or "default")
+        units = BSRSalesEstimator(marketplace, sales_multiplier).estimate_monthly_sales(int(bsr), category_name or "default")
         product.estimated_monthly_units = units
         if price:
             product.estimated_monthly_revenue = round(units * price, 2)

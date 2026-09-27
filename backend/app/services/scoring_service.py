@@ -2,6 +2,14 @@
 
 import logging
 
+from app.services.scoring_config import (
+    DEFAULT_MARKETPLACE_THRESHOLDS,
+    DEFAULT_WEIGHTS,
+    resolve_allow_seasonal,
+    resolve_thresholds,
+    resolve_weights,
+)
+
 logger = logging.getLogger(__name__)
 
 # Sub-score used when 1688 returned no suppliers at all. WHY 50: neutral, so an
@@ -39,42 +47,11 @@ class ScoringService:
     - Review velocity trap
     """
 
-    # Sub-score weights
-    WEIGHTS = {
-        "demand": 0.15,
-        "competition": 0.15,
-        "revenue": 0.10,
-        "margin": 0.15,
-        "trend": 0.10,
-        "review_feasibility": 0.10,
-        "supplier": 0.10,
-        "ppc_viability": 0.10,
-        "launch_feasibility": 0.05,
-    }
-
-    # Marketplace-specific hard filter thresholds
-    # AU has: wider price range (AUD), lower review moat (smaller market),
-    # higher BSR threshold (fewer sellers), same margin requirement
-    MARKETPLACE_THRESHOLDS = {
-        "US": {
-            "price_min": 15,
-            "price_max": 70,
-            "review_moat_max": 2000,
-            "bsr_max": 50000,
-            "margin_min": 25,
-            "amazon_dominance_max": 30,
-            "review_velocity_max": 5.0,
-        },
-        "AU": {
-            "price_min": 20,   # AUD — slightly higher floor due to currency
-            "price_max": 100,  # AUD — higher ceiling
-            "review_moat_max": 500,  # AU has far fewer reviews per product
-            "bsr_max": 20000,  # AU catalog is smaller, BSR ranks are lower
-            "margin_min": 25,  # Same margin requirement
-            "amazon_dominance_max": 30,
-            "review_velocity_max": 3.0,  # Tighter in smaller market
-        },
-    }
+    # The built-in defaults live in scoring_config.py (the single source of
+    # truth a seller's overrides build on). These aliases keep them reachable
+    # as ScoringService.WEIGHTS / .MARKETPLACE_THRESHOLDS for callers and tests.
+    WEIGHTS = DEFAULT_WEIGHTS
+    MARKETPLACE_THRESHOLDS = DEFAULT_MARKETPLACE_THRESHOLDS
 
     def compute_score(self, metrics: dict) -> dict:
         """
@@ -105,10 +82,10 @@ class ScoringService:
             "launch_feasibility": self._score_launch_feasibility(metrics),
         }
 
-        # Weighted total
-        omniscient_score = sum(
-            sub_scores[k] * self.WEIGHTS[k] for k in self.WEIGHTS
-        )
+        # Weighted total. A seller can retune the weights in Settings; when they
+        # have, the resolved set rides in on the metrics. Otherwise use defaults.
+        weights = resolve_weights(metrics.get("scoring_config"))
+        omniscient_score = sum(sub_scores[k] * weights[k] for k in weights)
         omniscient_score = round(min(100, max(0, omniscient_score)), 1)
 
         # Hard filters
@@ -507,37 +484,23 @@ class ScoringService:
     # ------------------------------------------------------------------
     # Hard disqualification filters
     # ------------------------------------------------------------------
-    @staticmethod
-    def _apply_threshold_overrides(thresholds: dict, m: dict) -> None:
-        """Overwrite specific filter thresholds with a seller's own settings.
-
-        A seller can tune two hard filters in Settings to match their own risk
-        appetite. When a metric carries an override, it replaces the
-        marketplace default in place. Missing or None overrides change nothing.
-        """
-        margin_override = m.get("min_margin_override")
-        if margin_override is not None:
-            thresholds["margin_min"] = margin_override
-
-        review_moat_override = m.get("review_moat_override")
-        if review_moat_override is not None:
-            thresholds["review_moat_max"] = review_moat_override
-
     def _apply_hard_filters(self, m: dict) -> list[dict]:
         """Apply 9 hard filters. Each returns pass/fail with reason.
 
-        Thresholds are marketplace-aware — AU market has adjusted values
-        (lower review moat, different price range in AUD, adjusted BSR).
+        Thresholds are marketplace-aware and seller-tunable: the marketplace
+        defaults with any Settings overrides on top (resolved from the config
+        that rides in on the metrics).
         """
-        allow_seasonal = m.get("allow_seasonal", False)
         marketplace = m.get("marketplace", "US")
-        # Start from the marketplace defaults, then let a seller's own settings
-        # override specific filters. Copy first so we never mutate the shared
-        # class-level defaults dict.
-        thresholds = dict(
-            self.MARKETPLACE_THRESHOLDS.get(marketplace, self.MARKETPLACE_THRESHOLDS["US"])
-        )
-        self._apply_threshold_overrides(thresholds, m)
+        config = m.get("scoring_config")
+        thresholds = resolve_thresholds(marketplace, config)
+
+        # An explicit metrics flag wins (used by tests); otherwise the config
+        # decides whether seasonal-only niches are allowed for this marketplace.
+        allow_seasonal = m.get("allow_seasonal")
+        if allow_seasonal is None:
+            allow_seasonal = resolve_allow_seasonal(marketplace, config)
+
         filters = []
 
         # Determine currency symbol for display
