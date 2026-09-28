@@ -5,139 +5,85 @@ import { Button } from "@/components/ui/button";
 import api from "@/lib/api";
 import { RefreshCw, Loader2 } from "lucide-react";
 
-type State = "idle" | "running" | "error";
+// The backend owns "is this niche being analyzed" via the niche's status
+// (analyzing -> completed/failed), set by the pipeline. We read that instead of
+// tracking the job on the client, so the running state is correct after a
+// refresh, on another device, and without any client-side bookkeeping.
+const POLL_MS = 4000;
+const ANALYZING = "analyzing";
 
-// Plain-English labels for the pipeline steps the status endpoint reports.
-const STEP_LABELS: Record<string, string> = {
-  loading_products: "Loading products",
-  products_scraped: "Products ready",
-  competitor_analysis: "Analyzing competitors",
-  review_analysis: "Reading reviews",
-  niche_intelligence: "Market intelligence (AI)",
-  product_blueprint: "Product blueprint (AI)",
-  product_spec: "Product spec (AI)",
-  supplier_scraping: "Finding suppliers",
-  supplier_matching: "Matching suppliers (AI)",
-  supplier_analysis: "Costing suppliers",
-  ppc_strategy: "PPC strategy (AI)",
-  review_strategy: "Review strategy (AI)",
-  financial_projections: "Financial projections",
-  marketing_plan: "Marketing plan (AI)",
-  financial_report: "Financial report (AI)",
-  scoring: "Scoring",
-  saving_recommendation: "Saving",
-};
-
-// A re-run can take many minutes on a local model. Persist the running job per
-// niche so a refresh or navigating away and back reconnects to it instead of
-// losing the progress. The Celery task itself always runs in the background.
-const STORAGE_PREFIX = "omni_reanalyze_niche_";
-const STALE_AFTER_MS = 40 * 60 * 1000; // stop tracking a job older than this
-
-interface StoredJob {
-  jobId: string;
-  startedAt: number;
-}
-
-function loadJob(nicheId: number): StoredJob | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + nicheId);
-    if (!raw) return null;
-    const job = JSON.parse(raw) as StoredJob;
-    if (Date.now() - job.startedAt > STALE_AFTER_MS) {
-      localStorage.removeItem(STORAGE_PREFIX + nicheId);
-      return null;
-    }
-    return job;
-  } catch {
-    return null;
-  }
-}
-
-function saveJob(nicheId: number, job: StoredJob) {
-  try {
-    localStorage.setItem(STORAGE_PREFIX + nicheId, JSON.stringify(job));
-  } catch {}
-}
-
-function clearJob(nicheId: number) {
-  try {
-    localStorage.removeItem(STORAGE_PREFIX + nicheId);
-  } catch {}
-}
-
-export function ReanalyzeButton({ nicheId }: { nicheId: number }) {
-  const [state, setState] = useState<State>("idle");
-  const [message, setMessage] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [step, setStep] = useState("");
+export function ReanalyzeButton({ nicheId, status }: { nicheId: number; status: string | null }) {
+  const [running, setRunning] = useState(status === ANALYZING);
+  const [error, setError] = useState("");
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Only treat "not analyzing" as finished once we've actually seen it analyzing,
+  // so the brief gap between starting and the task flipping the status doesn't
+  // read as "done" immediately.
+  const sawAnalyzing = useRef(status === ANALYZING);
 
-  const poll = useCallback((jobId: string) => {
+  const stop = () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = null;
+  };
+
+  const pollStatus = useCallback(() => {
+    stop();
     intervalRef.current = setInterval(async () => {
       try {
-        const res = await api.get(`/api/v1/jobs/${jobId}/status`);
-        const data = res.data;
-        setProgress(data.progress ?? 0);
-        setStep(data.result?.step || "");
-        if (data.status === "completed") {
-          if (intervalRef.current) clearInterval(intervalRef.current);
-          clearJob(nicheId);
-          window.location.reload();
-        } else if (data.status === "failed") {
-          if (intervalRef.current) clearInterval(intervalRef.current);
-          clearJob(nicheId);
-          setState("error");
-          setMessage(data.error || "Re-run failed");
+        const res = await api.get(`/api/v1/niches/${nicheId}`);
+        const s: string | null = res.data?.status ?? null;
+        if (s === ANALYZING) {
+          sawAnalyzing.current = true;
+        } else if (sawAnalyzing.current) {
+          stop();
+          if (s === "failed") {
+            setRunning(false);
+            setError(res.data?.last_error || "Analysis failed");
+          } else {
+            window.location.reload();
+          }
         }
       } catch {
         // transient — keep polling
       }
-    }, 3000);
+    }, POLL_MS);
   }, [nicheId]);
 
-  // Reconnect to an in-flight re-run for this niche after a refresh/navigation.
+  // Resume the running view after a refresh/navigation: the niche's status,
+  // fetched by the page, tells us whether a run is in flight.
   useEffect(() => {
-    const job = loadJob(nicheId);
-    if (job) {
-      setState("running");
-      poll(job.jobId);
+    if (status === ANALYZING) {
+      setRunning(true);
+      sawAnalyzing.current = true;
+      pollStatus();
     }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [nicheId, poll]);
+    return stop;
+  }, [status, pollStatus]);
 
   const start = useCallback(async () => {
-    setState("running");
-    setMessage("");
-    setProgress(0);
-    setStep("");
+    setRunning(true);
+    setError("");
+    sawAnalyzing.current = false;
     try {
-      const res = await api.post("/api/v1/jobs/reanalyze-niche", { niche_id: nicheId });
-      saveJob(nicheId, { jobId: res.data.job_id, startedAt: Date.now() });
-      poll(res.data.job_id);
+      await api.post("/api/v1/jobs/reanalyze-niche", { niche_id: nicheId });
+      pollStatus();
     } catch (err: any) {
-      setState("error");
-      setMessage(err.response?.data?.detail || "Could not start the re-run");
+      setRunning(false);
+      setError(err.response?.data?.detail || "Could not start the re-run");
     }
-  }, [nicheId, poll]);
+  }, [nicheId, pollStatus]);
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <Button variant="outline" size="sm" onClick={start} disabled={state === "running"}>
-        {state === "running" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-        {state === "running" ? "Re-running…" : "Re-run analysis"}
+      <Button variant="outline" size="sm" onClick={start} disabled={running}>
+        {running ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+        {running ? "Analysis running…" : "Re-run analysis"}
       </Button>
       <span className="max-w-[210px] text-right text-[10px] leading-tight text-muted-foreground">
-        {state === "error" ? (
-          <span className="text-destructive">{message}</span>
-        ) : state === "running" ? (
-          <>
-            {progress > 0 ? `${progress}% · ` : ""}{STEP_LABELS[step] || "Working"}
-            <span className="block">Runs in the background — safe to leave or refresh. AI steps use your local model, so it takes a few minutes.</span>
-          </>
+        {error ? (
+          <span className="text-destructive">{error}</span>
+        ) : running ? (
+          "Runs in the background — safe to leave or refresh. AI steps use your local model, so it takes a few minutes."
         ) : (
           "Reuses scraped products; regenerates AI and score without re-scraping."
         )}

@@ -230,7 +230,7 @@ export default function NicheDetailPage() {
           {niche.opportunity_score != null && (
             <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
           )}
-          <ReanalyzeButton nicheId={niche.id} />
+          <ReanalyzeButton nicheId={niche.id} status={niche.status} />
         </div>
       </div>
 
