@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 
 import { useLicense } from "@/lib/use-license";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/logo";
 import {
   BarChart3,
   Compass,
@@ -55,8 +56,8 @@ export function Sidebar() {
   const navContent = (
     <>
       <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-xl font-bold tracking-tight">
-          Omniscient
+        <Link href="/" aria-label="Omniscient home">
+          <Logo />
         </Link>
         <button
           className="md:hidden text-muted-foreground hover:text-foreground"

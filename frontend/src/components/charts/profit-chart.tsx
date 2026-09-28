@@ -20,9 +20,10 @@ interface ProfitChartProps {
   bear: WeeklyProjection[];
   className?: string;
   marketplace?: string;
+  breakEvenWeek?: number | null;
 }
 
-export function ProfitChart({ bull, base, bear, className, marketplace }: ProfitChartProps) {
+export function ProfitChart({ bull, base, bear, className, marketplace, breakEvenWeek }: ProfitChartProps) {
   const data = base.map((week, i) => ({
     week: week.week_number,
     bull: bull[i]?.cumulative_profit ?? 0,
@@ -44,6 +45,8 @@ export function ProfitChart({ bull, base, bear, className, marketplace }: Profit
           <YAxis
             tickFormatter={(v) => `${currencySymbol(marketplace)}${(v / 1000).toFixed(0)}k`}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+            width={64}
+            label={{ value: "Cumulative profit", angle: -90, position: "insideLeft", style: { fill: "hsl(var(--muted-foreground))", fontSize: 11 } }}
           />
           <Tooltip
             contentStyle={{
@@ -58,7 +61,13 @@ export function ProfitChart({ bull, base, bear, className, marketplace }: Profit
             labelFormatter={(label) => `Week ${label}`}
           />
           <Legend />
-          <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeDasharray="3 3" />
+          {/* y=0 is break-even: above it the venture is in profit. */}
+          <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeDasharray="3 3"
+            label={{ value: "Break-even", position: "insideBottomLeft", style: { fill: "hsl(var(--muted-foreground))", fontSize: 10 } }} />
+          {breakEvenWeek ? (
+            <ReferenceLine x={breakEvenWeek} stroke="hsl(var(--primary))" strokeDasharray="4 2"
+              label={{ value: `Base break-even wk ${breakEvenWeek}`, position: "top", style: { fill: "hsl(var(--primary))", fontSize: 10 } }} />
+          ) : null}
           <Line
             type="monotone"
             dataKey="bull"

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
@@ -70,6 +70,13 @@ interface KeywordItem {
 }
 
 type TabId = "overview" | "products" | "competitors" | "keywords" | "financials";
+
+// The first week a scenario's running profit turns non-negative, or null if it
+// never does within the projection. Used to annotate the profit chart.
+function breakEvenWeekFor(projection: Array<{ week_number: number; cumulative_profit: number }>): number | null {
+  const hit = projection.find((p) => p.cumulative_profit >= 0);
+  return hit ? hit.week_number : null;
+}
 
 function VelocityBadge({ trend }: { trend: string | null }) {
   if (!trend) return <span className="text-muted-foreground">—</span>;
@@ -555,14 +562,49 @@ export default function NicheDetailPage() {
           {baseData.length > 0 ? (
             <>
               <Card>
-                <CardHeader><CardTitle className="text-lg">Cumulative Profit — Bull / Base / Bear</CardTitle></CardHeader>
-                <CardContent>
-                  <ProfitChart bull={bullData} base={baseData} bear={bearData} marketplace={niche.marketplace ?? undefined} />
+                <CardHeader>
+                  <CardTitle className="text-lg">Cumulative profit over the first year</CardTitle>
+                  <CardDescription>
+                    Each line is your running total profit, week by week. Below the dotted line you are still in the red;
+                    where a line crosses it is that scenario&apos;s break-even. Base is the expected case, Bull the optimistic one, Bear the pessimistic one.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ProfitChart
+                    bull={bullData} base={baseData} bear={bearData}
+                    marketplace={niche.marketplace ?? undefined}
+                    breakEvenWeek={breakEvenWeekFor(baseData)}
+                  />
+                  {/* Concrete numbers per scenario, so the chart isn't the only takeaway. */}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {[
+                      { label: "Bull (best case)", data: bullData, tone: "text-tier1" },
+                      { label: "Base (expected)", data: baseData, tone: "text-primary" },
+                      { label: "Bear (worst case)", data: bearData, tone: "text-rejected" },
+                    ].map(({ label, data, tone }) => {
+                      const be = breakEvenWeekFor(data);
+                      const final = data.length ? data[data.length - 1].cumulative_profit : 0;
+                      return (
+                        <div key={label} className="rounded-lg border bg-muted/30 p-3">
+                          <p className={`text-sm font-semibold ${tone}`}>{label}</p>
+                          <div className="mt-1 space-y-0.5 text-sm">
+                            <div className="flex justify-between"><span className="text-muted-foreground">Break-even</span><span className="font-medium">{be ? `Week ${be}` : "Not in year 1"}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">Profit by week 52</span><span className="font-medium">{formatCurrency(final, niche.marketplace ?? undefined)}</span></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader><CardTitle className="text-lg">Weekly Sales & Review Growth (Base)</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle className="text-lg">Weekly units sold and reviews (expected case)</CardTitle>
+                  <CardDescription>
+                    Units sold per week and the review count building up alongside, for the base scenario. Reviews lag sales, which is why early weeks are the hardest.
+                  </CardDescription>
+                </CardHeader>
                 <CardContent>
                   <SalesChart projections={baseData} />
                 </CardContent>
