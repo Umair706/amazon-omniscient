@@ -116,6 +116,26 @@ services:
     ports: !override []          # keep Redis on the internal network only
 ```
 
+## Test the AI features for free (local model, no API key)
+
+The LLM-powered steps (review analysis, product blueprint, PPC and marketing
+strategy) normally need a provider key. To try them with no key and no cost,
+run a local model with the bundled Ollama service:
+
+```bash
+# Start the local model server (large image; opt-in via the "llm" profile)
+docker compose --profile llm up -d ollama
+
+# Pull a small but capable model (~2 GB)
+docker compose exec ollama ollama pull qwen2.5:3b
+```
+
+Then in the app, open **Settings → LLM Provider**, choose **Ollama (Local)**,
+set the model to **qwen2.5:3b**, and save. The next analysis will use it. CPU
+inference is slow but free; a larger model (e.g. `qwen2.5:7b`) is more capable
+if your machine can spare the RAM. The containers reach Ollama at
+`http://ollama:11434` automatically (`OLLAMA_BASE_URL`).
+
 ## Where to go next
 
 - `docs/POSITIONING.md` — what this engine does better than Helium 10 / Jungle Scout, and where it doesn't.

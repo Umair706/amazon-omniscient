@@ -45,7 +45,11 @@ def create_llm_client(settings) -> BaseLLMClient:
         from app.llm.openai_client import OpenAIClient
 
         if provider == "ollama":
-            base_url = settings.OPENAI_BASE_URL or "http://localhost:11434/v1"
+            base_url = (
+                getattr(settings, "OLLAMA_BASE_URL", "")
+                or settings.OPENAI_BASE_URL
+                or "http://localhost:11434/v1"
+            )
         else:
             base_url = settings.OPENAI_BASE_URL or "http://localhost:8080/v1"
 

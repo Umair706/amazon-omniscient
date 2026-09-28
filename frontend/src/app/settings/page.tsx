@@ -273,6 +273,13 @@ export default function SettingsPage() {
               <option value="openai">OpenAI (GPT)</option>
               <option value="ollama">Ollama (Local)</option>
             </select>
+            {llmProvider === "ollama" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Free, runs on your machine — no key needed. Start it with{" "}
+                <code className="rounded bg-muted px-1">docker compose --profile llm up -d ollama</code>, then{" "}
+                <code className="rounded bg-muted px-1">docker compose exec ollama ollama pull qwen2.5:3b</code>, and set the model below to <code className="rounded bg-muted px-1">qwen2.5:3b</code>.
+              </p>
+            )}
           </div>
           <div>
             <label className="text-sm font-medium">Model</label>

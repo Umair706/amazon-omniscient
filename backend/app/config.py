@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
+    # Base URL for a local Ollama server. Set by docker-compose to the bundled
+    # ollama service; leave blank to fall back to OPENAI_BASE_URL or localhost.
+    OLLAMA_BASE_URL: str = ""
 
     # ── Proxy ──────────────────────────────────────────────────────────
     PROXY_PROVIDER: str = ""
