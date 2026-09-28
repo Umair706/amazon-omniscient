@@ -9,6 +9,7 @@ import { ScoreBadge } from "@/components/score-badge";
 import { InfoHint } from "@/components/info-hint";
 import { StarButton } from "@/components/star-button";
 import { Breadcrumbs } from "@/components/breadcrumbs";
+import { ReanalyzeButton } from "./reanalyze-button";
 import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
 import { useStars } from "@/lib/use-stars";
 import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
@@ -225,9 +226,12 @@ export default function NicheDetailPage() {
             {marketplaceLabel(niche.marketplace)}
           </Badge>
         </div>
-        {niche.opportunity_score != null && (
-          <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
-        )}
+        <div className="flex flex-col items-end gap-3">
+          {niche.opportunity_score != null && (
+            <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
+          )}
+          <ReanalyzeButton nicheId={niche.id} />
+        </div>
       </div>
 
       {/* Stats */}

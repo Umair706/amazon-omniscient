@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_license
 from app.licensing import FEATURE_MULTI_MARKETPLACE, License
 from app.models.niche import Niche
+from app.models.product import Product
 from app.schemas.common import JobStatusResponse
 from app.workers.celery_app import celery_app
 from app.workers.tasks import run_full_analysis, run_discovery, discover_opportunities
@@ -235,6 +236,55 @@ async def trigger_niche_analysis(
         error=None,
         created_at=now,
         updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/reanalyze-niche — Re-run analysis on an existing niche, no re-scrape
+# ---------------------------------------------------------------------------
+
+
+@router.post("/reanalyze-niche", response_model=JobStatusResponse, status_code=202)
+async def trigger_niche_reanalysis(
+    payload: AnalyzeNicheRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JobStatusResponse:
+    """Re-run the analysis on an existing niche WITHOUT re-scraping Amazon.
+
+    Reuses the products already scraped for the niche and regenerates the
+    derived work — competitor analysis, AI intelligence, suppliers, financials,
+    and the Omniscient Score. Useful after configuring an LLM or changing the
+    scoring rules, when a fresh scrape would be wasteful (or blocked).
+    """
+    niche = (await db.execute(select(Niche).where(Niche.id == payload.niche_id))).scalar_one_or_none()
+    if niche is None:
+        raise HTTPException(status_code=404, detail=f"Niche {payload.niche_id} not found")
+
+    asins = (
+        await db.execute(select(Product.asin).where(Product.niche_id == payload.niche_id))
+    ).scalars().all()
+    if not asins:
+        raise HTTPException(
+            status_code=409,
+            detail="This niche has no scraped products to reuse. Run a full analysis first.",
+        )
+
+    # force=True clears the derived rows (competitors, suppliers, financials,
+    # recommendations) so the re-run does not duplicate them; products and
+    # reviews are kept. product_asins makes the pipeline load those products
+    # instead of scraping the search + product pages again.
+    task = run_full_analysis.delay(
+        niche_id=niche.id,
+        keyword=niche.primary_keyword,
+        marketplace=niche.marketplace or "US",
+        options={"force": True},
+        product_asins=list(asins),
+    )
+
+    now = datetime.now(timezone.utc)
+    return JobStatusResponse(
+        job_id=task.id, status="pending", progress=0, result=None, error=None,
+        created_at=now, updated_at=None,
     )
 
 
