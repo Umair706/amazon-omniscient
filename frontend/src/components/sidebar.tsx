@@ -3,8 +3,13 @@
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useState, useEffect } from "react";
+
+import { useLicense } from "@/lib/use-license";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Logo } from "@/components/logo";
 import {
   BarChart3,
+  Compass,
   Search,
   Star,
   Settings,
@@ -15,6 +20,7 @@ import {
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
+  { href: "/discover", label: "Discover", icon: Compass },
   { href: "/niches", label: "Niche Explorer", icon: Search },
   { href: "/recommendations", label: "Recommendations", icon: Star },
   { href: "/docs", label: "Documentation", icon: BookOpen },
@@ -25,6 +31,7 @@ const STORAGE_KEY = "omniscient_active_job";
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { license, has } = useLicense();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [hasActiveJob, setHasActiveJob] = useState(false);
 
@@ -49,8 +56,8 @@ export function Sidebar() {
   const navContent = (
     <>
       <div className="flex items-center justify-between mb-8">
-        <Link href="/" className="text-xl font-bold tracking-tight">
-          Omniscient
+        <Link href="/" aria-label="Omniscient home">
+          <Logo />
         </Link>
         <button
           className="md:hidden text-muted-foreground hover:text-foreground"
@@ -79,10 +86,14 @@ export function Sidebar() {
           </Link>
         ))}
       </nav>
-      <div className="mt-auto pt-6 border-t">
-        <p className="text-xs text-muted-foreground">
-          Amazon Product Research Engine
-        </p>
+      <div className="mt-auto pt-6 border-t space-y-2">
+        <ThemeToggle />
+        <div className="px-3">
+          <p className="text-xs font-medium capitalize">{license.tier} tier</p>
+          {!has("white_label") && (
+            <p className="text-xs text-muted-foreground mt-1">Powered by Omniscient</p>
+          )}
+        </div>
       </div>
     </>
   );

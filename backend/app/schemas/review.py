@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class ReviewResponse(BaseModel):
@@ -15,7 +15,9 @@ class ReviewResponse(BaseModel):
     product_id: int
     asin: str | None = None
     review_id: str | None = None
-    rating: int = Field(ge=1, le=5)
+    # NOTE: no ge/le bound and no validator on this response field. A scraper mis-parse
+    # that stored a rating outside 1-5 must not 500 the whole reviews list on read.
+    rating: int
     title: str | None = None
     body: str | None = None
     review_date: date | None = None
@@ -23,13 +25,6 @@ class ReviewResponse(BaseModel):
     helpful_votes: int | None = None
     is_vine: bool | None = None
     scraped_at: datetime | None = None
-
-    @field_validator("rating")
-    @classmethod
-    def validate_rating(cls, v: int) -> int:
-        if v < 1 or v > 5:
-            raise ValueError("rating must be between 1 and 5")
-        return v
 
 
 class ReviewPainPointResponse(BaseModel):

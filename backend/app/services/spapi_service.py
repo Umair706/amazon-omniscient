@@ -1,9 +1,11 @@
 """Amazon SP-API service wrapper for product data, fees, and BSR."""
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -13,6 +15,21 @@ from app.core.exceptions import SPAPIError
 from app.core.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# SP-API throttles hard and returns 429 with a Retry-After header. We pace requests a
+# little on the way out and back off (honouring Retry-After) on the way in, so the
+# tracker never hammers a throttled endpoint with more 429s.
+SPAPI_MIN_REQUEST_INTERVAL_SECONDS = 0.5
+SPAPI_MAX_RETRIES = 3
+SPAPI_MAX_BACKOFF_SECONDS = 30
+
+
+def _retry_after_seconds(response: httpx.Response) -> int:
+    """Seconds to wait from a 429's Retry-After header; 2s when absent or unparseable."""
+    try:
+        return max(1, int(response.headers.get("Retry-After", "2")))
+    except (TypeError, ValueError):
+        return 2
 
 # SP-API endpoints (default; overridden per marketplace)
 SP_API_BASE = "https://sellingpartnerapi-na.amazon.com"
@@ -102,6 +119,9 @@ class SPAPIService:
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._http_client = httpx.AsyncClient(timeout=30.0)
+        # Proactive client-side pacing: one request at a time, spaced by a minimum gap.
+        self._request_lock = asyncio.Lock()
+        self._last_request_at = 0.0
 
     async def close(self):
         """Close the HTTP client."""
@@ -148,47 +168,55 @@ class SPAPIService:
         json_body: dict | None = None,
         rate_limit_key: str = "spapi:default",
     ) -> dict:
-        """Make an authenticated request to SP-API."""
+        """Make an authenticated request to SP-API, pacing outbound and backing off on 429."""
         if self.rate_limiter:
             await self.rate_limiter.check_rate(rate_limit_key, max_requests=10, window_seconds=1)
 
-        token = await self._ensure_access_token()
-
-        headers = {
-            "x-amz-access-token": token,
-            "Content-Type": "application/json",
-            "User-Agent": "Omniscient/1.0 (Language=Python)",
-        }
-
         url = f"{self._sp_api_base}{path}"
-
-        try:
-            response = await self._http_client.request(
-                method=method,
-                url=url,
-                params=params,
-                json=json_body,
-                headers=headers,
-            )
+        for attempt in range(SPAPI_MAX_RETRIES + 1):
+            await self._pace()
+            token = await self._ensure_access_token()
+            headers = {
+                "x-amz-access-token": token,
+                "Content-Type": "application/json",
+                "User-Agent": "Omniscient/1.0 (Language=Python)",
+            }
+            try:
+                response = await self._http_client.request(
+                    method=method, url=url, params=params, json=json_body, headers=headers,
+                )
+            except httpx.HTTPError as e:
+                raise SPAPIError(f"SP-API request error: {e}") from e
 
             if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", "2"))
-                raise SPAPIError(
-                    f"SP-API rate limit exceeded",
-                    retry_after=retry_after,
-                )
+                retry_after = min(_retry_after_seconds(response), SPAPI_MAX_BACKOFF_SECONDS)
+                if attempt < SPAPI_MAX_RETRIES:
+                    logger.warning(
+                        "SP-API 429 on %s; backing off %ds (attempt %d/%d)",
+                        path, retry_after, attempt + 1, SPAPI_MAX_RETRIES,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+                raise SPAPIError("SP-API rate limit exceeded after retries", retry_after=retry_after)
 
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise SPAPIError(
+                    f"SP-API request failed ({e.response.status_code}): {e.response.text[:500]}"
+                ) from e
             return response.json()
 
-        except SPAPIError:
-            raise
-        except httpx.HTTPStatusError as e:
-            raise SPAPIError(
-                f"SP-API request failed ({e.response.status_code}): {e.response.text[:500]}"
-            ) from e
-        except Exception as e:
-            raise SPAPIError(f"SP-API request error: {e}") from e
+        # Unreachable: the loop either returns, continues, or raises. Guard for safety.
+        raise SPAPIError("SP-API request exhausted retries")
+
+    async def _pace(self) -> None:
+        """Hold requests to at least SPAPI_MIN_REQUEST_INTERVAL_SECONDS apart, one at a time."""
+        async with self._request_lock:
+            elapsed = time.monotonic() - self._last_request_at
+            if elapsed < SPAPI_MIN_REQUEST_INTERVAL_SECONDS:
+                await asyncio.sleep(SPAPI_MIN_REQUEST_INTERVAL_SECONDS - elapsed)
+            self._last_request_at = time.monotonic()
 
     # ------------------------------------------------------------------
     # 1. Get catalog item

@@ -1,56 +1,52 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { StatCard } from "@/components/stat-card";
 import { AnalyzeDialog } from "@/components/analyze-dialog";
 import { RecentNichesTable } from "@/components/recent-niches-table";
-import { BarChart3, TrendingUp, Target, DollarSign, AlertTriangle, RefreshCw } from "lucide-react";
+import { BarChart3, TrendingUp, Target, DollarSign, AlertTriangle, RefreshCw, Compass, Search, FileText, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { ScoreBadge } from "@/components/score-badge";
+import { formatCurrency } from "@/lib/utils";
+import { marketplaceLabel } from "@/lib/marketplace";
 import api from "@/lib/api";
-
-interface DashboardStats {
-  total_niches: number;
-  avg_score: number;
-  high_confidence_count: number;
-  total_recommendations: number;
-}
+import type { NicheStats, RecommendationSummary } from "@/types";
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [stats, setStats] = useState<NicheStats | null>(null);
+  const [topRec, setTopRec] = useState<RecommendationSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
     setError(null);
     try {
-      const [nichesRes, recsRes, allNiches] = await Promise.all([
-        api.get("/api/v1/niches/", { params: { per_page: 1 } }),
-        api.get("/api/v1/recommendations/", { params: { per_page: 1 } }),
-        api.get("/api/v1/niches/", { params: { per_page: 100 } }),
-      ]);
-      const items = allNiches.data.items || [];
-      const scores = items
-        .filter((n: any) => n.opportunity_score != null)
-        .map((n: any) => n.opportunity_score);
-      const avgScore =
-        scores.length > 0
-          ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length)
-          : 0;
-      const highConf = items.filter((n: any) => n.confidence_tier === "HIGH").length;
-
-      setStats({
-        total_niches: nichesRes.data.total || 0,
-        avg_score: avgScore,
-        high_confidence_count: highConf,
-        total_recommendations: recsRes.data.total || 0,
-      });
+      // The database computes these totals in one query, so this stays
+      // correct no matter how many niches exist (the old version averaged
+      // only the first 100 niches in the browser).
+      const response = await api.get<NicheStats>("/api/v1/niches/stats");
+      setStats(response.data);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Failed to load dashboard data");
     }
   }, []);
 
+  // The best-scoring recommendation, to feature as the hero. The list is
+  // ordered by score, so the first item is the top opportunity.
+  const fetchTopRec = useCallback(async () => {
+    try {
+      const res = await api.get("/api/v1/recommendations/", { params: { per_page: 1 } });
+      setTopRec(res.data?.items?.[0] ?? null);
+    } catch {
+      setTopRec(null);
+    }
+  }, []);
+
   useEffect(() => {
     fetchStats();
-  }, [fetchStats]);
+    fetchTopRec();
+  }, [fetchStats, fetchTopRec]);
 
   return (
     <motion.div
@@ -65,7 +61,10 @@ export default function DashboardPage() {
         transition={{ duration: 0.3 }}
       >
         <h1 className="text-3xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">Overview of your Amazon product research</p>
+        <p className="text-muted-foreground mt-1">
+          Your Amazon product research at a glance.{" "}
+          <Link href="/docs" className="text-primary hover:underline">New here? Read the 2-minute guide</Link>.
+        </p>
       </motion.div>
 
       {error && (
@@ -82,6 +81,27 @@ export default function DashboardPage() {
         </motion.div>
       )}
 
+      {/* Hero: the single best opportunity, so a newcomer knows where to look first. */}
+      {topRec && (
+        <Link href={`/recommendations/${topRec.id}`}>
+          <Card className="hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-transparent">
+            <CardContent className="p-5 flex items-center gap-5">
+              <ScoreBadge score={topRec.omniscient_score} tier={topRec.confidence_tier} size="md" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your top opportunity</p>
+                <h2 className="text-xl font-bold truncate">{topRec.niche_name ?? "Niche"}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {marketplaceLabel(topRec.marketplace)} · Sale price {formatCurrency(topRec.recommended_sale_price, topRec.marketplace ?? undefined)}
+                </p>
+              </div>
+              <Button variant="outline" className="shrink-0 hidden sm:inline-flex">
+                View brief <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
+        </Link>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -92,7 +112,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Average Score"
-          value={stats?.avg_score ? `${stats.avg_score}/100` : "\u2014"}
+          value={stats?.avg_score == null ? "\u2014" : `${Math.round(stats.avg_score)}/100`}
           icon={Target}
           index={1}
         />
@@ -117,7 +137,9 @@ export default function DashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.4 }}
       >
-        <AnalyzeDialog />
+        <Suspense fallback={null}>
+          <AnalyzeDialog />
+        </Suspense>
       </motion.div>
 
       {/* Empty State or Recent Niches */}
@@ -127,15 +149,36 @@ export default function DashboardPage() {
         transition={{ duration: 0.4, delay: 0.5 }}
       >
         {stats && stats.total_niches === 0 && !error ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center space-y-4">
-            <div className="p-4 rounded-full bg-primary/10">
-              <BarChart3 className="h-12 w-12 text-primary" />
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-xl font-semibold">Start here</h2>
+              <p className="text-muted-foreground mt-1">Three steps from an idea to a go/no-go decision.</p>
             </div>
-            <h2 className="text-xl font-semibold">No Niches Analyzed Yet</h2>
-            <p className="text-muted-foreground max-w-md">
-              Enter a keyword above to start your first niche analysis. Omniscient will scrape Amazon,
-              analyze competitors, find suppliers, and generate a scored recommendation.
-            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              {[
+                { n: 1, icon: Compass, title: "Discover niches", body: "No keyword yet? Enter a broad idea and get ranked candidates.", href: "/discover", cta: "Open Discover" },
+                { n: 2, icon: Search, title: "Analyze a keyword", body: "Know the product? Enter its keyword in the box above to run a full analysis.", href: null, cta: "Use the box above" },
+                { n: 3, icon: FileText, title: "Read your brief", body: "Get a scored recommendation with financials, suppliers, and a launch plan.", href: "/recommendations", cta: "View briefs" },
+              ].map((s) => (
+                <Card key={s.n} className="flex flex-col">
+                  <CardContent className="p-5 flex flex-col h-full">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">{s.n}</span>
+                      <s.icon className="h-4 w-4 text-primary" />
+                      <h3 className="font-semibold">{s.title}</h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-2 flex-1">{s.body}</p>
+                    {s.href ? (
+                      <Link href={s.href} className="mt-3">
+                        <Button variant="outline" size="sm" className="w-full">{s.cta}<ArrowRight className="ml-2 h-4 w-4" /></Button>
+                      </Link>
+                    ) : (
+                      <p className="mt-3 text-xs text-muted-foreground italic">{s.cta}</p>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </div>
         ) : (
           <RecentNichesTable />

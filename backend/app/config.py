@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = ""
+    # Base URL for a local Ollama server. Set by docker-compose to the bundled
+    # ollama service; leave blank to fall back to OPENAI_BASE_URL or localhost.
+    OLLAMA_BASE_URL: str = ""
 
     # ── Proxy ──────────────────────────────────────────────────────────
     PROXY_PROVIDER: str = ""
@@ -53,6 +56,10 @@ class Settings(BaseSettings):
     PROXY_PASSWORD: str = ""
 
     # ── Alibaba / 1688 ─────────────────────────────────────────────────
+    # NOTE: APP_KEY/SECRET are reserved for the official Alibaba Open API and
+    # are NOT wired to anything yet — see docs/SUPPLIERS.md for the plan. Only
+    # the 1688 login pair below is used today (by AlibabaLoginService, to warm
+    # a scraping session). Do not assume supplier data works from these keys.
     ALIBABA_APP_KEY: str = ""
     ALIBABA_APP_SECRET: str = ""
     ALIBABA_1688_EMAIL: str = ""
@@ -70,6 +77,19 @@ class Settings(BaseSettings):
     APP_SECRET_KEY: str = "change-me-in-production"
     # Comma-separated list of origins allowed to call the API via CORS.
     ALLOWED_ORIGINS: str = "http://localhost:3000"
+
+    # ── Scoring ────────────────────────────────────────────────────────
+    # WHY off by default: the velocity is derived from Amazon's global ratings count,
+    # which grows faster than written reviews; the 5 %/3 % trap thresholds were set
+    # for reviews. Turn on after checking observed ratios on tracked niches (they are
+    # stored in risk_flags.review_velocity_gap_ratio).
+    REVIEW_VELOCITY_FILTER_ENABLED: bool = False
+
+    # --- Licensing (open-core) ---
+    # The key a customer was issued; empty = free tier. LICENSE_PUBLIC_KEY is only
+    # needed by the maintainer when the public key was not embedded in source.
+    LICENSE_KEY: str = ""
+    LICENSE_PUBLIC_KEY: str = ""
 
     # ── Celery ─────────────────────────────────────────────────────────
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"

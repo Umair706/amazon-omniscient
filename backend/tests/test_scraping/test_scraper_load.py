@@ -126,3 +126,13 @@ async def test_navigation_error_records_timeout_verdict(monkeypatch):
     await scraper._load(URL, SELECTOR, "product")
 
     assert recorded_verdicts == ["timeout", "ok"]
+
+
+async def test_wrong_marketplace_fails_at_once_without_rotating():
+    session = FakeSession(["wrong_marketplace"])
+    with pytest.raises(ScrapingError) as raised:
+        await scraper_with(session)._load(URL, SELECTOR, "product")
+    assert "amazon.com redirected" in str(raised.value)
+    assert "United States" in str(raised.value)
+    assert session.rotations == 0
+    assert session.pages[0].closed

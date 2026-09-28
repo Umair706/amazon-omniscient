@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -10,9 +10,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
 import { StatCard } from "@/components/stat-card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+import { amazonProductUrl } from "@/lib/marketplace";
+import { Breadcrumbs } from "@/components/breadcrumbs";
+import { labelForDataGap } from "@/lib/data-gaps";
+import { ScoredUnder } from "./scored-under";
+import { PpcPlan } from "./ppc-plan";
 import api from "@/lib/api";
+import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
 import {
-  ArrowLeft,
   DollarSign,
   TrendingUp,
   Clock,
@@ -30,6 +35,7 @@ interface RecommendationDetail {
   id: number;
   niche_id: number;
   niche_name: string | null;
+  marketplace: string | null;
   omniscient_score: number;
   confidence_tier: string;
   product_description: string | null;
@@ -51,6 +57,8 @@ interface RecommendationDetail {
   estimated_acos: number | null;
   subscore_breakdown: Record<string, number> | null;
   competitor_landscape: any;
+  scoring_snapshot: any;
+  scoring_fingerprint: string | null;
   risk_flags: any;
   ppc_strategy: any;
   marketing_channels: any;
@@ -67,14 +75,21 @@ interface RecommendationDetail {
 
 type TabId = "overview" | "market-intel" | "competitors" | "product-ideas" | "suppliers" | "reviews" | "product" | "blueprint" | "financials" | "marketing" | "playbook";
 
+const TAB_IDS: TabId[] = ["overview", "market-intel", "competitors", "product-ideas", "suppliers", "reviews", "product", "blueprint", "financials", "marketing", "playbook"];
+
 export default function OpportunityBriefPage() {
   const params = useParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const id = params.id as string;
 
   const [rec, setRec] = useState<RecommendationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabId>("overview");
+  // Active tab lives in the URL (?tab=financials) so brief links deep-link and survive refresh.
+  const urlTab = searchParams.get("tab") as TabId | null;
+  const tab: TabId = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "overview";
+  const setTab = (t: TabId) => router.replace(`/recommendations/${id}?tab=${t}`, { scroll: false });
 
   const fetchRec = useCallback(async () => {
     setLoading(true);
@@ -117,6 +132,11 @@ export default function OpportunityBriefPage() {
 
   if (!rec) return <div className="text-muted-foreground">Recommendation not found.</div>;
 
+  // Amazon-side figures are in the analysis marketplace's currency (an AU niche
+  // is priced in AUD), so format them for that marketplace. Supplier quotes are
+  // sourced in USD and stay USD (see the Suppliers tab).
+  const money = (value: number | string | null | undefined) => formatCurrency(value, rec.marketplace ?? undefined);
+
   const tabs: { id: TabId; label: string }[] = [
     { id: "overview", label: "Overview" },
     { id: "market-intel", label: "Market Intel" },
@@ -141,9 +161,7 @@ export default function OpportunityBriefPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </button>
+          <Breadcrumbs items={[{ label: "Dashboard", href: "/" }, { label: "Recommendations", href: "/recommendations" }, { label: rec.niche_name || "Brief" }]} />
           <h1 className="text-3xl font-bold">
             {rec.niche_name ? `${rec.niche_name.charAt(0).toUpperCase() + rec.niche_name.slice(1)}` : "Product Opportunity Brief"}
           </h1>
@@ -156,7 +174,7 @@ export default function OpportunityBriefPage() {
 
       {/* Key Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard title="Sale Price" value={rec.recommended_sale_price ? formatCurrency(rec.recommended_sale_price) : "—"} icon={DollarSign} />
+        <StatCard title="Sale Price" value={rec.recommended_sale_price ? money(rec.recommended_sale_price) : "—"} icon={DollarSign} />
         <div className="relative">
           <StatCard title="Net Margin" value={rec.estimated_net_margin_pct ? formatPercent(rec.estimated_net_margin_pct) : "—"} icon={TrendingUp} />
           {rec.confidence_tier === "FAIL" && (
@@ -169,7 +187,7 @@ export default function OpportunityBriefPage() {
             <span className="absolute top-2 right-2 text-[10px] text-destructive font-medium">risk-adjusted</span>
           )}
         </div>
-        <StatCard title="Launch Capital" value={rec.total_launch_capital ? formatCurrency(rec.total_launch_capital) : "—"} icon={Target} />
+        <StatCard title="Launch Capital" value={rec.total_launch_capital ? money(rec.total_launch_capital) : "—"} icon={Target} />
       </div>
 
       {/* Tabs */}
@@ -199,7 +217,7 @@ export default function OpportunityBriefPage() {
             <Card>
               <CardHeader><CardTitle className="text-lg">Omniscient Score Breakdown</CardTitle></CardHeader>
               <CardContent>
-                <div className="grid grid-cols-3 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-3">
                   {Object.entries(rec.subscore_breakdown).map(([key, value]) => {
                     const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
                     const score = typeof value === "number" ? value : 0;
@@ -228,7 +246,7 @@ export default function OpportunityBriefPage() {
                   </div>
                   <div className="text-center p-3 rounded-lg bg-muted">
                     <p className="text-xs text-muted-foreground">Avg Price</p>
-                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.price_stats?.avg ? formatCurrency(rec.competitor_landscape.price_stats.avg) : "—"}</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.price_stats?.avg ? money(rec.competitor_landscape.price_stats.avg) : "—"}</p>
                   </div>
                   <div className="text-center p-3 rounded-lg bg-muted">
                     <p className="text-xs text-muted-foreground">Avg Rating</p>
@@ -248,7 +266,7 @@ export default function OpportunityBriefPage() {
                   </div>
                   <div className="text-center p-3 rounded-lg bg-muted">
                     <p className="text-xs text-muted-foreground">Price Range</p>
-                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.price_stats?.min != null ? `${formatCurrency(rec.competitor_landscape.price_stats.min)}-${formatCurrency(rec.competitor_landscape.price_stats.max)}` : "—"}</p>
+                    <p className="text-xl font-bold mt-1">{rec.competitor_landscape.price_stats?.min != null ? `${money(rec.competitor_landscape.price_stats.min)}-${money(rec.competitor_landscape.price_stats.max)}` : "—"}</p>
                   </div>
                   <div className="text-center p-3 rounded-lg bg-muted">
                     <p className="text-xs text-muted-foreground">Vulnerable Competitors</p>
@@ -301,11 +319,11 @@ export default function OpportunityBriefPage() {
                 <div className="space-y-3">
                   <div className="flex justify-between text-sm">
                     <span>30-day Budget</span>
-                    <span className="font-semibold">{rec.ppc_budget_30d ? formatCurrency(rec.ppc_budget_30d) : "—"}</span>
+                    <span className="font-semibold">{rec.ppc_budget_30d ? money(rec.ppc_budget_30d) : "—"}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span>90-day Budget</span>
-                    <span className="font-semibold">{rec.ppc_budget_90d ? formatCurrency(rec.ppc_budget_90d) : "—"}</span>
+                    <span className="font-semibold">{rec.ppc_budget_90d ? money(rec.ppc_budget_90d) : "—"}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span>Break-Even ACOS</span>
@@ -345,7 +363,7 @@ export default function OpportunityBriefPage() {
                   {rec.vine_cost && (
                     <div className="flex justify-between text-sm">
                       <span>Vine Cost</span>
-                      <span className="font-semibold">{formatCurrency(rec.vine_cost)}</span>
+                      <span className="font-semibold">{money(rec.vine_cost)}</span>
                     </div>
                   )}
                 </div>
@@ -384,6 +402,18 @@ export default function OpportunityBriefPage() {
                     ))}
                   </div>
                 )}
+                {rec.risk_flags?.data_gaps?.length > 0 && (
+                  <div className="mt-4 pt-4 border-t space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Data gaps — these inputs are assumptions</p>
+                    {rec.risk_flags.data_gaps.map((gap: string) => (
+                      <div key={gap} className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>{labelForDataGap(gap)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <ScoredUnder snapshot={rec.scoring_snapshot} fingerprint={rec.scoring_fingerprint} />
               </CardContent>
             </Card>
           </div>
@@ -478,8 +508,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No market intelligence available.
+              <CardContent>
+                <EmptyState title="No market intelligence yet" reason={EMPTY_REASONS.llm} icon={TrendingUp} />
               </CardContent>
             </Card>
           )}
@@ -507,14 +537,14 @@ export default function OpportunityBriefPage() {
                           <h4 className="font-semibold text-sm">{p.title || p.asin}</h4>
                           <div className="flex flex-wrap gap-2 items-center mt-1 text-xs text-muted-foreground">
                             <a
-                              href={`https://www.amazon.com/dp/${p.asin}`}
+                              href={amazonProductUrl(p.asin, rec.marketplace)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-primary hover:underline font-mono"
                             >
                               {p.asin}
                             </a>
-                            {p.price != null && <span className="font-semibold text-foreground">{formatCurrency(p.price)}</span>}
+                            {p.price != null && <span className="font-semibold text-foreground">{money(p.price)}</span>}
                             {p.rating != null && <span>{p.rating}&#9733;</span>}
                             {p.review_count != null && <span>{p.review_count.toLocaleString()} reviews</span>}
                             {p.bsr != null && <span>BSR: {p.bsr.toLocaleString()}</span>}
@@ -589,7 +619,7 @@ export default function OpportunityBriefPage() {
                 <CardHeader>
                   <CardTitle className="text-base">{idea.idea_name}</CardTitle>
                   <div className="flex gap-2 flex-wrap">
-                    {idea.target_price && <Badge>Target: {formatCurrency(idea.target_price)}</Badge>}
+                    {idea.target_price && <Badge>Target: {money(idea.target_price)}</Badge>}
                     {idea.estimated_difficulty && <Badge variant="outline">{idea.estimated_difficulty} difficulty</Badge>}
                     {idea.estimated_margin && <Badge variant="outline">{idea.estimated_margin} margin</Badge>}
                   </div>
@@ -653,8 +683,8 @@ export default function OpportunityBriefPage() {
             ))
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No product ideas available.
+              <CardContent>
+                <EmptyState title="No product ideas yet" reason={EMPTY_REASONS.llm} icon={Lightbulb} />
               </CardContent>
             </Card>
           )}
@@ -701,7 +731,7 @@ export default function OpportunityBriefPage() {
                             <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
                               {(s.price_min_usd != null || s.price_max_usd != null) && (
                                 <span>
-                                  {formatCurrency(s.price_min_usd || 0)}-{formatCurrency(s.price_max_usd || 0)}
+                                  {formatCurrency(s.price_min_usd || 0, "US")}-{formatCurrency(s.price_max_usd || 0, "US")} USD
                                 </span>
                               )}
                               {s.moq && <span>MOQ: {s.moq}</span>}
@@ -729,8 +759,8 @@ export default function OpportunityBriefPage() {
             ))
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No per-product supplier matches available.
+              <CardContent>
+                <EmptyState title="No supplier matches" reason={EMPTY_REASONS.suppliers} />
               </CardContent>
             </Card>
           )}
@@ -916,8 +946,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No review intelligence available.
+              <CardContent>
+                <EmptyState title="No review analysis yet" reason={EMPTY_REASONS.llm} icon={Star} />
               </CardContent>
             </Card>
           )}
@@ -927,6 +957,14 @@ export default function OpportunityBriefPage() {
       {/* Product Strategy Tab */}
       {tab === "product" && (
         <div className="space-y-6">
+          {!rec.product_description && (!rec.differentiation_features || rec.differentiation_features.length === 0) && (
+            <Card>
+              <CardContent>
+                <EmptyState title="No product spec yet" reason={EMPTY_REASONS.llm} icon={Lightbulb} />
+              </CardContent>
+            </Card>
+          )}
+
           {rec.product_description && (
             <Card>
               <CardHeader><CardTitle className="text-lg">Differentiation Strategy</CardTitle></CardHeader>
@@ -958,11 +996,11 @@ export default function OpportunityBriefPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="text-center p-4 rounded-lg bg-muted">
                   <p className="text-xs text-muted-foreground">Landed Cost</p>
-                  <p className="text-xl font-bold mt-1">{rec.best_landed_cost ? formatCurrency(rec.best_landed_cost) : "—"}</p>
+                  <p className="text-xl font-bold mt-1">{rec.best_landed_cost ? money(rec.best_landed_cost) : "—"}</p>
                 </div>
                 <div className="text-center p-4 rounded-lg bg-muted">
                   <p className="text-xs text-muted-foreground">Sale Price</p>
-                  <p className="text-xl font-bold mt-1">{rec.recommended_sale_price ? formatCurrency(rec.recommended_sale_price) : "—"}</p>
+                  <p className="text-xl font-bold mt-1">{rec.recommended_sale_price ? money(rec.recommended_sale_price) : "—"}</p>
                 </div>
                 <div className="text-center p-4 rounded-lg bg-muted">
                   <p className="text-xs text-muted-foreground">Net Margin</p>
@@ -970,7 +1008,7 @@ export default function OpportunityBriefPage() {
                 </div>
                 <div className="text-center p-4 rounded-lg bg-muted">
                   <p className="text-xs text-muted-foreground">Launch Capital</p>
-                  <p className="text-xl font-bold mt-1">{rec.total_launch_capital ? formatCurrency(rec.total_launch_capital) : "—"}</p>
+                  <p className="text-xl font-bold mt-1">{rec.total_launch_capital ? money(rec.total_launch_capital) : "—"}</p>
                 </div>
               </div>
             </CardContent>
@@ -993,7 +1031,7 @@ export default function OpportunityBriefPage() {
                       {rec.product_blueprint.product_blueprint.target_price_point > 0 && (
                         <div className="text-center p-3 rounded-lg bg-muted">
                           <p className="text-xs text-muted-foreground">Target Price</p>
-                          <p className="text-lg font-bold">{formatCurrency(rec.product_blueprint.product_blueprint.target_price_point)}</p>
+                          <p className="text-lg font-bold">{money(rec.product_blueprint.product_blueprint.target_price_point)}</p>
                         </div>
                       )}
                       {rec.product_blueprint.product_blueprint.target_rating > 0 && (
@@ -1205,8 +1243,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No product blueprint available. Blueprint is generated from competitor review analysis.
+              <CardContent>
+                <EmptyState title="No product blueprint yet" reason={EMPTY_REASONS.llm} icon={ShieldCheck} />
               </CardContent>
             </Card>
           )}
@@ -1262,7 +1300,7 @@ export default function OpportunityBriefPage() {
                         )}
                       </div>
                       <div className="text-right">
-                        <p className="text-2xl font-bold">{formatCurrency(rec.financial_report.key_metrics.annual_profit_base)}</p>
+                        <p className="text-2xl font-bold">{money(rec.financial_report.key_metrics.annual_profit_base)}</p>
                         <p className="text-xs text-muted-foreground">Annual profit (base)</p>
                       </div>
                     </div>
@@ -1316,14 +1354,14 @@ export default function OpportunityBriefPage() {
                               <div key={i} className={`flex justify-between text-sm py-0.5 ${r.indent ? "pl-4" : ""} ${r.bold ? "font-semibold" : ""} ${r.highlight ? "text-primary" : ""}`}>
                                 <span>{r.label}</span>
                                 <span className={r.negative ? "text-rejected" : ""}>
-                                  {r.isPercent ? r.value : formatCurrency(r.value || 0)}
+                                  {r.isPercent ? r.value : money(r.value || 0)}
                                 </span>
                               </div>
                             );
                           })}
                           <div className="flex justify-between text-sm py-1 mt-2 border-t pt-2">
                             <span className="font-semibold">Break-Even Price</span>
-                            <span>{formatCurrency(u.break_even_price || 0)}</span>
+                            <span>{money(u.break_even_price || 0)}</span>
                           </div>
                           <div className="flex justify-between text-sm py-1">
                             <span className="font-semibold">ROI per Unit</span>
@@ -1359,22 +1397,22 @@ export default function OpportunityBriefPage() {
                           {sections.filter((s: any) => !s.hide).map((s, i) => (
                             <div key={i} className="flex justify-between text-sm">
                               <span>{s.label}</span>
-                              <span>{formatCurrency(s.value || 0)}</span>
+                              <span>{money(s.value || 0)}</span>
                             </div>
                           ))}
                           <div className="flex justify-between text-sm font-bold border-t pt-2 mt-2">
                             <span>Total Launch Capital</span>
-                            <span>{formatCurrency(lc.total_launch_capital || 0)}</span>
+                            <span>{money(lc.total_launch_capital || 0)}</span>
                           </div>
                           {lc.recommended_buffer_15pct > 0 && (
                             <div className="flex justify-between text-sm text-muted-foreground">
                               <span>+ 15% Buffer</span>
-                              <span>{formatCurrency(lc.recommended_buffer_15pct)}</span>
+                              <span>{money(lc.recommended_buffer_15pct)}</span>
                             </div>
                           )}
                           <div className="flex justify-between text-sm font-bold text-primary">
                             <span>Total with Buffer</span>
-                            <span>{formatCurrency(lc.total_with_buffer || lc.total_launch_capital || 0)}</span>
+                            <span>{money(lc.total_with_buffer || lc.total_launch_capital || 0)}</span>
                           </div>
                         </div>
                       );
@@ -1415,7 +1453,7 @@ export default function OpportunityBriefPage() {
                                 const v = rec.financial_report.scenarios[s]?.[row.key];
                                 let display = "—";
                                 if (v != null) {
-                                  if (row.fmt === "currency") display = formatCurrency(v);
+                                  if (row.fmt === "currency") display = money(v);
                                   else if (row.fmt === "pct") display = `${v}%`;
                                   else if (row.fmt === "week") display = `Week ${v}`;
                                   else display = v.toLocaleString();
@@ -1446,8 +1484,8 @@ export default function OpportunityBriefPage() {
                         { label: "Reorder Trigger", value: `${rec.financial_report.reorder_plan.reorder_trigger_units} units left` },
                         { label: "Reorder At", value: rec.financial_report.reorder_plan.reorder_trigger_date_approx },
                         { label: "Reorder Qty", value: `${rec.financial_report.reorder_plan.recommended_reorder_qty} units` },
-                        { label: "Reorder Cost", value: formatCurrency(rec.financial_report.reorder_plan.reorder_cost || 0) },
-                        { label: "Year 1 Inventory", value: formatCurrency(rec.financial_report.reorder_plan.total_year_1_inventory_investment || 0) },
+                        { label: "Reorder Cost", value: money(rec.financial_report.reorder_plan.reorder_cost || 0) },
+                        { label: "Year 1 Inventory", value: money(rec.financial_report.reorder_plan.total_year_1_inventory_investment || 0) },
                       ].map((item, i) => (
                         <div key={i} className="text-center p-3 rounded-lg bg-muted">
                           <p className="text-xs text-muted-foreground">{item.label}</p>
@@ -1483,10 +1521,10 @@ export default function OpportunityBriefPage() {
                             <tr key={i} className="border-b last:border-0">
                               <td className="py-1.5 pr-3 font-mono">{row.week >= 0 ? `+${row.week}` : row.week}</td>
                               <td className="py-1.5 pr-3">{row.event}</td>
-                              <td className="py-1.5 pr-3 text-right text-rejected">{row.cash_out ? formatCurrency(row.cash_out) : ""}</td>
-                              <td className="py-1.5 pr-3 text-right text-tier1">{row.cash_in ? formatCurrency(row.cash_in) : ""}</td>
+                              <td className="py-1.5 pr-3 text-right text-rejected">{row.cash_out ? money(row.cash_out) : ""}</td>
+                              <td className="py-1.5 pr-3 text-right text-tier1">{row.cash_in ? money(row.cash_in) : ""}</td>
                               <td className={`py-1.5 text-right font-medium ${row.balance >= 0 ? "text-tier1" : "text-rejected"}`}>
-                                {formatCurrency(row.balance)}
+                                {money(row.balance)}
                               </td>
                             </tr>
                           ))}
@@ -1524,16 +1562,16 @@ export default function OpportunityBriefPage() {
                             <tr key={m.month} className="border-b last:border-0">
                               <td className="py-1.5 pr-2">{m.month}</td>
                               <td className="py-1.5 pr-2 text-right">{m.units_sold}</td>
-                              <td className="py-1.5 pr-2 text-right">{formatCurrency(m.revenue)}</td>
-                              <td className="py-1.5 pr-2 text-right">{formatCurrency(m.cogs)}</td>
-                              <td className="py-1.5 pr-2 text-right">{formatCurrency(m.amazon_fees)}</td>
-                              <td className="py-1.5 pr-2 text-right">{formatCurrency(m.ppc_spend)}</td>
+                              <td className="py-1.5 pr-2 text-right">{money(m.revenue)}</td>
+                              <td className="py-1.5 pr-2 text-right">{money(m.cogs)}</td>
+                              <td className="py-1.5 pr-2 text-right">{money(m.amazon_fees)}</td>
+                              <td className="py-1.5 pr-2 text-right">{money(m.ppc_spend)}</td>
                               <td className={`py-1.5 pr-2 text-right font-medium ${m.net_profit >= 0 ? "text-tier1" : "text-rejected"}`}>
-                                {formatCurrency(m.net_profit)}
+                                {money(m.net_profit)}
                               </td>
                               <td className="py-1.5 pr-2 text-right">{m.margin_pct}%</td>
                               <td className={`py-1.5 text-right ${m.cumulative_profit >= 0 ? "text-tier1" : "text-rejected"}`}>
-                                {formatCurrency(m.cumulative_profit)}
+                                {money(m.cumulative_profit)}
                               </td>
                             </tr>
                           ))}
@@ -1554,11 +1592,11 @@ export default function OpportunityBriefPage() {
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                   <div>
                     <p className="text-xs text-muted-foreground">Landed Cost</p>
-                    <p className="text-lg font-bold">{rec.best_landed_cost ? formatCurrency(rec.best_landed_cost) : "—"}</p>
+                    <p className="text-lg font-bold">{rec.best_landed_cost ? money(rec.best_landed_cost) : "—"}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Recommended Price</p>
-                    <p className="text-lg font-bold">{rec.recommended_sale_price ? formatCurrency(rec.recommended_sale_price) : "—"}</p>
+                    <p className="text-lg font-bold">{rec.recommended_sale_price ? money(rec.recommended_sale_price) : "—"}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Post-PPC Margin</p>
@@ -1566,7 +1604,7 @@ export default function OpportunityBriefPage() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">PPC Budget (30d)</p>
-                    <p className="text-lg font-bold">{rec.ppc_budget_30d ? formatCurrency(rec.ppc_budget_30d) : "—"}</p>
+                    <p className="text-lg font-bold">{rec.ppc_budget_30d ? money(rec.ppc_budget_30d) : "—"}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Break-Even ACOS</p>
@@ -1574,7 +1612,7 @@ export default function OpportunityBriefPage() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Total Launch Capital</p>
-                    <p className="text-lg font-bold">{rec.total_launch_capital ? formatCurrency(rec.total_launch_capital) : "—"}</p>
+                    <p className="text-lg font-bold">{rec.total_launch_capital ? money(rec.total_launch_capital) : "—"}</p>
                   </div>
                 </div>
               </CardContent>
@@ -1586,6 +1624,7 @@ export default function OpportunityBriefPage() {
       {/* Marketing Tab */}
       {tab === "marketing" && (
         <div className="space-y-6">
+          <PpcPlan ppc={rec.ppc_strategy} marketplace={rec.marketplace ?? undefined} />
           {rec.marketing_channels ? (
             <Card>
               <CardHeader><CardTitle className="text-lg">Marketing Channels</CardTitle></CardHeader>
@@ -1600,22 +1639,20 @@ export default function OpportunityBriefPage() {
                         </div>
                         {ch.strategy && <p className="text-sm text-muted-foreground">{ch.strategy}</p>}
                         {ch.budget_amount && (
-                          <p className="text-sm mt-1">Budget: {formatCurrency(ch.budget_amount)}</p>
+                          <p className="text-sm mt-1">Budget: {money(ch.budget_amount)}</p>
                         )}
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <pre className="text-xs bg-muted p-4 rounded-lg overflow-auto max-h-96">
-                    {JSON.stringify(rec.marketing_channels, null, 2)}
-                  </pre>
+                  <EmptyState title="Marketing channels unavailable" reason={EMPTY_REASONS.llm} />
                 )}
               </CardContent>
             </Card>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No marketing data available.
+              <CardContent>
+                <EmptyState title="No marketing plan yet" reason={EMPTY_REASONS.llm} icon={Megaphone} />
               </CardContent>
             </Card>
           )}
@@ -1631,7 +1668,7 @@ export default function OpportunityBriefPage() {
                 <div>
                   <h2 className="text-xl font-bold">{rec.launch_playbook.playbook_name}</h2>
                   {rec.launch_playbook.total_budget && (
-                    <p className="text-muted-foreground">Total 12-week budget: {formatCurrency(rec.launch_playbook.total_budget)}</p>
+                    <p className="text-muted-foreground">Total 12-week budget: {money(rec.launch_playbook.total_budget)}</p>
                   )}
                 </div>
               )}
@@ -1663,7 +1700,7 @@ export default function OpportunityBriefPage() {
                             <h4 className="font-semibold">Week {week.week}: {week.theme}</h4>
                             {week.budget_allocation && (
                               <span className="text-xs text-muted-foreground">
-                                PPC: {formatCurrency(week.budget_allocation.ppc || 0)}
+                                PPC: {money(week.budget_allocation.ppc || 0)}
                               </span>
                             )}
                           </div>
@@ -1683,8 +1720,8 @@ export default function OpportunityBriefPage() {
             </>
           ) : (
             <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                No launch playbook available.
+              <CardContent>
+                <EmptyState title="No launch playbook yet" reason={EMPTY_REASONS.llm} icon={CheckCircle2} />
               </CardContent>
             </Card>
           )}

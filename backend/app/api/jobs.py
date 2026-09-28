@@ -6,16 +6,42 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_license
+from app.licensing import FEATURE_MULTI_MARKETPLACE, License
 from app.models.niche import Niche
+from app.models.product import Product
 from app.schemas.common import JobStatusResponse
 from app.workers.celery_app import celery_app
-from app.workers.tasks import run_full_analysis, run_discovery
+from app.workers.tasks import run_full_analysis, run_discovery, discover_opportunities
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+async def _guard_marketplace(db: AsyncSession, marketplace: str, license: License) -> None:
+    """Free tier may analyse one marketplace; a second distinct one needs multi_marketplace.
+
+    Raises 402 when the requested marketplace would be the account's second and the
+    license does not grant it. The first marketplace a user ever analyses is always free.
+    """
+    if FEATURE_MULTI_MARKETPLACE in license.features:
+        return
+    used = (await db.execute(select(distinct(Niche.marketplace)))).scalars().all()
+    existing = {m for m in used if m}
+    if existing and marketplace not in existing:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "feature_locked",
+                "feature": FEATURE_MULTI_MARKETPLACE,
+                "message": (
+                    f"The free tier analyses one marketplace ({', '.join(sorted(existing))}). "
+                    f"Analysing '{marketplace}' too needs a license with multi_marketplace. See docs/LICENSING.md."
+                ),
+            },
+        )
 
 # Keywords are interpolated into LLM prompts and Amazon URLs, so we cap
 # their length well below the DB column limit to keep prompts small.
@@ -58,9 +84,9 @@ class AnalyzeKeywordRequest(BaseModel):
         min_length=1, max_length=MAX_KEYWORD_LENGTH, description="Niche keyword to analyze"
     )
     marketplace: str = Field(
-        default="US",
+        default="AU",
         max_length=10,
-        description="Amazon marketplace code (e.g. US, AU)",
+        description="Amazon marketplace code (e.g. AU, US). Defaults to AU.",
     )
     force: bool = Field(
         default=False, description="Force re-analysis if niche already exists"
@@ -74,6 +100,21 @@ class AnalyzeKeywordRequest(BaseModel):
         # NOTE: min_length ran before collapsing, so "   " got past it.
         if not v:
             raise ValueError("keyword must not be blank")
+        return v
+
+
+class DiscoverOpportunitiesRequest(BaseModel):
+    """Payload to discover candidate niches from a broad seed keyword."""
+
+    seed: str = Field(min_length=1, max_length=MAX_KEYWORD_LENGTH, description="Broad seed, e.g. 'kitchen'")
+    marketplace: str = Field(default="AU", max_length=10, description="Amazon marketplace code (default AU).")
+
+    @field_validator("seed")
+    @classmethod
+    def normalise_seed(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("seed must not be blank")
         return v
 
 
@@ -94,10 +135,12 @@ class AnalyzeSubNicheRequest(BaseModel):
 async def trigger_keyword_analysis(
     payload: AnalyzeKeywordRequest,
     db: AsyncSession = Depends(get_db),
+    license: License = Depends(get_license),
 ) -> JobStatusResponse:
     """Trigger analysis from a keyword. Creates the niche if it doesn't exist."""
     keyword = payload.keyword.strip()
     marketplace = payload.marketplace.strip().upper()
+    await _guard_marketplace(db, marketplace, license)
 
     # Check if niche already exists for this marketplace
     result = await db.execute(
@@ -193,6 +236,55 @@ async def trigger_niche_analysis(
         error=None,
         created_at=now,
         updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/reanalyze-niche — Re-run analysis on an existing niche, no re-scrape
+# ---------------------------------------------------------------------------
+
+
+@router.post("/reanalyze-niche", response_model=JobStatusResponse, status_code=202)
+async def trigger_niche_reanalysis(
+    payload: AnalyzeNicheRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JobStatusResponse:
+    """Re-run the analysis on an existing niche WITHOUT re-scraping Amazon.
+
+    Reuses the products already scraped for the niche and regenerates the
+    derived work — competitor analysis, AI intelligence, suppliers, financials,
+    and the Omniscient Score. Useful after configuring an LLM or changing the
+    scoring rules, when a fresh scrape would be wasteful (or blocked).
+    """
+    niche = (await db.execute(select(Niche).where(Niche.id == payload.niche_id))).scalar_one_or_none()
+    if niche is None:
+        raise HTTPException(status_code=404, detail=f"Niche {payload.niche_id} not found")
+
+    asins = (
+        await db.execute(select(Product.asin).where(Product.niche_id == payload.niche_id))
+    ).scalars().all()
+    if not asins:
+        raise HTTPException(
+            status_code=409,
+            detail="This niche has no scraped products to reuse. Run a full analysis first.",
+        )
+
+    # force=True clears the derived rows (competitors, suppliers, financials,
+    # recommendations) so the re-run does not duplicate them; products and
+    # reviews are kept. product_asins makes the pipeline load those products
+    # instead of scraping the search + product pages again.
+    task = run_full_analysis.delay(
+        niche_id=niche.id,
+        keyword=niche.primary_keyword,
+        marketplace=niche.marketplace or "US",
+        options={"force": True, "keep_recommendation": True},
+        product_asins=list(asins),
+    )
+
+    now = datetime.now(timezone.utc)
+    return JobStatusResponse(
+        job_id=task.id, status="pending", progress=0, result=None, error=None,
+        created_at=now, updated_at=None,
     )
 
 
@@ -315,6 +407,27 @@ async def trigger_sub_niche_analysis(
         error=None,
         created_at=now,
         updated_at=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /jobs/discover-opportunities — Rank candidate niches from a broad seed
+# ---------------------------------------------------------------------------
+
+
+@router.post("/discover-opportunities", response_model=JobStatusResponse, status_code=202)
+async def trigger_opportunity_discovery(
+    payload: DiscoverOpportunitiesRequest,
+) -> JobStatusResponse:
+    """Expand a broad seed into ranked candidate niches. No niche is created; results come
+    back in the job's `result.candidates`. Not marketplace-gated — exploring is always free."""
+    marketplace = payload.marketplace.strip().upper()
+    task = discover_opportunities.delay(seed=payload.seed, marketplace=marketplace)
+    now = datetime.now(timezone.utc)
+    return JobStatusResponse(
+        job_id=task.id, status="pending", progress=0,
+        result={"seed": payload.seed, "marketplace": marketplace}, error=None,
+        created_at=now, updated_at=None,
     )
 
 

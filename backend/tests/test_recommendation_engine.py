@@ -163,6 +163,32 @@ class TestFormatSubScores:
         assert result == ""
 
 
+class TestDataGaps:
+    @pytest.mark.asyncio
+    async def test_data_gaps_saved_to_risk_flags(self, engine, sample_metrics):
+        """metrics["data_gaps"] set by apply_assumed_defaults must ride into the
+        saved recommendation's risk_flags, so the frontend can show them."""
+        engine._update_niche_scores = AsyncMock()
+        metrics = {**sample_metrics, "data_gaps": ["supplier_data_unavailable"]}
+
+        await engine.generate_recommendation(niche_id=1, metrics=metrics)
+
+        saved_rec = engine.db.add.call_args.args[0]
+        assert saved_rec.risk_flags["data_gaps"] == ["supplier_data_unavailable"]
+
+    @pytest.mark.asyncio
+    async def test_observed_review_velocity_saved_to_risk_flags(self, engine, sample_metrics):
+        """The review-velocity ratio is stored even while hard filter #9 is off, so
+        its threshold can be calibrated against real niches."""
+        engine._update_niche_scores = AsyncMock()
+        metrics = {**sample_metrics, "review_velocity_gap_ratio": 6.4}
+
+        await engine.generate_recommendation(niche_id=1, metrics=metrics)
+
+        saved_rec = engine.db.add.call_args.args[0]
+        assert saved_rec.risk_flags["review_velocity_gap_ratio"] == 6.4
+
+
 class TestScorerIntegration:
     def test_engine_uses_scoring_service(self, engine, sample_metrics):
         """Verify the engine delegates scoring to ScoringService."""

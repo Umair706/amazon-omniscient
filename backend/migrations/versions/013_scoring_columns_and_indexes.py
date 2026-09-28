@@ -49,6 +49,10 @@ def downgrade() -> None:
     op.drop_index("ix_suppliers_niche_id", table_name="suppliers")
     op.drop_index("ix_reviews_product_id", table_name="reviews")
     op.drop_index("ix_products_niche_id", table_name="products")
+    # NOTE: narrowing back to String(50) fails on a populated table if any stored
+    # vulnerability_type is longer than 50 chars — exactly what upgrade() widened it
+    # to allow. Postgres refuses the cast (it does not truncate), so this downgrade is
+    # only safe on a database that never wrote a value longer than 50.
     op.alter_column("competitors", "vulnerability_type", type_=sa.String(50))
     op.drop_column("niches", "last_error")
     op.drop_column("niches", "estimated_monthly_sales")

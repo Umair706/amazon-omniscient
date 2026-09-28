@@ -57,3 +57,24 @@ async def test_main_and_sub_rank_recorded_at_same_moment():
             await session.close()
             await transaction.rollback()
     await engine.dispose()
+
+
+async def test_review_count_is_stored_on_main_rank_only():
+    engine = create_async_engine(TEST_DATABASE_URL)
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        session = AsyncSession(bind=connection)
+        try:
+            product = await _add_product(session)
+            await BSRTracker(session).record_product_snapshot(
+                product_id=product.id, asin=product.asin,
+                bsr=118, subcategory_bsr=1, review_count=1543,
+            )
+            rows = (await session.execute(
+                select(BSRHistory.is_subcategory, BSRHistory.review_count).where(BSRHistory.product_id == product.id)
+            )).all()
+            assert sorted(rows) == [(False, 1543), (True, None)]
+        finally:
+            await session.close()
+            await transaction.rollback()
+    await engine.dispose()

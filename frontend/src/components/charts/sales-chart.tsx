@@ -31,6 +31,7 @@ export function SalesChart({ projections, className }: SalesChartProps) {
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
           <XAxis
             dataKey="week"
+            minTickGap={24}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
           />
           <YAxis

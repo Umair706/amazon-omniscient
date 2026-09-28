@@ -12,6 +12,7 @@ def _snapshot(verdict: str) -> dict:
         "current_bsr": 118, "bsr_category": "Home & Kitchen",
         "current_subcategory_bsr": 1, "subcategory_name": "Garlic Presses",
         "stock_level": None, "stock_text": "In stock", "is_in_stock": True,
+        "review_count": 1543,
     }
 
 
@@ -43,6 +44,13 @@ async def test_real_page_records_rank_and_stock():
     context.tracker.record_product_snapshot.assert_awaited_once()
     context.velocity_svc.record_stock_snapshot.assert_awaited_once()
     assert product.current_bsr == 118
+
+
+async def test_snapshot_forwards_review_count_to_tracker():
+    context = _context([_snapshot("ok")])
+    await tasks._track_one_product(_product(), context)
+    kwargs = context.tracker.record_product_snapshot.await_args.kwargs
+    assert kwargs["review_count"] == 1543
 
 
 async def test_one_failing_product_does_not_stop_the_rest():

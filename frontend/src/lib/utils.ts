@@ -10,6 +10,11 @@ const MARKETPLACE_CURRENCY: Record<string, { currency: string; locale: string; s
   AU: { currency: "AUD", locale: "en-AU", symbol: "A$" },
 };
 
+// The currency symbol alone (e.g. "A$"), for compact chart axes.
+export function currencySymbol(marketplace: string = "US"): string {
+  return (MARKETPLACE_CURRENCY[marketplace] || MARKETPLACE_CURRENCY.US).symbol;
+}
+
 export function formatCurrency(
   value: number | string | null | undefined,
   marketplace: string = "US",
@@ -31,13 +36,14 @@ export function formatPercent(value: number | string | null | undefined): string
   return `${num.toFixed(1)}%`;
 }
 
+// Confidence tiers are HIGH / MEDIUM / LOW / VERY_LOW / FAIL (see ScoringService).
 export function tierColor(tier: string): string {
   switch (tier) {
-    case "TIER_1":
+    case "HIGH":
       return "text-tier1";
-    case "TIER_2":
+    case "MEDIUM":
       return "text-tier2";
-    case "TIER_3":
+    case "LOW":
       return "text-tier3";
     default:
       return "text-rejected";
@@ -46,11 +52,11 @@ export function tierColor(tier: string): string {
 
 export function tierBgColor(tier: string): string {
   switch (tier) {
-    case "TIER_1":
+    case "HIGH":
       return "bg-tier1/10 text-tier1 border-tier1/20";
-    case "TIER_2":
+    case "MEDIUM":
       return "bg-tier2/10 text-tier2 border-tier2/20";
-    case "TIER_3":
+    case "LOW":
       return "bg-tier3/10 text-tier3 border-tier3/20";
     default:
       return "bg-rejected/10 text-rejected border-rejected/20";

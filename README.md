@@ -116,11 +116,16 @@ graph LR
 
 ## Quick Start
 
+> **Bring your own keys.** Omniscient never charges you for data — you plug in your own credentials and it
+> uses them. If you sell on Amazon you already own the credentials (SP-API) that make it accurate and legal,
+> and a local Ollama model makes the AI free. Three setup tiers — scraping-only (no keys), recommended
+> (SP-API + local LLM), and full (add a proxy) — are documented in **[SETUP.md](docs/SETUP.md)**. For where
+> this engine beats Helium 10 / Jungle Scout and where it doesn't, see **[POSITIONING.md](docs/POSITIONING.md)**.
+
 ### Prerequisites
 
 - Docker & Docker Compose 24+
-- Python 3.12+
-- Node.js 20+
+- Python 3.12+ and Node.js 20+ (only for local development without Docker)
 
 ### 1. Clone and configure
 
@@ -130,12 +135,15 @@ cd amazon-omniscient
 cp .env.example .env
 ```
 
-Edit `.env` and add at minimum one LLM API key:
+The defaults start with no keys (scraping-only, Tier 0). For accurate data, add your **own** SP-API
+credentials and point the LLM at a free local model — see [SETUP.md](docs/SETUP.md) for the recommended
+tier. Hosted LLMs work too if you prefer paying per token:
 
 ```bash
-DASHSCOPE_API_KEY=sk-xxxx     # for Qwen (default)
-# or ANTHROPIC_API_KEY=       # for Claude
-# or OPENAI_API_KEY=          # for GPT
+LLM_PROVIDER=ollama            # free, runs on your machine (recommended)
+# or DASHSCOPE_API_KEY=sk-xxxx # Qwen   (paid, hosted)
+# or ANTHROPIC_API_KEY=        # Claude (paid, hosted)
+# or OPENAI_API_KEY=           # GPT    (paid, hosted)
 ```
 
 ### 2. Start everything
@@ -144,16 +152,23 @@ DASHSCOPE_API_KEY=sk-xxxx     # for Qwen (default)
 docker compose up --build
 ```
 
-### 3. Run database migration
+### 3. Database migrations and browsers
+
+Nothing to do: the `backend` container runs `alembic upgrade head` before the API
+starts (the worker and beat wait for it), and the image already contains Chromium.
+To migrate by hand (for example after pulling new migrations while the stack runs):
 
 ```bash
 docker compose exec backend alembic upgrade head
 ```
 
-### 4. Install Playwright browsers
+If your machine already runs Redis or Postgres on the default ports, create a
+`docker-compose.override.yml` (git-ignored) that drops the port mapping, e.g.
 
-```bash
-docker compose exec backend python -m playwright install chromium --with-deps
+```yaml
+services:
+  redis:
+    ports: !override []
 ```
 
 ### 5. Open the app
@@ -163,7 +178,7 @@ docker compose exec backend python -m playwright install chromium --with-deps
 - **API docs:** http://localhost:8000/docs
 - **Health check:** http://localhost:8000/health
 
-For detailed setup instructions including local development without Docker, see [SETUP.md](SETUP.md).
+For detailed setup instructions including local development without Docker, see [SETUP.md](docs/SETUP.md).
 
 ---
 
@@ -259,7 +274,7 @@ omniscient/
 │   │   │   ├── anthropic_client.py
 │   │   │   └── openai_client.py
 │   │   └── workers/              # Celery tasks
-│   ├── migrations/               # Alembic migrations (4 versions)
+│   ├── migrations/               # Alembic migrations (16 versions)
 │   └── tests/                    # pytest suite
 │
 ├── frontend/
@@ -326,7 +341,9 @@ Full interactive docs at http://localhost:8000/docs after starting the backend.
 
 ## Feature Comparison
 
-How Omniscient compares to popular Amazon seller tools:
+How Omniscient compares to popular Amazon seller tools. Read this next to **[POSITIONING.md](docs/POSITIONING.md)**,
+which explains the honest trade-off: Omniscient is a *decision engine*, not a *data platform*. It wins on
+turning data into a profit-aware go/no-go, and loses on data breadth — the rows below mark both.
 
 | Feature | Omniscient | Helium 10 | Jungle Scout | AMZScout |
 |---------|-----------|-----------|-------------|---------|
@@ -350,6 +367,14 @@ How Omniscient compares to popular Amazon seller tools:
 | Self-hosted / no subscription | Yes | No ($99/mo) | No ($49/mo) | No ($30/mo) |
 | Configurable LLM (Qwen/Claude/GPT) | Yes | N/A | N/A | N/A |
 | Open source code | Yes (visible) | No | No | No |
+| **Keyword research depth** | Autocomplete + SERP estimates only | **Yes (Cerebro/Magnet — billions of rows, reverse-ASIN)** | **Yes (Keyword Scout)** | Yes |
+| **Sales-estimate calibration** | Power-law model, uncalibrated (AU rough) | **Calibrated against sales panels** | **Calibrated against sales panels** | Calibrated |
+| **Live PPC / Ads data** | Modeled estimate (Ads API not yet called) | **Yes (Adtomic)** | Partial | No |
+| **Catalog-wide history & trends** | Per-run only | **Yes (years)** | **Yes (years)** | Yes |
+| Ground-truth data from *your* account (SP-API) | **Yes (bring your own keys)** | No (vendor estimates) | No (vendor estimates) | No |
+
+Bold marks the winner of each row. Omniscient does not try to out-collect the data platforms; it is built
+to run *on top of* their data or your SP-API and add the decision layer they leave to you.
 
 ---
 

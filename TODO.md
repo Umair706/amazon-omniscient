@@ -67,19 +67,21 @@ quadrantChart
 
 ## CRITICAL
 
-- [ ] **DB session/engine leak** — `tasks.py` creates `create_async_engine()` + `async_sessionmaker()` inside every task invocation; engines accumulate and never close
+- [x] **DB session/engine leak** — fixed: one engine + event loop per Celery worker process, disposed on shutdown (`tasks.py` runtime helpers)
 - [ ] **Pipeline atomicity** — `tasks.py` 13-step pipeline commits after each step; if step 8 fails, steps 1-7 are already committed with partial data
 - [ ] **No authentication** — All API endpoints are public; anyone can trigger analyses, delete data, access all results
-- [ ] **Permissive CORS** — `main.py` uses `allow_origins=["*"]` in production
+- [x] **Permissive CORS** — fixed: `ALLOWED_ORIGINS` allow-list (default `http://localhost:3000`)
 
 ## HIGH
 
-- [ ] **No task timeouts** — Celery tasks have no `time_limit` or `soft_time_limit`; a stuck scrape blocks the worker forever
-- [ ] **No idempotency** — Re-running an analysis duplicates all data
+- [x] **No task timeouts** — fixed: soft/hard time limits on every task, no retry after `SoftTimeLimitExceeded`
+- [x] **No idempotency** — fixed: forced re-runs and automatic retries reset derived rows first (`pipeline_steps/reset.py`)
 - [ ] **Review duplicate race** — `SELECT` then `INSERT` without unique constraint allows duplicates under concurrency
-- [ ] **Niche eager loading** — `Niche` queries load all related products, reviews, recommendations eagerly
-- [ ] **Unbounded API responses** — List endpoints return all rows with no pagination
-- [ ] **Review velocity hard filter not armed** — `market_signals.average_review_velocity_gap` exists but lifetime-average review rate is miscalibrated (~29 vs 5.0 threshold on normal listings); needs a recent-window review velocity before it can gate FAIL
+- [x] **Niche eager loading** — fixed: every `Niche`/`Product`/`Supplier` relationship is `lazy="raise"`; a query that needs a collection asks for it explicitly with `selectinload`, and `GET /niches/{id}` now runs one query instead of ~11
+- [ ] **Unbounded API responses** — deferred deliberately: every niche sub-list is bounded by the pipeline itself (≤ ~150 products, ≤ 100 keywords, 156 projections, which the financials chart needs in full), so pagination would add envelopes the UI must page through for lists that never exceed one page. Revisit if a niche can ever hold > 500 products.
+- [x] **Review velocity hard filter not armed** — fixed: `market_signals.recent_review_velocity_per_month` / `average_recent_velocity_gap` derive reviews-per-month from first/last snapshot ≥ 14 days apart (≥ 3 products, 90-day lookback) instead of the miscalibrated lifetime average; `app/workers/pipeline_steps/review_velocity.py` computes the ratio once a niche has enough tracking history and stores it as `risk_flags.review_velocity_gap_ratio`; hard filter #9 disqualifies on it only when `REVIEW_VELOCITY_FILTER_ENABLED=true`. SP-API-tracked products never get a review count, so the window only accumulates from page scrapes (analysis-time and scrape-based tracking)
+- [ ] **Calibrate review-velocity trap threshold against the ratings count; then enable `REVIEW_VELOCITY_FILTER_ENABLED`**
+- [ ] **Calibrate the sales model per marketplace.** Only US coefficients are fitted from data; other marketplaces reuse the US curve scaled by a market-size ratio (AU = 8%). This is now *disclosed* — `is_calibrated_marketplace` drives the `sales_estimate_uncalibrated` data gap so non-US briefs say the unit/revenue numbers are US-derived, not measured — but the coefficients still need fitting against a reference set of known ASINs before non-US sales estimates should be trusted for a purchase decision.
 
 ## MEDIUM
 
@@ -94,11 +96,15 @@ quadrantChart
 - [ ] **Docker health check gaps** — No health check on frontend service
 - [ ] **LLM prompt injection** — User-provided keywords injected into prompts without sanitization
 - [ ] **`/product-reviews/` requires sign-in on AU** — reviews are product-page-only (≤10/ASIN); the standalone `scrape_reviews` task saves nothing there
-- [ ] **Pacer/rotation state is per worker process** — with `concurrency=4` the aggregate request rate can be ~4× the nominal gap; consider Redis-backed pacing
-- [ ] **Supplier sub-score uses assumed defaults** (count 5 / score 70 / MOQ 500) when 1688 scraping returns nothing
+- [ ] **1688 login browser is not on the shared pacer** — `AlibabaLoginService` paces itself per process; only used when stored cookies are invalid, so the exposure is small, but it should take a `SharedPacer` like `SupplierScraper` does
+- [ ] **Keyword-research scraper session is not on the shared pacer** — the `BrowserSession` behind `POST /niches/{id}/keywords/research` paces per process only
+- [x] **Pacer/rotation state is per worker process** — fixed: `SharedPacer` (`app/scraping/pacing.py`) holds a per-domain slot in Redis (`pace:{domain}`, claimed with SET NX and expiring after one random gap) so all worker processes share one gap; every pipeline/worker `BrowserSession` and the 1688 `SupplierScraper` pace through it, falling back to the old per-process `Pacer` if Redis is unreachable
+- [x] **Supplier sub-score uses assumed defaults** (count 5 / score 70 / MOQ 500) when 1688 scraping returns nothing — fixed: `_score_supplier` returns a neutral `SUPPLIER_UNKNOWN_SCORE = 50.0` instead, and `apply_assumed_defaults()` records every assumed input (including this one) in `recommendation.risk_flags["data_gaps"]`
 
 ## LOW
 
+- [ ] **Amazon login browser is not on the shared pacer** — `AmazonLoginService` paces per process, but it currently has no callers, so this is low priority
+- [ ] **`BSRTracker.record_product_snapshot` has 12 keyword parameters** — a snapshot dataclass would read better than a growing keyword-argument list
 - [ ] **Magic numbers** — Thresholds like `85`, `0.7`, `10` scattered without named constants
 - [ ] **Inconsistent logging** — Mix of `print()` and `logger` calls
 - [ ] **No type hints on some returns** — Various service methods missing return types

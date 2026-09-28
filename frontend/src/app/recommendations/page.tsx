@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ScoreBadge } from "@/components/score-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
+import { marketplaceLabel } from "@/lib/marketplace";
 import api from "@/lib/api";
 import type { RecommendationSummary } from "@/types";
 import { AlertTriangle, RefreshCw } from "lucide-react";
@@ -74,34 +75,44 @@ export default function RecommendationsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {recs.map((rec) => (
             <Card
               key={rec.id}
-              className="hover:bg-muted/50 cursor-pointer transition-colors"
+              className="hover:border-primary/50 cursor-pointer transition-colors"
               onClick={() => window.location.href = `/recommendations/${rec.id}`}
             >
               <CardContent className="p-5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <ScoreBadge score={rec.omniscient_score} tier={rec.confidence_tier} size="sm" />
-                    <div>
-                      <h3 className="font-semibold">{rec.niche_name}</h3>
-                      <div className="flex gap-4 text-sm text-muted-foreground mt-1">
-                        <span>Price: {formatCurrency(rec.recommended_sale_price)}</span>
-                        <span>Margin: {rec.estimated_net_margin_pct != null ? `${parseFloat(String(rec.estimated_net_margin_pct)).toFixed(1)}%` : "N/A"}</span>
-                        <span>Break-even: Week {rec.break_even_week_base || "N/A"}</span>
-                        <span>Capital: {formatCurrency(rec.total_launch_capital)}</span>
-                      </div>
+                    <div className="min-w-0">
+                      <h3 className="font-semibold truncate">{rec.niche_name}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {marketplaceLabel(rec.marketplace)}
+                      </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <Badge variant={rec.confidence_tier === "HIGH" ? "default" : "secondary"}>
-                      {rec.confidence_tier}
-                    </Badge>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {rec.generated_at ? new Date(rec.generated_at).toLocaleDateString() : "N/A"}
-                    </p>
+                  <Badge variant={rec.confidence_tier === "HIGH" ? "default" : "secondary"} className="shrink-0">
+                    {rec.confidence_tier?.replace(/_/g, " ")}
+                  </Badge>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Sale price</p>
+                    <p className="font-medium">{formatCurrency(rec.recommended_sale_price, rec.marketplace ?? undefined)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Net margin</p>
+                    <p className="font-medium">{rec.estimated_net_margin_pct != null ? `${parseFloat(String(rec.estimated_net_margin_pct)).toFixed(1)}%` : "N/A"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Break-even</p>
+                    <p className="font-medium">{rec.break_even_week_base ? `Week ${rec.break_even_week_base}` : "N/A"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Launch capital</p>
+                    <p className="font-medium">{formatCurrency(rec.total_launch_capital, rec.marketplace ?? undefined)}</p>
                   </div>
                 </div>
               </CardContent>

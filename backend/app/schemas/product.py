@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProductSummary(BaseModel):
@@ -33,6 +33,9 @@ class ProductResponse(BaseModel):
     id: int
     asin: str
     niche_id: int | None = None
+    # The Amazon store this product's data came from (e.g. "AU"). Populated from the
+    # product's niche so the product page can state which marketplace it is showing.
+    marketplace: str | None = None
     title: str | None = None
     brand: str | None = None
     image_url: str | None = None
@@ -100,17 +103,9 @@ class ProductResponse(BaseModel):
     created_at: datetime
     updated_at: datetime | None = None
 
-    @field_validator("asin")
-    @classmethod
-    def validate_asin_format(cls, v: str) -> str:
-        v = v.strip().upper()
-        if len(v) != 10:
-            raise ValueError("ASIN must be exactly 10 characters")
-        if not v.startswith("B") and not v[0].isdigit():
-            raise ValueError(
-                "ASIN must start with 'B' or a digit"
-            )
-        return v
+    # NOTE: no ASIN-format validator here. This is a response schema; validating stored
+    # data on the read path turns one malformed row into a 500 for the whole list. ASIN
+    # shape is enforced at ingest, not when serving.
 
 
 class ProductListResponse(BaseModel):

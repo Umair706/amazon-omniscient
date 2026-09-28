@@ -13,6 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db
 from app.models.user_settings import UserSettings
 from app.schemas.settings import UserSettingsResponse, UserSettingsUpdate
+from app.services.scoring_config import (
+    DEFAULT_ALLOW_SEASONAL,
+    DEFAULT_MARKETPLACE_THRESHOLDS,
+    DEFAULT_SALES_MULTIPLIER,
+    DEFAULT_WEIGHTS,
+    validate_scoring_config,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -53,6 +60,17 @@ async def get_settings(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/scoring-defaults")
+async def get_scoring_defaults() -> dict:
+    """Return the built-in scoring defaults, so the UI can show them and reset to them."""
+    return {
+        "thresholds": DEFAULT_MARKETPLACE_THRESHOLDS,
+        "weights": DEFAULT_WEIGHTS,
+        "sales_multiplier": DEFAULT_SALES_MULTIPLIER,
+        "allow_seasonal": DEFAULT_ALLOW_SEASONAL,
+    }
+
+
 @router.put("/", response_model=UserSettingsResponse)
 async def update_settings(
     payload: UserSettingsUpdate,
@@ -81,12 +99,23 @@ async def update_settings(
 
     if "default_marketplace" in update_data:
         settings.default_marketplace = update_data["default_marketplace"]
-    if "min_margin_threshold" in update_data:
-        settings.min_margin_threshold = update_data["min_margin_threshold"]
-    if "max_review_moat" in update_data:
-        settings.max_review_moat = update_data["max_review_moat"]
-    if "allow_seasonal" in update_data:
-        settings.allow_seasonal = update_data["allow_seasonal"]
+
+    # LLM config. The key is stored as bytes and never returned.
+    if "llm_provider" in update_data:
+        settings.llm_provider = update_data["llm_provider"]
+    if "llm_model" in update_data:
+        settings.llm_model = update_data["llm_model"]
+    if update_data.get("llm_api_key"):
+        settings.llm_api_key_encrypted = update_data["llm_api_key"].encode("utf-8")
+
+    # The scoring config is validated before storage so a seller can never save
+    # a thesis that would make scoring nonsense. A null value resets to defaults.
+    if "scoring_config" in update_data:
+        config = update_data["scoring_config"]
+        errors = validate_scoring_config(config)
+        if errors:
+            raise HTTPException(status_code=422, detail={"scoring_config": errors})
+        settings.scoring_config = config
 
     # Handle credential updates — store as encrypted bytes.
     # In production, these would go through a proper encryption service.

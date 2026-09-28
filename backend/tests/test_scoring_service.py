@@ -143,6 +143,59 @@ class TestHardFilters:
         assert result["confidence_tier"] == "FAIL"
 
 
+class TestSellerThresholdOverrides:
+    """A seller's own thresholds (in scoring_config) replace the marketplace defaults."""
+
+    def test_margin_override_can_reject_a_normally_passing_margin(self, scorer, sample_metrics):
+        # A 30% margin passes the default 25% floor, but a seller who demands
+        # 40% should see this disqualified.
+        sample_metrics["pre_ppc_margin_pct"] = 30
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+
+        sample_metrics["scoring_config"] = {"thresholds": {"US": {"margin_min": 40}}}
+        result = scorer.compute_score(sample_metrics)
+        assert result["pass_all_filters"] is False
+        assert any("margin" in r.lower() for r in result["fail_reasons"])
+
+    def test_review_moat_override_can_accept_a_normally_failing_moat(self, scorer, sample_metrics):
+        # 3000 reviews fails the default US moat of 2000, but a seller willing
+        # to enter moatier niches can raise the ceiling.
+        sample_metrics["median_competitor_reviews"] = 3000
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is False
+
+        sample_metrics["scoring_config"] = {"thresholds": {"US": {"review_moat_max": 5000}}}
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+
+    def test_price_band_override_can_reject_a_normally_passing_price(self, scorer, sample_metrics):
+        # Whatever the sample price is, a narrow band above it should reject it.
+        assert scorer.compute_score(sample_metrics)["pass_all_filters"] is True
+        sample_metrics["scoring_config"] = {"thresholds": {"US": {"price_min": 200, "price_max": 300}}}
+        result = scorer.compute_score(sample_metrics)
+        assert result["pass_all_filters"] is False
+        assert any("price" in r.lower() for r in result["fail_reasons"])
+
+    def test_no_override_leaves_marketplace_default_untouched(self, scorer, sample_metrics):
+        # A missing override must not change the shared class-level defaults.
+        sample_metrics["median_competitor_reviews"] = 3000
+        result = scorer.compute_score(sample_metrics)
+        assert result["pass_all_filters"] is False
+        assert ScoringService.MARKETPLACE_THRESHOLDS["US"]["review_moat_max"] == 2000
+
+
+class TestWeightOverrides:
+    """A seller can retune how the sub-scores combine."""
+
+    def test_full_weight_override_changes_the_score(self, scorer, sample_metrics):
+        base = scorer.compute_score(sample_metrics)["omniscient_score"]
+        # Put all the weight on demand; the composite becomes the demand score.
+        weights = {k: 0.0 for k in ScoringService.WEIGHTS}
+        weights["demand"] = 1.0
+        sample_metrics["scoring_config"] = {"weights": weights}
+        retuned = scorer.compute_score(sample_metrics)
+        assert retuned["omniscient_score"] != base
+        assert retuned["omniscient_score"] == round(retuned["sub_scores"]["demand"], 1)
+
+
 class TestConfidenceTiers:
     def test_fail_tier_on_filter_failure(self, scorer, sample_metrics):
         sample_metrics["avg_price"] = 10
@@ -180,3 +233,15 @@ class TestSubScores:
         m = {"bsr_velocity_pct": 25, "search_volume_trend": "declining", "is_seasonal": True}
         score = scorer._score_trend(m)
         assert score <= 15
+
+    def test_supplier_score_is_neutral_when_no_supplier_data(self, sample_metrics):
+        from app.services.scoring_service import SUPPLIER_UNKNOWN_SCORE, ScoringService
+        metrics = {k: v for k, v in sample_metrics.items()
+                   if k not in ("supplier_count", "best_supplier_score", "min_moq")}
+        assert ScoringService._score_supplier(metrics) == SUPPLIER_UNKNOWN_SCORE
+
+    def test_supplier_score_uses_real_data_when_present(self, sample_metrics):
+        from app.services.scoring_service import SUPPLIER_UNKNOWN_SCORE, ScoringService
+        metrics = {**sample_metrics, "supplier_count": 0, "best_supplier_score": 0, "min_moq": 5000}
+        assert ScoringService._score_supplier(metrics) == 2  # 0 availability + 0 quality + 2 MOQ
+        assert ScoringService._score_supplier(metrics) != SUPPLIER_UNKNOWN_SCORE

@@ -49,3 +49,46 @@ def test_every_mapped_attribute_exists_on_the_product_model():
 
     for _, attribute in product_details._DETAIL_TO_PRODUCT_FIELDS:
         assert hasattr(Product, attribute), attribute
+
+
+async def test_first_snapshot_forwards_review_count(monkeypatch):
+    tracker_stub = SimpleNamespace(record_product_snapshot=AsyncMock())
+    monkeypatch.setattr(product_details, "BSRTracker", lambda db: tracker_stub)
+    db = make_fake_session()
+    product = SimpleNamespace(id=1, asin="B0A")
+
+    await product_details._record_first_snapshots(db, product, {"review_count": 1543})
+
+    kwargs = tracker_stub.record_product_snapshot.await_args.kwargs
+    assert kwargs["review_count"] == 1543
+
+
+def test_derived_economics_fill_units_revenue_referral_and_quality():
+    product = SimpleNamespace(
+        estimated_monthly_units=None, estimated_monthly_revenue=None,
+        listing_quality_score=None, referral_fee_pct=None, fba_fee=None, product_weight_lbs=None,
+    )
+    detail = {
+        "asin": "B0A", "title": "A well-formed garlic press title that is long enough to score well",
+        "price": 25.0, "current_bsr": 500, "bsr_category": "Home & Kitchen",
+        "image_count": 7, "bullet_count": 5, "has_a_plus": True, "has_video": True,
+        "rating": 4.5, "review_count": 1200,
+    }
+    product_details._apply_derived_economics(make_fake_session(), product, detail, "US")
+
+    assert product.estimated_monthly_units and product.estimated_monthly_units > 0
+    assert product.estimated_monthly_revenue == round(product.estimated_monthly_units * 25.0, 2)
+    assert product.referral_fee_pct is not None and product.referral_fee_pct > 0
+    assert product.listing_quality_score is not None
+    # No dimensions in the detail, so the fulfilment fee stays unknown rather than guessed.
+    assert product.fba_fee is None
+
+
+def test_derived_economics_are_skipped_without_price_or_bsr():
+    product = SimpleNamespace(
+        estimated_monthly_units=None, estimated_monthly_revenue=None,
+        listing_quality_score=None, referral_fee_pct=None, fba_fee=None, product_weight_lbs=None,
+    )
+    product_details._apply_derived_economics(make_fake_session(), product, {"asin": "B0A", "title": "x"}, "US")
+    assert product.estimated_monthly_units is None
+    assert product.referral_fee_pct is None

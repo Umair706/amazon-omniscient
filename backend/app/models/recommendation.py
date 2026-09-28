@@ -75,6 +75,12 @@ class Recommendation(Base):
     subscore_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     competitor_landscape: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # The exact rules this niche was scored under (defaults + the seller's
+    # overrides, fully resolved) and a short fingerprint of them. Stored so a
+    # result stays reproducible and explainable even after the settings change.
+    scoring_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    scoring_fingerprint: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     # Intelligence JSONB payloads
     niche_overview: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     product_overviews: Mapped[list | None] = mapped_column(JSONB, nullable=True)

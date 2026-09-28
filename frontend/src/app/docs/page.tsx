@@ -30,11 +30,16 @@ import {
   Server,
 } from "lucide-react";
 
-type TabKey = "pipeline" | "scoring" | "api";
+import { GettingStartedTab } from "./getting-started-tab";
+import { ReadingResultsTab } from "./reading-results-tab";
+
+type TabKey = "start" | "pipeline" | "scoring" | "reading" | "api";
 
 const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
+  { key: "start", label: "Getting Started", icon: Rocket },
   { key: "pipeline", label: "How It Works", icon: Cpu },
   { key: "scoring", label: "Scoring System", icon: Award },
+  { key: "reading", label: "Reading Results", icon: BookOpen },
   { key: "api", label: "API Reference", icon: Server },
 ];
 
@@ -114,32 +119,35 @@ const PIPELINE_STEPS = [
 const SUB_SCORES = [
   { name: "Demand", weight: "15%", icon: Target, description: "Search volume, BSR velocity" },
   { name: "Competition", weight: "15%", icon: Shield, description: "Listing quality, review moats, brand dominance" },
-  { name: "Revenue", weight: "12%", icon: DollarSign, description: "Monthly revenue per seller, market size" },
   { name: "Margin", weight: "15%", icon: Percent, description: "Pre/post-PPC profit margins" },
-  { name: "Trend", weight: "8%", icon: TrendingUp, description: "Search volume trajectory, seasonality" },
+  { name: "Revenue", weight: "10%", icon: DollarSign, description: "Monthly revenue per seller, market size" },
+  { name: "Trend", weight: "10%", icon: TrendingUp, description: "Search volume trajectory, seasonality" },
   { name: "Review Feasibility", weight: "10%", icon: Star, description: "How achievable the review moat is" },
   { name: "Supplier", weight: "10%", icon: Truck, description: "Supplier reliability, cost competitiveness" },
-  { name: "PPC Viability", weight: "8%", icon: Megaphone, description: "ACOS sustainability, keyword opportunity" },
-  { name: "Launch Feasibility", weight: "7%", icon: Rocket, description: "Capital requirements, break-even timeline" },
+  { name: "PPC Viability", weight: "10%", icon: Megaphone, description: "ACOS sustainability, keyword opportunity" },
+  { name: "Launch Feasibility", weight: "5%", icon: Rocket, description: "Capital requirements, break-even timeline" },
 ];
 
 const CONFIDENCE_TIERS = [
   { tier: "HIGH", range: "80-100", color: "bg-tier1", description: "Strong opportunity" },
   { tier: "MEDIUM", range: "60-79", color: "bg-tier2", description: "Viable with caveats" },
   { tier: "LOW", range: "40-59", color: "bg-tier3", description: "Significant risks" },
-  { tier: "VERY LOW", range: "20-39", color: "bg-rejected", description: "Major concerns" },
+  { tier: "VERY LOW", range: "< 40", color: "bg-rejected", description: "Major concerns" },
   { tier: "FAIL", range: "--", color: "bg-destructive", description: "One or more hard filters failed" },
 ];
 
+// Thresholds are per-marketplace and some are seller-tunable in Settings, so
+// the values here are the US defaults shown for orientation, not fixed law.
 const HARD_FILTERS = [
-  "Price range ($15-$70)",
-  "Review moat (median < 2,000)",
-  "BSR demand (avg BSR < 50,000)",
-  "Minimum margin (pre-PPC > 25%)",
-  "Amazon dominance (< 30%)",
-  "Restricted category check",
-  "IP/patent risk check",
-  "Seasonality check",
+  "Price in range (US $15-$70)",
+  "Review moat below ceiling (US 2,000, AU 500; tunable)",
+  "BSR demand (avg BSR below the marketplace ceiling)",
+  "Minimum margin (pre-PPC above 25%; tunable)",
+  "Amazon dominance (below 30% of the shelf)",
+  "Not a restricted or hazmat category",
+  "No IP or patent risk indicators",
+  "Not seasonal-only (unless you allow it in Settings)",
+  "No review-velocity manipulation trap",
 ];
 
 interface EndpointRow {
@@ -157,27 +165,29 @@ interface EndpointGroup {
 const API_GROUPS: EndpointGroup[] = [
   {
     name: "Niches",
-    count: 10,
+    count: 11,
     endpoints: [
-      { method: "GET", path: "/api/v1/niches", description: "List all analyzed niches with pagination and filtering" },
-      { method: "POST", path: "/api/v1/niches/analyze", description: "Start a new niche analysis job" },
+      { method: "GET", path: "/api/v1/niches", description: "List analyzed niches with pagination and filtering" },
+      { method: "GET", path: "/api/v1/niches/stats", description: "Dashboard headline stats (counts, average score)" },
+      { method: "GET", path: "/api/v1/niches/scrape-health", description: "Scrape outcome counts for the last 24h" },
       { method: "GET", path: "/api/v1/niches/{id}", description: "Get full niche details and scores" },
       { method: "DELETE", path: "/api/v1/niches/{id}", description: "Delete a niche and all associated data" },
       { method: "GET", path: "/api/v1/niches/{id}/products", description: "List products scraped for a niche" },
       { method: "GET", path: "/api/v1/niches/{id}/competitors", description: "Get competitor analysis results" },
-      { method: "GET", path: "/api/v1/niches/{id}/reviews", description: "Get review analysis and pain points" },
+      { method: "GET", path: "/api/v1/niches/{id}/keywords", description: "Get keyword research results" },
+      { method: "GET", path: "/api/v1/niches/{id}/reviews", description: "Get review pain points" },
       { method: "GET", path: "/api/v1/niches/{id}/suppliers", description: "Get supplier sourcing results" },
-      { method: "GET", path: "/api/v1/niches/{id}/ppc", description: "Get PPC strategy and keyword data" },
-      { method: "GET", path: "/api/v1/niches/{id}/forecast", description: "Get 52-week financial projections" },
+      { method: "GET", path: "/api/v1/niches/{id}/financials", description: "Get 52-week financial projections" },
     ],
   },
   {
     name: "Products",
-    count: 3,
+    count: 4,
     endpoints: [
-      { method: "GET", path: "/api/v1/products", description: "List all tracked products" },
       { method: "GET", path: "/api/v1/products/{asin}", description: "Get product details by ASIN" },
-      { method: "GET", path: "/api/v1/products/{asin}/history", description: "Get BSR and price history time-series" },
+      { method: "GET", path: "/api/v1/products/{asin}/bsr-history", description: "BSR history time-series" },
+      { method: "GET", path: "/api/v1/products/{asin}/price-history", description: "Price history time-series" },
+      { method: "GET", path: "/api/v1/products/{asin}/velocity", description: "Sales-velocity snapshot time-series" },
     ],
   },
   {
@@ -190,11 +200,13 @@ const API_GROUPS: EndpointGroup[] = [
   },
   {
     name: "Jobs",
-    count: 3,
+    count: 5,
     endpoints: [
-      { method: "GET", path: "/api/v1/jobs", description: "List all background analysis jobs" },
-      { method: "GET", path: "/api/v1/jobs/{id}", description: "Get job status and progress" },
-      { method: "POST", path: "/api/v1/jobs/{id}/cancel", description: "Cancel a running analysis job" },
+      { method: "POST", path: "/api/v1/jobs/analyze", description: "Start a keyword analysis (creates the niche)" },
+      { method: "POST", path: "/api/v1/jobs/discover", description: "Start sub-niche discovery for a keyword" },
+      { method: "POST", path: "/api/v1/jobs/discover-opportunities", description: "Rank candidate niches from a broad seed" },
+      { method: "POST", path: "/api/v1/jobs/analyze-sub-niche", description: "Analyze a discovered sub-niche" },
+      { method: "GET", path: "/api/v1/jobs/{id}/status", description: "Get job status and progress" },
     ],
   },
   {
@@ -217,7 +229,7 @@ const API_GROUPS: EndpointGroup[] = [
     name: "Health",
     count: 1,
     endpoints: [
-      { method: "GET", path: "/api/v1/health", description: "Service health check with dependency status" },
+      { method: "GET", path: "/health", description: "Service health check" },
     ],
   },
 ];
@@ -230,7 +242,7 @@ const METHOD_COLORS: Record<string, string> = {
 };
 
 export default function DocsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>("pipeline");
+  const [activeTab, setActiveTab] = useState<TabKey>("start");
 
   return (
     <div className="space-y-6">
@@ -264,8 +276,10 @@ export default function DocsPage() {
       </div>
 
       {/* Tab Content */}
+      {activeTab === "start" && <GettingStartedTab />}
       {activeTab === "pipeline" && <PipelineTab />}
       {activeTab === "scoring" && <ScoringTab />}
+      {activeTab === "reading" && <ReadingResultsTab />}
       {activeTab === "api" && <ApiTab />}
     </div>
   );
@@ -413,9 +427,9 @@ function ScoringTab() {
           <div className="mt-4 flex items-start gap-2 p-3 rounded-md bg-destructive/5 border border-destructive/20">
             <CheckCircle2 className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground">
-              All 8 filters must pass for the niche to receive a numerical score and confidence tier.
+              Every applicable filter must pass for the niche to receive a numerical score and confidence tier.
               If any filter fails, the niche is marked as <span className="font-semibold text-destructive">FAIL</span> regardless
-              of its sub-score performance.
+              of its sub-score performance. The review-velocity filter only applies when we have enough review history to judge it.
             </p>
           </div>
         </CardContent>

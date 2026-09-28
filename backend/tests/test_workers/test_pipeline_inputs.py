@@ -80,3 +80,50 @@ def test_average_weight_understands_ounces():
         {"dimensions": "10 x 6 x 4 inches", "weight": "1.25 pounds"},
     ])
     assert dims["weight_lb"] == 1.0
+
+
+def test_wrong_marketplace_fails_the_niche_without_retrying(monkeypatch):
+    """A geo-redirect is decided by the network, so retrying the same run cannot help."""
+    from app.core.exceptions import WrongMarketplaceError
+
+    status_updates: list[tuple] = []
+    retries: list[dict] = []
+
+    def fake_pipeline(task, niche_id, keyword, options, **kwargs):
+        raise WrongMarketplaceError("amazon.com redirected to amazon.com.au")
+
+    def fake_retry(**kwargs):
+        retries.append(kwargs)
+        return RuntimeError("retried")
+
+    monkeypatch.setattr(tasks, "_run_full_analysis_async", fake_pipeline)
+    monkeypatch.setattr(tasks, "_update_niche_status", lambda *args: status_updates.append(args))
+    monkeypatch.setattr(tasks, "_run_async", lambda result: result)
+    monkeypatch.setattr(tasks.run_full_analysis, "retry", fake_retry)
+
+    tasks.run_full_analysis.push_request(retries=0)
+    try:
+        with pytest.raises(WrongMarketplaceError):
+            tasks.run_full_analysis.run(7, "yoga mat", marketplace="US", options={})
+    finally:
+        tasks.run_full_analysis.pop_request()
+
+    assert retries == []
+    assert status_updates == [(7, "failed", "amazon.com redirected to amazon.com.au")]
+
+
+async def test_search_step_propagates_a_wrong_marketplace_error():
+    from unittest.mock import AsyncMock
+
+    from app.core.exceptions import WrongMarketplaceError
+
+    scraper = SimpleNamespace(scrape_search_results=AsyncMock(side_effect=WrongMarketplaceError("redirected")))
+    with pytest.raises(WrongMarketplaceError):
+        await tasks._scrape_search_results(scraper, "yoga mat", "US")
+
+
+async def test_search_step_swallows_other_scrape_failures():
+    from unittest.mock import AsyncMock
+
+    scraper = SimpleNamespace(scrape_search_results=AsyncMock(side_effect=RuntimeError("timeout")))
+    assert await tasks._scrape_search_results(scraper, "yoga mat", "US") == []

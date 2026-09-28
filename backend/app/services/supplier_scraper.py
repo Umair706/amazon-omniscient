@@ -10,6 +10,7 @@ from playwright.async_api import Browser, Page, async_playwright
 
 from app.core.exceptions import ScrapingError
 from app.core.proxy_manager import ProxyManager
+from app.scraping.pacing import pacer_for
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,10 @@ _CARD_SELECTORS = [
 class SupplierScraper:
     """Scrapes 1688.com search results and product pages for supplier data via Playwright."""
 
-    def __init__(self, proxy_manager: ProxyManager | None = None, cookie_manager=None):
+    def __init__(self, proxy_manager: ProxyManager | None = None, cookie_manager=None, pacer=None):
         self.proxy_manager = proxy_manager
         self.cookie_manager = cookie_manager
+        self.pacer = pacer or pacer_for("1688")
 
     # ------------------------------------------------------------------
     # Helper methods
@@ -287,6 +289,7 @@ class SupplierScraper:
                     keyword, attempt, _MAX_RETRIES,
                 )
 
+                await self.pacer.wait_turn("1688.com")
                 await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
                 # Wait for product cards to appear — try multiple selectors
@@ -607,6 +610,7 @@ class SupplierScraper:
                     product_url, attempt, _MAX_RETRIES,
                 )
 
+                await self.pacer.wait_turn("1688.com")
                 await page.goto(product_url, wait_until="domcontentloaded", timeout=30_000)
                 await asyncio.sleep(3)  # Let dynamic content render
 

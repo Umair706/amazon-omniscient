@@ -1,10 +1,8 @@
 """Pure functions that turn scraped product/supplier dicts into ScoringService inputs."""
 
 from collections import Counter
-from datetime import date, datetime
+from datetime import datetime
 from statistics import median
-
-from dateutil.parser import parse as parse_date
 
 from app.core.bsr_regression import BSRSalesEstimator
 from app.services.competitor_service import CompetitorService
@@ -12,7 +10,15 @@ from app.services.competitor_service import CompetitorService
 # A listing with this many reviews at this rating is an entrenched brand a new entrant must out-spend.
 STRONG_SELLER_MIN_REVIEWS = 1000
 STRONG_SELLER_MIN_RATING = 4.3
+
+Snapshot = tuple[datetime, int]  # (recorded at, review count)
+
+# WHY 14 days: Amazon updates the visible review count in batches; shorter windows read as noise.
+MIN_VELOCITY_WINDOW_DAYS = 14
+# Fewer products than this and one grey-hat listing would decide the whole niche.
+MIN_PRODUCTS_FOR_VELOCITY = 3
 DAYS_PER_MONTH = 30.4
+SECONDS_PER_DAY = 86_400
 
 
 def derive_category(products: list[dict]) -> str:
@@ -45,35 +51,26 @@ def amazon_seller_pct(products: list[dict], amazon_seller_id: str) -> float:
     return round(amazon_count / len(products) * 100, 1)
 
 
-def _months_listed(date_first_available, today: date) -> float | None:
-    if not date_first_available:
+def recent_review_velocity_per_month(first: Snapshot, last: Snapshot) -> float | None:
+    """Reviews gained per month between two snapshots. None if the window is shorter than MIN_VELOCITY_WINDOW_DAYS."""
+    days = (last[0] - first[0]).total_seconds() / SECONDS_PER_DAY
+    if days < MIN_VELOCITY_WINDOW_DAYS:
         return None
-    try:
-        listed = date_first_available if isinstance(date_first_available, date) else parse_date(str(date_first_available)).date()
-    except (ValueError, OverflowError):
-        return None
-    days = (today - listed).days
-    return max(days / DAYS_PER_MONTH, 1.0)
+    # Amazon removes reviews too; a shrinking count is "no growth", not negative growth.
+    gained = max(0, last[1] - first[1])
+    return round(gained / days * DAYS_PER_MONTH, 2)
 
 
-# NOTE: not wired into the ScoringService hard filter yet. Lifetime reviews / months-listed
-# over-counts early Vine/launch review bursts, so this ratio runs far above the trap threshold
-# for perfectly normal, established products. Kept here as a pure building block for later work.
-def average_review_velocity_gap(
-    products: list[dict], estimator: BSRSalesEstimator, category: str, *, today: date | None = None,
-) -> float | None:
-    """Mean reviews-per-100-sales ratio across products with a BSR and a listing date. None if no data."""
-    today = today or datetime.now().date()
+def average_recent_velocity_gap(windows: list[dict], estimator: BSRSalesEstimator, category: str) -> float | None:
+    """Mean reviews-per-100-sales across products with a long-enough window. None below MIN_PRODUCTS_FOR_VELOCITY."""
     ratios = []
-    for p in products:
-        months = _months_listed(p.get("date_first_available"), today)
-        bsr = p.get("current_bsr") or p.get("bsr")
-        if not months or not bsr:
+    for window in windows:
+        velocity = recent_review_velocity_per_month(window["first"], window["last"])
+        if velocity is None:
             continue
-        monthly_sales = estimator.estimate_monthly_sales(int(bsr), category)
-        reviews_per_month = (p.get("review_count") or 0) / months
-        ratios.append(CompetitorService.calculate_review_velocity_gap(monthly_sales, reviews_per_month)["gap_ratio"])
-    if not ratios:
+        monthly_sales = estimator.estimate_monthly_sales(int(window["bsr"]), category)
+        ratios.append(CompetitorService.calculate_review_velocity_gap(monthly_sales, velocity)["gap_ratio"])
+    if len(ratios) < MIN_PRODUCTS_FOR_VELOCITY:
         return None
     return round(sum(ratios) / len(ratios), 2)
 

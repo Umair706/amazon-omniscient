@@ -38,6 +38,8 @@ class BSRHistory(Base):
     is_subcategory: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", primary_key=True
     )
+    # NOTE: only set on main-rank rows; the sub-rank row recorded at the same moment leaves it NULL.
+    review_count: Mapped[int | None] = mapped_column(Integer)
 
     # ----- Relationships -----
     product: Mapped["Product | None"] = relationship(back_populates="bsr_history")

@@ -40,3 +40,12 @@ redisdata/
 htmlcov/
 .coverage
 coverage.xml
+
+# Superpowers SDD scratch workspace (ledger, briefs, review packages)
+.superpowers/
+
+# Local compose overrides (machine-specific ports etc.)
+docker-compose.override.yml
+
+# Celery beat writes its schedule database into the mounted backend/ directory
+backend/celerybeat-schedule*

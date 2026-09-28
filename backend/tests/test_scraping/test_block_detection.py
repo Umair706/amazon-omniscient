@@ -19,3 +19,20 @@ def test_soft_block_when_expected_content_missing():
 
 def test_ok():
     assert classify_page(200, "Amazon.com : garlic press", "Results", True) == "ok"
+
+
+def test_is_on_marketplace_accepts_the_domain_and_its_subdomains():
+    from app.scraping.block_detection import is_on_marketplace
+
+    assert is_on_marketplace("https://www.amazon.com/dp/B0A", "amazon.com")
+    assert is_on_marketplace("https://amazon.com/s?k=x", "amazon.com")
+    assert is_on_marketplace("https://www.amazon.com.au/dp/B0A", "amazon.com.au")
+
+
+def test_is_on_marketplace_rejects_another_countrys_store():
+    from app.scraping.block_detection import is_on_marketplace
+
+    # amazon.com geo-redirects Australian visitors here; the page parses fine but is the wrong market.
+    assert not is_on_marketplace("https://www.amazon.com.au/dp/B0A?ref_=mr_direct_us_au_au", "amazon.com")
+    assert not is_on_marketplace("https://www.amazon.com/dp/B0A", "amazon.com.au")
+    assert not is_on_marketplace("", "amazon.com")

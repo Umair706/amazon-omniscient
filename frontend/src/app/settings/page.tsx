@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import api from "@/lib/api";
+import { useLicense } from "@/lib/use-license";
+import { ScoringConfigEditor } from "./scoring-config-editor";
 import type { UserSettings } from "@/types";
-import { Save, Loader2, Download, Eye, EyeOff } from "lucide-react";
+import { Save, Loader2, Download, Eye, EyeOff, Lock } from "lucide-react";
 
 export default function SettingsPage() {
+  const { has } = useLicense();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -26,16 +29,20 @@ export default function SettingsPage() {
   const [llmProvider, setLlmProvider] = useState("qwen");
   const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
-  const [defaultMarketplace, setDefaultMarketplace] = useState("US");
+  const [defaultMarketplace, setDefaultMarketplace] = useState("AU");
+
+  // Load the stored settings into the form.
+  const syncFormFromSettings = (data: UserSettings) => {
+    setSettings(data);
+    setDefaultMarketplace(data.default_marketplace || "AU");
+    setLlmProvider(data.llm_provider || "qwen");
+    setLlmModel(data.llm_model || "");
+  };
 
   useEffect(() => {
     api
       .get("/api/v1/settings/")
-      .then((res) => {
-        const data: UserSettings = res.data;
-        setSettings(data);
-        setDefaultMarketplace(data.default_marketplace || "US");
-      })
+      .then((res) => syncFormFromSettings(res.data as UserSettings))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -64,8 +71,13 @@ export default function SettingsPage() {
         };
       }
 
-      // Preferences
+      // Preferences (the scoring rules save themselves in their own editor).
       if (defaultMarketplace) payload.default_marketplace = defaultMarketplace;
+
+      // LLM config — send provider/model always, key only when entered.
+      payload.llm_provider = llmProvider;
+      payload.llm_model = llmModel || null;
+      if (llmApiKey) payload.llm_api_key = llmApiKey;
 
       await api.put("/api/v1/settings/", payload);
       setMessage({ type: "success", text: "Settings saved successfully" });
@@ -74,9 +86,9 @@ export default function SettingsPage() {
       setAdsClientSecret("");
       setLlmApiKey("");
 
-      // Refresh settings state
+      // Refresh settings state and re-sync the form to normalised values
       const res = await api.get("/api/v1/settings/");
-      setSettings(res.data);
+      syncFormFromSettings(res.data as UserSettings);
     } catch (err: unknown) {
       const error = err as { response?: { data?: { detail?: string } } };
       setMessage({ type: "error", text: error.response?.data?.detail || "Failed to save settings" });
@@ -105,7 +117,11 @@ export default function SettingsPage() {
       a.download = `omniscient-export-${new Date().toISOString().split("T")[0]}.csv`;
       a.click();
       window.URL.revokeObjectURL(url);
-    } catch {
+    } catch (err: any) {
+      if (err?.response?.status === 402) {
+        setMessage({ type: "error", text: "CSV export is a Pro feature. See docs/LICENSING.md to obtain a key." });
+        return;
+      }
       setMessage({ type: "error", text: "Export failed. Make sure you have analyzed at least one niche." });
     }
   };
@@ -120,7 +136,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-6xl">
       <div>
         <h1 className="text-3xl font-bold">Settings</h1>
         <p className="text-muted-foreground mt-1">Configure API credentials and preferences</p>
@@ -138,6 +154,8 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* API credentials, two-up on wide screens */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* Amazon SP-API */}
       <Card>
         <CardHeader>
@@ -225,11 +243,22 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      </div>
+
+      {/* Model + preferences, two-up on wide screens */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* LLM Config */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">LLM Provider</CardTitle>
-          <CardDescription>Configure the AI model used for analysis</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">LLM Provider</CardTitle>
+              <CardDescription>The AI model used for review analysis, blueprints, and strategy.</CardDescription>
+            </div>
+            <Badge variant={settings?.has_llm_api_key ? "default" : "secondary"}>
+              {settings?.has_llm_api_key ? "Configured" : "Not Configured"}
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
@@ -244,6 +273,12 @@ export default function SettingsPage() {
               <option value="openai">OpenAI (GPT)</option>
               <option value="ollama">Ollama (Local)</option>
             </select>
+            {llmProvider === "ollama" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Uses the Ollama running on your machine — free, no key needed. If you have not pulled a model yet, run{" "}
+                <code className="rounded bg-muted px-1">ollama pull qwen2.5:3b</code>, then set the model below to <code className="rounded bg-muted px-1">qwen2.5:3b</code>.
+              </p>
+            )}
           </div>
           <div>
             <label className="text-sm font-medium">Model</label>
@@ -264,27 +299,28 @@ export default function SettingsPage() {
       {/* Preferences */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Preferences</CardTitle>
-          <CardDescription>Analysis defaults and marketplace</CardDescription>
+          <CardTitle className="text-lg">Analysis preferences</CardTitle>
+          <CardDescription>The marketplace new analyzes default to.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="text-sm font-medium">Default Marketplace</label>
+            <label className="text-sm font-medium">Default marketplace</label>
             <select
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={defaultMarketplace}
               onChange={(e) => setDefaultMarketplace(e.target.value)}
             >
-              <option value="US">United States (US)</option>
-              <option value="AU">Australia (AU)</option>
-              <option value="UK">United Kingdom (UK)</option>
-              <option value="DE">Germany (DE)</option>
-              <option value="CA">Canada (CA)</option>
-              <option value="JP">Japan (JP)</option>
+              <option value="AU">Australia — Amazon.com.au (AU)</option>
+              <option value="US">United States — Amazon.com (US)</option>
             </select>
           </div>
         </CardContent>
       </Card>
+
+      </div>
+
+      {/* Scoring rules (saves itself) */}
+      <ScoringConfigEditor />
 
       {/* Export */}
       <Card>
@@ -293,9 +329,15 @@ export default function SettingsPage() {
           <CardDescription>Export your analysis data</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="outline" onClick={() => handleExportCsv()}>
-            <Download className="h-4 w-4 mr-2" /> Export Latest Niche (CSV)
+          <Button variant="outline" onClick={() => handleExportCsv()} disabled={!has("export")}>
+            {has("export") ? <Download className="h-4 w-4 mr-2" /> : <Lock className="h-4 w-4 mr-2" />}
+            Export Latest Niche (CSV)
           </Button>
+          {!has("export") && (
+            <p className="text-xs text-muted-foreground mt-2">
+              CSV and PDF export is a Pro feature. See docs/LICENSING.md to obtain a license key.
+            </p>
+          )}
         </CardContent>
       </Card>
 

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
 from app.models.bsr_history import BSRHistory
+from app.models.niche import Niche
 from app.models.price_history import PriceHistory
 from app.models.product import Product
 from app.schemas.product import ProductResponse
@@ -84,7 +85,13 @@ async def get_product_by_asin(
             status_code=404,
             detail=f"Product with ASIN '{normalised_asin}' not found",
         )
-    return ProductResponse.model_validate(product)
+    response = ProductResponse.model_validate(product)
+    # Marketplace lives on the niche, not the product row, so look it up for display.
+    if product.niche_id is not None:
+        response.marketplace = (
+            await db.execute(select(Niche.marketplace).where(Niche.id == product.niche_id))
+        ).scalar_one_or_none()
+    return response
 
 
 # ---------------------------------------------------------------------------

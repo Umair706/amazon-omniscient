@@ -6,6 +6,7 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import TYPE_CHECKING
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -13,12 +14,14 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
-from app.core.exceptions import ScrapingError
+from app.core.exceptions import ScrapingError, WrongMarketplaceError
 from app.workers.celery_app import celery_app
 
 # Only imported for type hints — the real imports stay local to the
 # functions that use them (this file's existing lazy-import convention).
 if TYPE_CHECKING:
+    from app.scraping.page_cache import PageCache
+    from app.scraping.pacing import SharedPacer
     from app.scraping.session import BrowserSession
     from app.services.bsr_tracker import BSRTracker
     from app.services.sales_velocity_service import SalesVelocityService
@@ -58,6 +61,10 @@ SERP_ENRICHMENT_PAGES = 1
 
 # Each detail page is one live page load, so only the top of the SERP gets one.
 MAX_DETAILED_PRODUCTS = 20
+
+# Short enough that a hung Redis fails fast and the shared pacer falls back to
+# pacing locally, instead of stalling a worker slot for the rest of the run.
+REDIS_SOCKET_TIMEOUT_SECONDS = 2.0
 
 # The only page verdict that means "this is the real product page".
 REAL_PAGE_VERDICT = "ok"
@@ -148,7 +155,7 @@ def _reset_runtime_for_tests() -> None:
 
 
 def _get_llm_client():
-    """Create an LLM client from settings. Returns None if no API key is configured."""
+    """Create an LLM client from env settings. Returns None if no API key is configured."""
     from app.llm.factory import create_llm_client
     try:
         return create_llm_client(Settings())
@@ -157,34 +164,93 @@ def _get_llm_client():
         return None
 
 
-def _build_browser_session(marketplace: str) -> "BrowserSession":
+# Which Settings field holds the API key for each provider, so a seller's saved
+# key lands where the factory looks for it.
+_LLM_KEY_FIELD_BY_PROVIDER = {
+    "qwen": "DASHSCOPE_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "local": "OPENAI_API_KEY",
+    "ollama": "OPENAI_API_KEY",
+}
+
+
+async def _effective_llm_settings():
+    """Return Settings with the seller's saved LLM provider/model/key overlaid on env."""
+    base = Settings()
+    from app.models.user_settings import UserSettings
+
+    session_factory = _get_session_factory()
+    async with session_factory() as db:
+        row = (
+            await db.execute(select(UserSettings).where(UserSettings.user_id == "default"))
+        ).scalar_one_or_none()
+
+    if row is None or not row.llm_provider:
+        return base
+
+    updates: dict = {"LLM_PROVIDER": row.llm_provider}
+    if row.llm_model:
+        updates["LLM_MODEL"] = row.llm_model
+    if row.llm_api_key_encrypted:
+        field = _LLM_KEY_FIELD_BY_PROVIDER.get(row.llm_provider.lower())
+        if field:
+            updates[field] = row.llm_api_key_encrypted.decode("utf-8")
+    return base.model_copy(update=updates)
+
+
+async def _get_llm_client_async():
+    """Build the LLM client, preferring the seller's saved settings over env."""
+    from app.llm.factory import create_llm_client
+    try:
+        return create_llm_client(await _effective_llm_settings())
+    except Exception as e:
+        logger.warning("LLM client not available (LLM-powered steps will be skipped): %s", e)
+        return None
+
+
+def _build_browser_session(marketplace: str, pacer: "SharedPacer | None" = None) -> "BrowserSession":
     """Return an unopened BrowserSession for this marketplace, behind the proxy configured in settings."""
     from app.core.marketplace import get_marketplace
     from app.scraping.session import BrowserSession
     from app.services.scraper_service import build_proxy_manager_from_settings
 
-    return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings())
+    return BrowserSession(get_marketplace(marketplace), build_proxy_manager_from_settings(), pacer=pacer)
 
 
 @asynccontextmanager
-async def _page_cache_for_run(force: bool = False):
-    """Yield a PageCache backed by one Redis client for this run, or None when forced to re-scrape.
-
-    WHY: a forced re-run exists specifically to get fresh data, so it must not be served
-    stale pages from a previous run's cache.
-    """
-    if force:
-        yield None
-        return
-
+async def _redis_for_run():
+    """Yield one Redis client for this run; the page cache and the shared pacer both use it."""
     from redis.asyncio import Redis
-    from app.scraping.page_cache import PageCache
 
-    redis = Redis.from_url(Settings().REDIS_URL, decode_responses=True)
+    redis = Redis.from_url(
+        Settings().REDIS_URL,
+        decode_responses=True,
+        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+        socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+    )
     try:
-        yield PageCache(redis)
+        yield redis
     finally:
         await redis.aclose()
+
+
+def _page_cache_for(redis, force: bool) -> "PageCache | None":
+    """WHY None on force: a forced re-run exists to get fresh data, not last run's cached pages."""
+    if force:
+        return None
+    from app.scraping.page_cache import PageCache
+    return PageCache(redis)
+
+
+def _shared_pacer(redis, site: str) -> "SharedPacer":
+    """Pacer for `site` ('amazon' or '1688') shared across worker processes through Redis."""
+    from app.scraping.pacing import ALIBABA_GAP_SECONDS, AMAZON_GAP_SECONDS, SharedPacer, pacer_for
+
+    gaps = {"amazon": AMAZON_GAP_SECONDS, "1688": ALIBABA_GAP_SECONDS}
+    if site not in gaps:
+        raise ValueError(f"Unknown pacing site {site!r}; expected one of {sorted(gaps)}")
+    return SharedPacer(redis, *gaps[site], fallback=pacer_for(site))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -226,6 +292,11 @@ def run_full_analysis(self, niche_id: int, keyword: str, marketplace: str = "US"
         # so mark the niche failed instead of retrying.
         logger.error("Analysis for niche %d exceeded the soft time limit", niche_id)
         _run_async(_update_niche_status(niche_id, "failed", "Timed out"))
+        raise
+    except WrongMarketplaceError as exc:
+        # The redirect is decided by the exit IP's country; a retry lands in the same place.
+        logger.error("Analysis for niche %d cannot run from this network: %s", niche_id, exc)
+        _run_async(_update_niche_status(niche_id, "failed", str(exc)))
         raise
     except Exception as exc:
         logger.exception("Full analysis failed for niche %d", niche_id)
@@ -270,15 +341,16 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
     from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
-    llm_client = _get_llm_client()
+    llm_client = await _get_llm_client_async()
 
     # WHY: one browser session for the whole run, so every page load shares the
     # same cookies and fingerprint instead of looking like a brand-new visitor.
     async with (
         session_factory() as db,
-        _build_browser_session(marketplace) as browser,
-        _page_cache_for_run(options.get("force", False)) as page_cache,
+        _redis_for_run() as redis,
+        _build_browser_session(marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
     ):
+        page_cache = _page_cache_for(redis, options.get("force", False))
         scraper = ScraperService(
             proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
             page_cache=page_cache, event_sink=session_factory,
@@ -305,7 +377,7 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
         # ── Step 3: Scrape top product details ─────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "scraping_products", "progress": 15})
         from app.workers.pipeline_steps.product_details import scrape_product_details
-        detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
+        detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper, marketplace)
 
         # Merge detail data back
         detail_by_asin = {d["asin"]: d for d in detailed_products if d.get("asin")}
@@ -369,6 +441,43 @@ async def _run_discovery_async(task, niche_id: int, keyword: str, options: dict,
         }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 1c. Niche discovery — expand a seed into ranked candidate niches to analyse
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@celery_app.task(
+    bind=True, name="app.workers.tasks.discover_opportunities", max_retries=1,
+    soft_time_limit=TRACKING_SOFT_LIMIT_SECONDS, time_limit=TRACKING_HARD_LIMIT_SECONDS,
+)
+def discover_opportunities(self, seed: str, marketplace: str = "AU"):
+    """Expand a seed keyword into ranked candidate niches. Returns {seed, marketplace, candidates}."""
+    logger.info("Discovering opportunities for seed '%s' (marketplace=%s)", seed, marketplace)
+    try:
+        return _run_async(_discover_opportunities_async(seed, marketplace))
+    except SoftTimeLimitExceeded:
+        logger.error("Discovery for '%s' exceeded the soft time limit", seed)
+        raise
+
+
+async def _discover_opportunities_async(seed: str, marketplace: str) -> dict:
+    """Open one browser session and rank candidate niches for the seed."""
+    from app.services.discovery import DiscoveryService
+    from app.services.scraper_service import ScraperService
+
+    session_factory = _get_session_factory()
+    async with (
+        _redis_for_run() as redis,
+        _build_browser_session(marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
+    ):
+        scraper = ScraperService(
+            proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
+            page_cache=_page_cache_for(redis, force=False), event_sink=session_factory,
+        )
+        candidates = await DiscoveryService(scraper).discover(seed)
+    return {"seed": seed, "marketplace": marketplace, "candidates": candidates}
+
+
 async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: dict, product_asins: list[str] | None = None, marketplace: str = "US"):
     """Async implementation of the full analysis pipeline."""
     from app.models.niche import Niche
@@ -376,16 +485,17 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
-    llm_client = _get_llm_client()
+    llm_client = await _get_llm_client_async()
 
     # WHY: one browser session for the whole run (search, product pages, keyword
     # SERPs), so every page load shares the same cookies and fingerprint. It is
     # opened even for the sub-niche flow because keyword research still scrapes.
     async with (
         session_factory() as db,
-        _build_browser_session(marketplace) as browser,
-        _page_cache_for_run(options.get("force", False)) as page_cache,
+        _redis_for_run() as redis,
+        _build_browser_session(marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
     ):
+        page_cache = _page_cache_for(redis, options.get("force", False))
         scraper = ScraperService(
             proxy_manager=browser.proxy_manager, marketplace=marketplace, session=browser,
             page_cache=page_cache, event_sink=session_factory,
@@ -397,9 +507,19 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         )
         await db.commit()
 
+        # Load the seller's scoring config once for this run. It tunes the hard
+        # filters and sub-score weights (applied later, at scoring) and the sales
+        # multiplier (applied wherever a BSR becomes a unit estimate).
+        from app.services.scoring_config import resolve_sales_multiplier
+        from app.workers.pipeline_steps.seller_overrides import load_scoring_config
+        scoring_config = await load_scoring_config(db)
+        sales_multiplier = resolve_sales_multiplier(marketplace, scoring_config)
+
         if options.get("force"):
             from app.workers.pipeline_steps.reset import reset_niche_analysis_data
-            await reset_niche_analysis_data(db, niche_id)
+            # A re-run keeps the old recommendation visible until the new one is
+            # saved, so the niche never disappears from the list mid-run.
+            await reset_niche_analysis_data(db, niche_id, keep_recommendation=options.get("keep_recommendation", False))
             await db.commit()
 
         if product_asins:
@@ -410,12 +530,20 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             niche_row = (await db.execute(select(Niche).where(Niche.id == niche_id))).scalar_one_or_none()
             parent_id = niche_row.parent_niche_id if niche_row else None
 
-            # Load products from DB that match the given ASINs
+            # Load products that match the given ASINs. WHY in_([parent, child]): the first
+            # run moves these products from the parent niche to this child, so a re-run (retry,
+            # double-click, forced re-analyse) must also find the ones already reassigned —
+            # filtering on the parent alone would match zero rows the second time.
+            allowed_niche_ids = [nid for nid in (parent_id, niche_id) if nid is not None]
             product_query = select(Product).where(Product.asin.in_(product_asins))
-            if parent_id:
-                product_query = product_query.where(Product.niche_id == parent_id)
+            if allowed_niche_ids:
+                product_query = product_query.where(Product.niche_id.in_(allowed_niche_ids))
             result = await db.execute(product_query)
             db_products = result.scalars().all()
+
+            if not db_products:
+                await _update_niche_status(niche_id, "failed", "No products found for this sub-niche")
+                raise ScrapingError(f"No products found for sub-niche {niche_id} (ASINs: {product_asins})")
 
             # Reassign products to child niche
             for p in db_products:
@@ -444,7 +572,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
             # Scrape individual product pages for detailed data
             from app.workers.pipeline_steps.product_details import scrape_product_details
-            detailed_products = await scrape_product_details(db, products_data[:MAX_DETAILED_PRODUCTS], scraper)
+            detailed_products = await scrape_product_details(
+                db, products_data[:MAX_DETAILED_PRODUCTS], scraper, marketplace,
+                sales_multiplier=sales_multiplier,
+            )
 
             # Merge detail page data back into products_data so downstream
             # services (competitor analysis, scoring, financials) use the
@@ -616,7 +747,13 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         product_blueprint = None
         # competitor_reviews_map already collected in step 4 above
         competitor_meta = _build_competitor_metadata(detailed_products)
-        if competitor_reviews_map:
+        # NOTE: the AI blueprint and the consolidated financial report are paid features.
+        # The worker reads the same LICENSE_KEY as the API, so an unlicensed deployment
+        # skips both steps entirely. Read the license once for both checks.
+        from app.licensing import FEATURE_BLUEPRINT, FEATURE_FINANCIAL_REPORT, current_license
+
+        licensed_features = current_license().features
+        if competitor_reviews_map and llm_client and FEATURE_BLUEPRINT in licensed_features:
             try:
                 product_blueprint = await blueprint_svc.generate_blueprint(
                     niche_keyword=keyword,
@@ -639,16 +776,17 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         competitor_list = competitor_landscape.get("competitors", []) if competitor_landscape else []
 
         product_spec = None
-        try:
-            product_spec = await spec_gen.generate_product_spec(
-                niche_keyword=keyword,
-                pain_points=pain_points,
-                positive_themes=positive_themes,
-                competitor_data=competitor_list,
-                price_range=price_range,
-            )
-        except Exception as e:
-            logger.warning("Product spec generation failed: %s", e)
+        if llm_client:
+            try:
+                product_spec = await spec_gen.generate_product_spec(
+                    niche_keyword=keyword,
+                    pain_points=pain_points,
+                    positive_themes=positive_themes,
+                    competitor_data=competitor_list,
+                    price_range=price_range,
+                )
+            except Exception as e:
+                logger.warning("Product spec generation failed: %s", e)
 
         # ── Step 5b: Product Ideas ──────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "product_ideas", "progress": 53})
@@ -686,7 +824,7 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("1688 login failed: %s", e)
 
-        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager)
+        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager, pacer=_shared_pacer(redis, "1688"))
 
         scraped_suppliers: list[dict] = []
         try:
@@ -732,7 +870,20 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         from app.services.market_signals import apply_supplier_summary
 
-        metrics = _build_base_metrics(competitor_landscape, detailed_products, keyword_research_summary, marketplace=marketplace)
+        metrics = _build_base_metrics(
+            competitor_landscape, detailed_products, keyword_research_summary,
+            marketplace=marketplace, sales_multiplier=sales_multiplier,
+        )
+
+        # Carry the seller's config into the metrics so ScoringService applies
+        # their thresholds and weights. None means the built-in defaults apply.
+        metrics["scoring_config"] = scoring_config
+
+        from app.workers.pipeline_steps.review_velocity import apply_review_velocity
+        await apply_review_velocity(
+            db, niche_id, metrics, marketplace=marketplace, filter_enabled=Settings().REVIEW_VELOCITY_FILTER_ENABLED,
+        )
+
         apply_supplier_summary(metrics, supplier_summary)
         product_dims = _extract_avg_dimensions(detailed_products)
         supplier_data = None
@@ -816,6 +967,8 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             financial_summary = forecast_svc.summarize_forecast(forecast)
             await forecast_svc.save_projections(niche_id, forecast)
             metrics["break_even_week_base"] = _base_case_break_even_week(financial_summary)
+            from app.workers.pipeline_steps.assumptions import GAP_BREAK_EVEN, clear_data_gap
+            clear_data_gap(metrics, GAP_BREAK_EVEN)
 
             # Calculate launch capital
             launch_capital = forecast_svc.calculate_launch_capital(
@@ -855,28 +1008,32 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         from app.services.financial_report import FinancialReportService
         fin_report_svc = FinancialReportService(marketplace=marketplace)
 
+        # The consolidated financial report is a paid feature; skip it on an unlicensed deployment.
         financial_report = None
-        try:
-            from app.core.category_mapping import category_slugs
-            duty_slug, fee_slug = category_slugs(metrics.get("category"))
-            financial_report = await fin_report_svc.generate_full_report(
-                selling_price=metrics.get("avg_price") or 30,
-                # Use the real scraped 1688 FOB price when we have one; otherwise fall back
-                # to a rough share of landed cost (FOB is typically ~55% of total landed cost).
-                unit_cost_fob=metrics.get("fob_unit_cost") or (metrics.get("landed_cost") or DEFAULT_LANDED_COST_USD) * FOB_SHARE_OF_LANDED_FALLBACK,
-                product_dims=product_dims,
-                category=duty_slug,
-                fee_category=fee_slug,
-                weight_kg_per_unit=product_dims["weight_lb"] * LB_TO_KG,
-                order_quantity=metrics.get("initial_order_qty") or 500,
-                estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
-                avg_cpc=metrics.get("avg_cpc") or 1.50,
-                launch_ppc_daily=metrics.get("ppc_daily_budget") or 30,
-                hard_filter_results=hard_filter_results,
-                confidence_tier=confidence_tier,
-            )
-        except Exception as e:
-            logger.warning("Consolidated financial report failed: %s", e)
+        if FEATURE_FINANCIAL_REPORT not in licensed_features:
+            logger.info("Consolidated financial report skipped: not in the installed license")
+        else:
+            try:
+                from app.core.category_mapping import category_slugs
+                duty_slug, fee_slug = category_slugs(metrics.get("category"))
+                financial_report = await fin_report_svc.generate_full_report(
+                    selling_price=metrics.get("avg_price") or 30,
+                    # Use the real scraped 1688 FOB price when we have one; otherwise fall back
+                    # to a rough share of landed cost (FOB is typically ~55% of total landed cost).
+                    unit_cost_fob=metrics.get("fob_unit_cost") or (metrics.get("landed_cost") or DEFAULT_LANDED_COST_USD) * FOB_SHARE_OF_LANDED_FALLBACK,
+                    product_dims=product_dims,
+                    category=duty_slug,
+                    fee_category=fee_slug,
+                    weight_kg_per_unit=product_dims["weight_lb"] * LB_TO_KG,
+                    order_quantity=metrics.get("initial_order_qty") or 500,
+                    estimated_monthly_sales=metrics.get("estimated_monthly_sales") or 200,
+                    avg_cpc=metrics.get("avg_cpc") or 1.50,
+                    launch_ppc_daily=metrics.get("ppc_daily_budget") or 30,
+                    hard_filter_results=hard_filter_results,
+                    confidence_tier=confidence_tier,
+                )
+            except Exception as e:
+                logger.warning("Consolidated financial report failed: %s", e)
 
         # ── Step 13: Save recommendation ───────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "saving_recommendation", "progress": 93})
@@ -1014,7 +1171,7 @@ async def _record_snapshot(product, context: TrackingContext, snapshot: dict) ->
         product_id=product.id, asin=product.asin,
         bsr=snapshot["current_bsr"], category_name=snapshot["bsr_category"],
         subcategory_bsr=snapshot["current_subcategory_bsr"], subcategory_name=snapshot["subcategory_name"],
-        price=snapshot["price"],
+        price=snapshot["price"], review_count=snapshot.get("review_count"),
     )
     if snapshot["current_bsr"]:
         product.current_bsr = snapshot["current_bsr"]
@@ -1056,7 +1213,10 @@ async def _track_bsr_niche_async(niche_id: int):
 
         try:
             # WHY: one browser session per niche, shared by every product page load.
-            async with _build_browser_session(niche_marketplace) as browser:
+            async with (
+                _redis_for_run() as redis,
+                _build_browser_session(niche_marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
+            ):
                 context = TrackingContext(
                     scraper=ScraperService(
                         proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
@@ -1146,7 +1306,10 @@ async def _scrape_reviews_async(niche_id: int, asin: str, max_pages: int):
         from app.services.scraper_service import ScraperService
 
         try:
-            async with _build_browser_session(niche_marketplace) as browser:
+            async with (
+                _redis_for_run() as redis,
+                _build_browser_session(niche_marketplace, pacer=_shared_pacer(redis, "amazon")) as browser,
+            ):
                 scraper = ScraperService(
                     proxy_manager=browser.proxy_manager, marketplace=niche_marketplace, session=browser,
                     # WHY page_cache=None: scrape_reviews() never reads the cache, so
@@ -1202,7 +1365,7 @@ async def _refresh_competitor_async(niche_id: int, keyword: str):
     from app.services.competitor_service import CompetitorService
 
     session_factory = _get_session_factory()
-    llm_client = _get_llm_client()
+    llm_client = await _get_llm_client_async()
 
     async with session_factory() as db:
         svc = CompetitorService(db, llm_client)
@@ -1374,6 +1537,10 @@ async def _scrape_search_results(scraper: "ScraperService", keyword: str, market
 
     try:
         return await scraper.scrape_search_results(keyword, pages=SERP_FALLBACK_PAGES)
+    except WrongMarketplaceError:
+        # NOTE: an empty result here would be reported as "no products found", which hides
+        # the real cause (a geo-redirect) and triggers retries that cannot succeed.
+        raise
     except Exception as e:
         logger.warning("Search scraping failed for '%s': %s", keyword, e)
         return []
@@ -1572,24 +1739,50 @@ async def _analyze_suppliers(
     from app.core.category_mapping import category_slugs
     from app.services.supplier_service import SupplierService
 
+    from dataclasses import replace as _dc_replace
+
+    from app.core.currency import convert_from_usd, convert_to_usd, is_converted_marketplace
+
     svc = SupplierService(marketplace=marketplace)
     avg_price = metrics.get("avg_price", 30)
-    unit_cost = fob_unit_cost or avg_price * FOB_FALLBACK_SHARE_OF_PRICE
-    if fob_unit_cost is None:
+
+    # Supplier FOB is quoted in USD. When we have no scraped price we estimate it
+    # from the sale price (which is in the marketplace currency), so convert that
+    # estimate to USD too — the whole landed-cost math runs in USD, then converts once.
+    if fob_unit_cost is not None:
+        unit_cost_usd = fob_unit_cost
+    else:
+        unit_cost_usd = convert_to_usd(avg_price * FOB_FALLBACK_SHARE_OF_PRICE, marketplace)
         logger.info("No supplier prices scraped; estimating FOB as %.0f%% of price", FOB_FALLBACK_SHARE_OF_PRICE * 100)
+    metrics["fob_unit_cost_estimated"] = fob_unit_cost is None
     duty_slug, _ = category_slugs(metrics.get("category"))
 
-    landed = svc.calculate_landed_cost(unit_cost=unit_cost, quantity=500, weight_kg=weight_kg, category=duty_slug)
+    landed = svc.calculate_landed_cost(unit_cost=unit_cost_usd, quantity=500, weight_kg=weight_kg, category=duty_slug)
+
+    # Convert the USD landed cost into the marketplace currency so the margin is
+    # computed against a same-currency sale price. Referral/fulfilment fees and
+    # CPC are already in the marketplace currency (they scale off the AUD price
+    # or come from the AU fee tables), so only the landed cost needs converting.
+    landed_usd = landed.total_cost_to_amazon
+    landed_in_marketplace = convert_from_usd(landed_usd, marketplace)
+    landed_for_margin = _dc_replace(landed, total_cost_to_amazon=landed_in_marketplace)
+
     margin = svc.calculate_margins(
-        selling_price=avg_price, landed_cost=landed,
+        selling_price=avg_price, landed_cost=landed_for_margin,
         fba_fulfillment_fee=metrics.get("fba_fees", 5),
         ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,
     )
-    metrics["fob_unit_cost"] = round(unit_cost, 4)
-    metrics["landed_cost"] = landed.total_cost_to_amazon
+    metrics["fob_unit_cost"] = round(convert_from_usd(unit_cost_usd, marketplace), 4)
+    metrics["landed_cost"] = round(landed_in_marketplace, 4)
     metrics["pre_ppc_margin_pct"] = margin["pre_ppc_margin_pct"]
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
-    return {"landed_cost": {"total_landed_cost_usd_per_unit": landed.total_cost_to_amazon}, "margins": margin}
+
+    # A fixed FX rate was applied, so flag it for the seller to sanity-check.
+    if is_converted_marketplace(marketplace):
+        from app.workers.pipeline_steps.assumptions import GAP_FX_ASSUMED, record_data_gap
+        record_data_gap(metrics, GAP_FX_ASSUMED)
+
+    return {"landed_cost": {"total_landed_cost_per_unit": landed_in_marketplace}, "margins": margin}
 
 
 # CNY to USD conversion rate
@@ -1734,11 +1927,14 @@ def _build_base_metrics(
     detailed_products: list[dict],
     keyword_research_summary: dict | None = None,
     marketplace: str = "US",
+    sales_multiplier: float = 1.0,
 ) -> dict:
     """Build base metrics dict from competitor data and scraped products."""
     metrics = {
         "avg_price": 0,
-        "avg_bsr": 0,
+        # NOTE: avg_bsr is deliberately NOT seeded. A seeded 0 reads as rank #0 (the best
+        # possible) to the scorer, so a BSR blackout would score as top demand. Leaving it
+        # absent lets ScoringService's m.get("avg_bsr", 99999) treat "unknown" as poor demand.
         "estimated_monthly_sales": 0,
         "avg_rating": 0,
         "avg_review_count": 0,
@@ -1779,13 +1975,15 @@ def _build_base_metrics(
         rating_stats = competitor_landscape.get("rating_stats", {})
         metrics.update({
             "avg_price": price_stats.get("avg", competitor_landscape.get("avg_price", 0)),
-            "avg_bsr": competitor_landscape.get("avg_bsr", 0),
             "avg_rating": rating_stats.get("avg", competitor_landscape.get("avg_rating", 0)),
             "avg_review_count": review_stats.get("avg", competitor_landscape.get("avg_review_count", 0)),
             "median_competitor_reviews": review_stats.get("median", competitor_landscape.get("median_reviews", 0)),
             "avg_listing_quality": competitor_landscape.get("avg_listing_quality", 50),
             "estimated_monthly_sales": competitor_landscape.get("estimated_monthly_sales", 0),
         })
+        # Only set avg_bsr from a real measurement; never seed it (see the note above).
+        if competitor_landscape.get("avg_bsr"):
+            metrics["avg_bsr"] = competitor_landscape["avg_bsr"]
 
     # Fallback: if avg_price is still 0, compute from detailed products
     if not metrics["avg_price"] and detailed_products:
@@ -1797,8 +1995,8 @@ def _build_base_metrics(
                 len(prices), metrics["avg_price"],
             )
 
-    # Fallback: if avg_bsr is still 0, compute from detailed products
-    if not metrics["avg_bsr"] and detailed_products:
+    # Fallback: if avg_bsr is still unknown, compute from detailed products
+    if not metrics.get("avg_bsr") and detailed_products:
         bsrs = [p.get("current_bsr") for p in detailed_products if p.get("current_bsr")]
         if bsrs:
             metrics["avg_bsr"] = round(sum(bsrs) / len(bsrs))
@@ -1809,10 +2007,19 @@ def _build_base_metrics(
         if reviews:
             metrics["avg_review_count"] = round(sum(reviews) / len(reviews))
 
+    # Fallback: if the competitor pass gave no median review count, compute it from the
+    # detailed products. Without this the review-moat hard filter reads 0 and always passes.
+    if not metrics["median_competitor_reviews"] and detailed_products:
+        review_counts = [p.get("review_count") for p in detailed_products if p.get("review_count")]
+        if review_counts:
+            metrics["median_competitor_reviews"] = round(median(review_counts))
+
     # Compute estimated_monthly_sales from BSR using regression model
-    if not metrics["estimated_monthly_sales"] and metrics["avg_bsr"]:
+    if not metrics["estimated_monthly_sales"] and metrics.get("avg_bsr"):
         from app.core.bsr_regression import BSRSalesEstimator
-        estimator = BSRSalesEstimator(marketplace=metrics.get("marketplace", "US"))
+        estimator = BSRSalesEstimator(
+            marketplace=metrics.get("marketplace", "US"), sales_multiplier=sales_multiplier,
+        )
         metrics["estimated_monthly_sales"] = estimator.estimate_monthly_sales(
             bsr=int(metrics["avg_bsr"]),
             category=metrics.get("category", "default"),
@@ -1828,9 +2035,11 @@ def _build_base_metrics(
     if metrics["estimated_monthly_sales"] > 0 and metrics["avg_price"] > 0:
         metrics["monthly_revenue_per_seller"] = round(metrics["estimated_monthly_sales"] * metrics["avg_price"])
 
-    # Fallback: if still zero but we have products with prices, estimate from product count
+    # Fallback: no BSR to estimate from, so assume a mid-range figure. Flagged so the
+    # brief discloses it as an assumption (see pipeline_steps/assumptions.py).
     if not metrics["estimated_monthly_sales"]:
         metrics["estimated_monthly_sales"] = 300
+        metrics["sales_estimated"] = True
         logger.info("Using fallback estimated_monthly_sales: 300")
 
     return metrics
@@ -1878,16 +2087,10 @@ def _enrich_metrics(
         landed = supplier_data.get("landed_cost", {})
         metrics["landed_cost"] = landed.get("total_landed_cost_usd_per_unit", metrics.get("landed_cost", 0))
 
-    # NOTE: supplier defaults only apply when 1688 scraping returned nothing,
-    # so an outage does not zero the score. Tracked in TODO.md.
-    metrics.setdefault("supplier_count", 5)
-    metrics.setdefault("best_supplier_score", 70)
-    metrics.setdefault("min_moq", 500)
-    metrics.setdefault("break_even_week_base", 16)
-    # Only fall back to 3000 if keyword research didn't populate search_volume
-    if not metrics.get("search_volume"):
-        metrics.setdefault("search_volume", 3000)
-    metrics.setdefault("monthly_revenue_per_seller", 5000)
+    # Fill any scoring inputs we could not measure, and record each one as a
+    # data gap instead of a silent fake default (see assumptions.py).
+    from app.workers.pipeline_steps.assumptions import apply_assumed_defaults
+    apply_assumed_defaults(metrics)
 
 
 def _has_chinese(text: str | None) -> bool:
@@ -1939,7 +2142,18 @@ async def _translate_supplier_fields(llm_client, suppliers: list[dict]) -> list[
                 # Strip leading number + dot/parenthesis
                 cleaned = re.sub(r"^\d+[\.\)\]]\s*", "", line)
                 parsed.append(cleaned)
-            translated.extend(parsed)
+            # WHY: translations are matched back to fields by position across all chunks.
+            # If the LLM merges, splits, or drops a line, this chunk's count is wrong and
+            # every later chunk would be written to the wrong supplier/field. Fall back to
+            # the untranslated chunk on a count mismatch so the misalignment can't propagate.
+            if len(parsed) != len(chunk):
+                logger.warning(
+                    "Translation chunk returned %d lines for %d inputs; keeping originals",
+                    len(parsed), len(chunk),
+                )
+                translated.extend(chunk)
+            else:
+                translated.extend(parsed)
         except Exception as e:
             logger.warning("Translation chunk failed: %s", e)
             # Keep originals for failed chunks

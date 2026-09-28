@@ -575,8 +575,22 @@ same domain, shared process-wide:
 - Amazon: `AMAZON_GAP_SECONDS = (3.0, 7.0)` seconds
 - 1688.com: `ALIBABA_GAP_SECONDS = (5.0, 10.0)` seconds
 
-Each `BrowserSession.load()` call waits its turn before navigating. The pacer state
-is in-process, not shared across Celery workers — see the caveat in `TODO.md`.
+Each `BrowserSession.load()` call waits its turn before navigating.
+
+**Shared pacing across worker processes**
+
+With Celery running at `--concurrency=4`, four in-process `Pacer` instances used
+to let four workers hit Amazon at once — four times the configured rate. Every
+pipeline/worker `BrowserSession` and the 1688 `SupplierScraper` (including
+`SupplierMatchService` searches) now pace through `SharedPacer`
+(`app/scraping/pacing.py`) instead: it holds a slot in Redis under the key
+`pace:{domain}` (a `SET pace:{domain} NX PX <gap>`) — whoever claims the slot
+goes; the slot expires after one random gap — so one gap is shared by every
+worker process, not one gap per process. `REDIS_URL` must be reachable from every worker for
+this coordination to happen. If a `SharedPacer` call to Redis fails for any
+reason, that instance switches to its local `Pacer` fallback for the rest of the
+run and logs "Shared pacing unavailable" once — pacing degrades back to
+per-process instead of the run failing.
 
 **Image/media/font blocking**
 
@@ -589,12 +603,23 @@ images, fonts, or media from a scraped page.
 **Block detection and rotation**
 
 Every loaded page is classified by `classify_page()` (`app/scraping/block_detection.py`)
-into one of four verdicts:
+into one of five verdicts:
 
 - `ok` — the page we asked for actually rendered
 - `captcha` — Amazon's "Robot Check" / "Enter the characters you see below" challenge
 - `soft_block` — a 200 OK response, but the expected content selector never appeared
 - `server_error` — HTTP 5xx
+- `wrong_marketplace` — Amazon redirected the request to another country's store
+
+**Geo-redirects.** Amazon serves the visitor's local store: a request for
+`amazon.com` from an Australian IP lands on `amazon.com.au` (the URL carries
+`ref_=mr_direct_us_au_au`). The page parses perfectly, so nothing downstream would
+notice that a "US" analysis was filled with Australian prices and ranks. The session
+compares the final URL's host with the marketplace domain and returns
+`wrong_marketplace`; `ScraperService` then fails the load immediately with a
+message naming the fix. Rotating proxies does not help unless the proxy exits in
+the marketplace's own country, so to scrape a marketplace you are not in you need
+either a proxy located there (`PROXY_PROVIDER`) or SP-API credentials.
 
 `ScraperService._load()` rotates the session (new proxy identity + new persona,
 `BrowserSession.rotate()`) whenever it sees `captcha` or `server_error`, and also
@@ -621,7 +646,9 @@ Only pages classified `ok` are ever written to the cache — a captcha or soft-b
 response is never stored as if it were real data. A forced re-run (`force=true` on
 the analyze endpoints) bypasses the cache entirely and always re-scrapes. The cache
 is failure-tolerant: a Redis outage is treated as a cache miss, not an error, so
-scraping keeps working with Redis down, just without the speedup.
+scraping keeps working with Redis down, just without the speedup. With Redis
+unreachable (not refusing connections), each cached-page lookup waits up to the
+2 s socket timeout (`REDIS_SOCKET_TIMEOUT_SECONDS`) before degrading to a miss.
 
 **Telemetry: `scrape_events` and `GET /api/v1/niches/scrape-health`**
 
@@ -629,7 +656,7 @@ Every page load attempt writes one row to the `scrape_events` table (migration
 014, `app/models/scrape_event.py`) — including ones that needed a rotation, so a
 load that took two rotations shows up as three rows. Each row records the site,
 `url_kind` (`serp` | `product` | `reviews` | `serp_meta` | `rank`), verdict (`ok` |
-`captcha` | `soft_block` | `server_error` | `timeout`), proxy label, and duration.
+`captcha` | `soft_block` | `server_error` | `timeout` | `wrong_marketplace`), proxy label, and duration.
 Recording is fire-and-forget (`app/scraping/events.py`) — a telemetry failure never
 breaks scraping.
 
@@ -795,6 +822,7 @@ sequenceDiagram
 - **Sub-category BSR:** The 10x scaling factor for sub-category BSR is an approximation. Actual ratios vary from 5x-20x depending on the sub-category relative to its parent.
 - **Seasonal products:** BSR fluctuates significantly for seasonal products. A point-in-time BSR snapshot may not represent annual averages.
 - **New vs. established products:** BSR behaves differently for newly launched products (volatile) vs. established ones (stable). The model doesn't distinguish between these.
+- **Review-velocity trap (hard filter #9) is observe-only by default:** the reviews-per-100-sales ratio is computed from tracked review-count snapshots and stored as `risk_flags.review_velocity_gap_ratio`, but it disqualifies a niche only when `REVIEW_VELOCITY_FILTER_ENABLED=true`. The count comes from Amazon's global ratings count, which grows faster than written reviews, so the 5 %/3 % trap thresholds are not yet calibrated for it. SP-API-tracked products never get a review count, so the window only accumulates from page scrapes (analysis-time and scrape-based tracking).
 
 ### LLM Analysis
 
@@ -814,6 +842,7 @@ sequenceDiagram
 - **Single-user design:** The current implementation has no user authentication or multi-tenancy. It's designed for personal use on a local machine or private server.
 - **No real-time updates:** Data is collected at analysis time and stored. There's no continuous monitoring or automatic re-analysis unless Celery beat tasks are configured.
 - **TimescaleDB dependency:** The BSR and price time-series features require TimescaleDB. Standard PostgreSQL works for everything else, but hypertable queries will fail without the extension.
+- **Not every browser is on the shared Redis pacer yet:** `AlibabaLoginService` (the 1688 login page, used only when stored cookies are invalid), the keyword-research scraper session behind `POST /niches/{id}/keywords/research`, and `AmazonLoginService` (currently has no callers) still pace themselves per process rather than through `SharedPacer`.
 
 ---
 

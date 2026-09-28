@@ -18,6 +18,17 @@ class ScrapingError(OmniscientError):
         super().__init__(detail, status_code=502, retry_after=retry_after)
 
 
+class WrongMarketplaceError(ScrapingError):
+    """Amazon redirected us to another country's store.
+
+    Retrying cannot help: the redirect is decided by the exit IP's country, so the
+    operator must change the proxy or use SP-API. Callers must not retry on this.
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(detail, retry_after=None)
+
+
 class SPAPIError(OmniscientError):
     """Raised when Amazon SP-API calls fail."""
 

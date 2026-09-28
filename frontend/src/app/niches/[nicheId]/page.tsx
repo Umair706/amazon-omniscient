@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScoreBadge } from "@/components/score-badge";
+import { InfoHint } from "@/components/info-hint";
+import { StarButton } from "@/components/star-button";
+import { Breadcrumbs } from "@/components/breadcrumbs";
+import { ReanalyzeButton } from "./reanalyze-button";
+import { EmptyState, EMPTY_REASONS } from "@/components/empty-state";
+import { useStars } from "@/lib/use-stars";
+import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
 import { StatCard } from "@/components/stat-card";
 import { ScoreRadar, ProfitChart, SalesChart, CompetitorBarChart } from "@/components/charts";
 import { formatCurrency } from "@/lib/utils";
@@ -18,7 +25,6 @@ import {
   Star,
   ShoppingCart,
   Users,
-  ArrowLeft,
   ExternalLink,
   Search,
 } from "lucide-react";
@@ -33,6 +39,7 @@ interface ProductItem {
   rating: number | null;
   review_count: number;
   image_url: string | null;
+  estimated_monthly_units: number | null;
   estimated_daily_sales: number | null;
   sales_velocity_trend: string | null;
   search_position: number | null;
@@ -45,9 +52,9 @@ interface ProductItem {
 interface CompetitorItem {
   id: number;
   asin: string;
-  title: string;
+  title: string | null;
   listing_quality_score: number | null;
-  review_count: number;
+  review_count: number | null;
   rating: number | null;
   vulnerabilities: string[];
 }
@@ -64,6 +71,13 @@ interface KeywordItem {
 }
 
 type TabId = "overview" | "products" | "competitors" | "keywords" | "financials";
+
+// The first week a scenario's running profit turns non-negative, or null if it
+// never does within the projection. Used to annotate the profit chart.
+function breakEvenWeekFor(projection: Array<{ week_number: number; cumulative_profit: number }>): number | null {
+  const hit = projection.find((p) => p.cumulative_profit >= 0);
+  return hit ? hit.week_number : null;
+}
 
 function VelocityBadge({ trend }: { trend: string | null }) {
   if (!trend) return <span className="text-muted-foreground">—</span>;
@@ -112,11 +126,19 @@ function CompetitionBadge({ level }: { level: string | null }) {
   );
 }
 
+const TAB_IDS: TabId[] = ["overview", "products", "competitors", "keywords", "financials"];
+
 export default function NicheDetailPage() {
   const params = useParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const nicheId = params.nicheId as string;
 
-  const [tab, setTab] = useState<TabId>("overview");
+  const { isStarred, toggle } = useStars();
+  // The active tab lives in the URL (?tab=products) so it survives refresh and is shareable.
+  const urlTab = searchParams.get("tab") as TabId | null;
+  const tab: TabId = urlTab && TAB_IDS.includes(urlTab) ? urlTab : "overview";
+  const setTab = (id: TabId) => router.replace(`/niches/${nicheId}?tab=${id}`, { scroll: false });
   const [niche, setNiche] = useState<NicheDetail | null>(null);
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [competitors, setCompetitors] = useState<CompetitorItem[]>([]);
@@ -194,25 +216,32 @@ export default function NicheDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </button>
-          <h1 className="text-3xl font-bold">{niche.name}</h1>
+          <Breadcrumbs items={[{ label: "Dashboard", href: "/" }, { label: "Niches", href: "/niches" }, { label: niche.name || niche.primary_keyword }]} />
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold">{niche.name}</h1>
+            <StarButton starred={isStarred(niche.id)} onToggle={() => toggle(niche.id)} className="mt-1" />
+          </div>
           <p className="text-muted-foreground mt-1">{niche.primary_keyword}</p>
+          <Badge variant="outline" className="mt-2" title={marketplaceLabel(niche.marketplace)}>
+            {marketplaceLabel(niche.marketplace)}
+          </Badge>
         </div>
-        {niche.opportunity_score != null && (
-          <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
-        )}
+        <div className="flex flex-col items-end gap-3">
+          {niche.opportunity_score != null && (
+            <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="lg" />
+          )}
+          <ReanalyzeButton nicheId={niche.id} status={niche.status} />
+        </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "—"} icon={DollarSign} />
-        <StatCard title="Avg BSR" value={niche.avg_bsr?.toLocaleString() || "—"} icon={TrendingUp} />
-        <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} />
-        <StatCard title="Search Volume" value={niche.monthly_search_volume?.toLocaleString() || "—"} icon={BarChart3} />
-        <StatCard title="Avg Rating" value={niche.avg_rating ? `${niche.avg_rating}/5` : "—"} icon={Star} />
-        <StatCard title="Avg Reviews" value={niche.avg_review_count?.toLocaleString() || "—"} icon={Users} />
+        <StatCard title="Avg Price" value={niche.avg_sale_price ? formatCurrency(niche.avg_sale_price, niche.marketplace ?? undefined) : "—"} icon={DollarSign} hint="Average selling price across the top products scraped for this niche." />
+        <StatCard title="Avg BSR" value={niche.avg_bsr?.toLocaleString() || "—"} icon={TrendingUp} hint="Average Best Sellers Rank of the scraped products. Lower means higher demand." />
+        <StatCard title="Monthly Sales" value={niche.estimated_monthly_sales?.toLocaleString() || "—"} icon={ShoppingCart} hint={`Estimated units/month for a typical listing, from the average BSR via a category sales curve.${niche.marketplace && niche.marketplace !== "US" ? " Uncalibrated for this marketplace — treat as a rough guide." : ""}`} />
+        <StatCard title="Search Volume" value={niche.monthly_search_volume?.toLocaleString() || "—"} icon={BarChart3} hint="Monthly searches for the top keyword, from Amazon autocomplete depth. An estimate, not an exact figure." />
+        <StatCard title="Avg Rating" value={niche.avg_rating ? `${niche.avg_rating}/5` : "—"} icon={Star} hint="Average star rating across the scraped products." />
+        <StatCard title="Avg Reviews" value={niche.avg_review_count?.toLocaleString() || "—"} icon={Users} hint="Average review count across the scraped products — the review moat a new entrant faces." />
       </div>
 
       {niche.last_error && (
@@ -244,14 +273,14 @@ export default function NicheDetailPage() {
       {tab === "overview" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
-            <CardHeader><CardTitle className="text-lg">Sub-Score Radar</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-lg">Sub-Score Radar <InfoHint text="Nine 0-100 sub-scores (demand, competition, margin, revenue, trend, reviews, supplier, PPC, launch). Their weighted sum is the Omniscient Score." /></CardTitle></CardHeader>
             <CardContent>
               <ScoreRadar subScores={subScores} />
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader><CardTitle className="text-lg">Hard Filters</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-lg">Hard Filters <InfoHint text="Nine pass/fail gates (price band, review moat, BSR ceiling, margin, Amazon share, hazmat, IP risk, seasonality, review velocity). Any single failure forces the FAIL tier regardless of score." /></CardTitle></CardHeader>
             <CardContent>
               {niche.hard_filter_fail_reasons && niche.hard_filter_fail_reasons.length > 0 ? (
                 <div className="space-y-2">
@@ -322,6 +351,9 @@ export default function NicheDetailPage() {
       {tab === "products" && (
         <Card>
           <CardContent className="p-0">
+            <p className="px-4 pt-4 text-xs text-muted-foreground">
+              Products and prices from {marketplaceLabel(niche.marketplace)}
+            </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -329,9 +361,9 @@ export default function NicheDetailPage() {
                     <th className="p-4">#</th>
                     <th className="p-4">Product</th>
                     <th className="p-4">Price</th>
-                    <th className="p-4">BSR</th>
-                    <th className="p-4">Est. Daily Sales</th>
-                    <th className="p-4">Velocity</th>
+                    <th className="p-4 whitespace-nowrap">BSR <InfoHint text="Best Sellers Rank scraped from the product page. Lower = sells more. #1 is the category best-seller." /></th>
+                    <th className="p-4 whitespace-nowrap">Est. Sales/mo <InfoHint text={`Estimated monthly units, derived from this product's BSR via a category sales curve.${niche.marketplace && niche.marketplace !== "US" ? " Uncalibrated for this marketplace — treat as a rough guide." : ""}`} /></th>
+                    <th className="p-4 whitespace-nowrap">Velocity <InfoHint text="Direction of the product's BSR over time. Appears once the 6-hourly tracker has built at least two snapshots; blank on a fresh analysis." /></th>
                     <th className="p-4">Rating</th>
                     <th className="p-4">Reviews</th>
                     <th className="p-4">Badges</th>
@@ -340,7 +372,7 @@ export default function NicheDetailPage() {
                 </thead>
                 <tbody>
                   {products.length === 0 ? (
-                    <tr><td colSpan={10} className="p-8 text-center text-muted-foreground">No products found.</td></tr>
+                    <tr><td colSpan={10}><EmptyState title="No products captured" reason={EMPTY_REASONS.noProducts} /></td></tr>
                   ) : (
                     products.map((p) => (
                       <tr key={p.id} className="border-b last:border-0 hover:bg-muted/50">
@@ -360,9 +392,9 @@ export default function NicheDetailPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="p-4">{p.current_price ? formatCurrency(p.current_price) : "—"}</td>
+                        <td className="p-4">{p.current_price ? formatCurrency(p.current_price, niche.marketplace ?? undefined) : "—"}</td>
                         <td className="p-4">{(p.bsr_current || p.current_bsr)?.toLocaleString() || "—"}</td>
-                        <td className="p-4">{p.estimated_daily_sales != null ? p.estimated_daily_sales : "—"}</td>
+                        <td className="p-4">{p.estimated_monthly_units != null ? p.estimated_monthly_units.toLocaleString() : "—"}</td>
                         <td className="p-4"><VelocityBadge trend={p.sales_velocity_trend} /></td>
                         <td className="p-4">{p.rating ? `${p.rating}/5` : "—"}</td>
                         <td className="p-4">{p.review_count?.toLocaleString() || "0"}</td>
@@ -391,7 +423,7 @@ export default function NicheDetailPage() {
                               Details
                             </a>
                             <a
-                              href={`https://amazon.com/dp/${p.asin}`}
+                              href={amazonProductUrl(p.asin, niche.marketplace)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs"
@@ -412,15 +444,18 @@ export default function NicheDetailPage() {
 
       {tab === "competitors" && (
         <div className="space-y-6">
+          <p className="text-xs text-muted-foreground">
+            Competitors from {marketplaceLabel(niche.marketplace)}
+          </p>
           {competitors.length > 0 && (
             <Card>
               <CardHeader><CardTitle className="text-lg">Listing Quality Comparison</CardTitle></CardHeader>
               <CardContent>
                 <CompetitorBarChart
                   competitors={competitors.map((c) => ({
-                    name: c.title.substring(0, 30),
+                    name: (c.title || c.asin || "Unknown").substring(0, 30),
                     listing_quality_score: c.listing_quality_score ?? 0,
-                    review_count: c.review_count,
+                    review_count: c.review_count ?? 0,
                     rating: c.rating ?? 0,
                   }))}
                   metric="listing_quality_score"
@@ -445,7 +480,7 @@ export default function NicheDetailPage() {
                   </thead>
                   <tbody>
                     {competitors.length === 0 ? (
-                      <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No competitor data.</td></tr>
+                      <tr><td colSpan={6}><EmptyState title="No competitor data" reason={EMPTY_REASONS.competitors} /></td></tr>
                     ) : (
                       competitors.map((c) => (
                         <tr key={c.id} className="border-b last:border-0 hover:bg-muted/50">
@@ -511,7 +546,7 @@ export default function NicheDetailPage() {
                         <td className="p-4">{k.search_volume?.toLocaleString() || "—"}</td>
                         <td className="p-4"><CompetitionBadge level={k.competition_level} /></td>
                         <td className="p-4">{k.sponsored_result_count ?? "—"}</td>
-                        <td className="p-4">{k.avg_cpc != null ? `$${Number(k.avg_cpc).toFixed(2)}` : "—"}</td>
+                        <td className="p-4">{k.avg_cpc != null ? formatCurrency(k.avg_cpc, niche.marketplace ?? undefined) : "—"}</td>
                         <td className="p-4"><RelevanceBar score={k.relevance_score != null ? Number(k.relevance_score) : null} /></td>
                         <td className="p-4">
                           <Badge variant="outline" className="text-xs">{k.source || "—"}</Badge>
@@ -531,14 +566,49 @@ export default function NicheDetailPage() {
           {baseData.length > 0 ? (
             <>
               <Card>
-                <CardHeader><CardTitle className="text-lg">Cumulative Profit — Bull / Base / Bear</CardTitle></CardHeader>
-                <CardContent>
-                  <ProfitChart bull={bullData} base={baseData} bear={bearData} />
+                <CardHeader>
+                  <CardTitle className="text-lg">Cumulative profit over the first year</CardTitle>
+                  <CardDescription>
+                    Each line is your running total profit, week by week. Below the dotted line you are still in the red;
+                    where a line crosses it is that scenario&apos;s break-even. Base is the expected case, Bull the optimistic one, Bear the pessimistic one.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ProfitChart
+                    bull={bullData} base={baseData} bear={bearData}
+                    marketplace={niche.marketplace ?? undefined}
+                    breakEvenWeek={breakEvenWeekFor(baseData)}
+                  />
+                  {/* Concrete numbers per scenario, so the chart isn't the only takeaway. */}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {[
+                      { label: "Bull (best case)", data: bullData, tone: "text-tier1" },
+                      { label: "Base (expected)", data: baseData, tone: "text-primary" },
+                      { label: "Bear (worst case)", data: bearData, tone: "text-rejected" },
+                    ].map(({ label, data, tone }) => {
+                      const be = breakEvenWeekFor(data);
+                      const final = data.length ? data[data.length - 1].cumulative_profit : 0;
+                      return (
+                        <div key={label} className="rounded-lg border bg-muted/30 p-3">
+                          <p className={`text-sm font-semibold ${tone}`}>{label}</p>
+                          <div className="mt-1 space-y-0.5 text-sm">
+                            <div className="flex justify-between"><span className="text-muted-foreground">Break-even</span><span className="font-medium">{be ? `Week ${be}` : "Not in year 1"}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">Profit by week 52</span><span className="font-medium">{formatCurrency(final, niche.marketplace ?? undefined)}</span></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader><CardTitle className="text-lg">Weekly Sales & Review Growth (Base)</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle className="text-lg">Weekly units sold and reviews (expected case)</CardTitle>
+                  <CardDescription>
+                    Units sold per week and the review count building up alongside, for the base scenario. Reviews lag sales, which is why early weeks are the hardest.
+                  </CardDescription>
+                </CardHeader>
                 <CardContent>
                   <SalesChart projections={baseData} />
                 </CardContent>

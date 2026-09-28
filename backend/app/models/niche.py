@@ -79,33 +79,38 @@ class Niche(TimestampMixin, Base):
     sub_niche_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # ----- Relationships -----
+    # NOTE: relationships never load on their own. A query that needs one must say so
+    # with .options(selectinload(...)); accessing an unloaded one raises instead of
+    # silently issuing ten extra queries (that is what selectin did here before).
+    # NOTE passive_deletes: the database cascades (or nulls) every child FK on delete;
+    # without this SQLAlchemy would load every child collection just to null its FK.
     parent_niche: Mapped["Niche | None"] = relationship(
-        "Niche", remote_side=[id], foreign_keys=[parent_niche_id], lazy="selectin"
+        "Niche", remote_side=[id], foreign_keys=[parent_niche_id], lazy="raise"
     )
     products: Mapped[list["Product"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     keywords: Mapped[list["NicheKeyword"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     ppc_keywords: Mapped[list["PPCKeyword"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     competitors: Mapped[list["Competitor"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     suppliers: Mapped[list["Supplier"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     pain_points: Mapped[list["ReviewPainPoint"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     projections: Mapped[list["FinancialProjection"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     recommendations: Mapped[list["Recommendation"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )
     landed_cost_calculations: Mapped[list["LandedCostCalculation"]] = relationship(
-        back_populates="niche", lazy="selectin"
+        back_populates="niche", lazy="raise", passive_deletes=True
     )

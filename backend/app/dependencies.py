@@ -6,11 +6,12 @@ from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.licensing import License, resolve_public_key, verify_license
 
 if TYPE_CHECKING:
     from app.llm.factory import BaseLLMClient
@@ -53,3 +54,29 @@ async def get_llm_client(
     from app.llm.factory import create_llm_client  # noqa: WPS433 – deferred import
 
     return create_llm_client(settings)
+
+
+def get_license(settings: Annotated[Settings, Depends(get_settings)]) -> License:
+    """Verify the configured license key. Returns the free tier when none or invalid."""
+    return verify_license(settings.LICENSE_KEY, resolve_public_key(settings))
+
+
+def require_feature(feature: str):
+    """Build a dependency that allows the request only if the license grants `feature`."""
+
+    def _require(license: Annotated[License, Depends(get_license)]) -> License:
+        if feature not in license.features:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "feature_locked",
+                    "feature": feature,
+                    "message": (
+                        f"The '{feature}' feature requires a paid license. "
+                        "See docs/LICENSING.md to obtain a key."
+                    ),
+                },
+            )
+        return license
+
+    return _require

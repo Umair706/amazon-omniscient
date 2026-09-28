@@ -5,6 +5,16 @@
 # A_au = A_us * 0.08, same B exponent (power law shape is preserved).
 _AU_MARKET_SCALE = 0.08
 
+# Only the US coefficients are fitted from historical data. Every other marketplace reuses
+# the US curve scaled by a market-size ratio, so its unit estimates are order-of-magnitude,
+# not calibrated. Callers should disclose that (see pipeline_steps/assumptions.py).
+CALIBRATED_MARKETPLACES = frozenset({"US"})
+
+
+def is_calibrated_marketplace(marketplace: str) -> bool:
+    """True if the sales model is fitted from real data for this marketplace (only US today)."""
+    return (marketplace or "").strip().upper() in CALIBRATED_MARKETPLACES
+
 
 class BSRSalesEstimator:
     """
@@ -52,8 +62,13 @@ class BSRSalesEstimator:
     CATEGORY_MODELS = US_CATEGORY_MODELS
     DEFAULT_MODEL = US_DEFAULT_MODEL
 
-    def __init__(self, marketplace: str = "US"):
+    def __init__(self, marketplace: str = "US", sales_multiplier: float = 1.0):
+        # sales_multiplier scales every estimate. It lets a seller calibrate the
+        # curve against real known figures (the AU model is uncalibrated). 1.0
+        # is the built-in curve. Applied once, in estimate_monthly_sales, so the
+        # weekly/daily/at-rank helpers inherit it.
         self._marketplace = marketplace.strip().upper()
+        self._sales_multiplier = sales_multiplier if sales_multiplier > 0 else 1.0
 
     def _get_model(self, category: str) -> tuple[float, float]:
         """Look up (A, B) coefficients for a category, marketplace-aware."""
@@ -105,7 +120,7 @@ class BSRSalesEstimator:
         if is_subcategory:
             effective_bsr = round(bsr * self.SUBCATEGORY_SCALING_FACTOR)
         a, b = self._get_model(category)
-        sales = a * (effective_bsr ** (-b))
+        sales = a * (effective_bsr ** (-b)) * self._sales_multiplier
         return max(1, min(100000, round(sales)))
 
     def estimate_weekly_sales(

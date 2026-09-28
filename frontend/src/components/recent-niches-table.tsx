@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScoreBadge } from "@/components/score-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency } from "@/lib/utils";
+import { marketplaceLabel } from "@/lib/marketplace";
 import api from "@/lib/api";
 import type { NicheListItem } from "@/types";
 import { AlertTriangle, RefreshCw } from "lucide-react";
@@ -19,7 +20,7 @@ export function RecentNichesTable() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "analyzed_at", sort_dir: "desc" } });
+      const res = await api.get("/api/v1/niches/", { params: { page: 1, per_page: 10, sort_by: "created_at", sort_dir: "desc" } });
       setNiches(res.data.items || []);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Failed to load niches");
@@ -35,7 +36,7 @@ export function RecentNichesTable() {
   if (loading) {
     return (
       <Card>
-        <CardHeader><CardTitle>Recent Analyses</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Recent Analyzes</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-12 w-full" />
@@ -48,7 +49,7 @@ export function RecentNichesTable() {
   if (error) {
     return (
       <Card>
-        <CardHeader><CardTitle>Recent Analyses</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Recent Analyzes</CardTitle></CardHeader>
         <CardContent className="text-center space-y-3 py-8">
           <AlertTriangle className="h-8 w-8 text-destructive mx-auto" />
           <p className="text-sm text-destructive">{error}</p>
@@ -63,7 +64,7 @@ export function RecentNichesTable() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recent Analyses</CardTitle>
+        <CardTitle>Recent Analyzes</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
@@ -71,6 +72,7 @@ export function RecentNichesTable() {
             <thead>
               <tr className="border-b text-left text-muted-foreground">
                 <th className="pb-3 font-medium">Niche</th>
+                <th className="pb-3 font-medium">Market</th>
                 <th className="pb-3 font-medium">Score</th>
                 <th className="pb-3 font-medium">Avg Price</th>
                 <th className="pb-3 font-medium">Search Volume</th>
@@ -80,7 +82,7 @@ export function RecentNichesTable() {
             <tbody>
               {niches.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={6} className="py-8 text-center text-muted-foreground">
                     No niches analyzed yet. Start by entering a keyword above.
                   </td>
                 </tr>
@@ -98,13 +100,18 @@ export function RecentNichesTable() {
                     </div>
                   </td>
                   <td className="py-3">
+                    <Badge variant="outline" title={marketplaceLabel(niche.marketplace)}>
+                      {niche.marketplace || "—"}
+                    </Badge>
+                  </td>
+                  <td className="py-3">
                     {niche.opportunity_score != null ? (
                       <ScoreBadge score={niche.opportunity_score} tier={niche.confidence_tier || "LOW"} size="sm" />
                     ) : (
                       <span className="text-muted-foreground">&mdash;</span>
                     )}
                   </td>
-                  <td className="py-3">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price) : "\u2014"}</td>
+                  <td className="py-3">{niche.avg_sale_price ? formatCurrency(niche.avg_sale_price, niche.marketplace ?? undefined) : "\u2014"}</td>
                   <td className="py-3">{niche.monthly_search_volume?.toLocaleString() || "\u2014"}</td>
                   <td className="py-3">
                     <Badge variant={niche.confidence_tier === "HIGH" ? "default" : "secondary"}>

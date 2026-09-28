@@ -29,6 +29,7 @@ class RecommendationResponse(BaseModel):
     id: int
     niche_id: int
     niche_name: str | None = None
+    marketplace: str | None = None
 
     # Core scores
     omniscient_score: Decimal = Field(ge=0, le=100)
@@ -67,6 +68,10 @@ class RecommendationResponse(BaseModel):
     # Scoring breakdown
     subscore_breakdown: dict | None = None
     competitor_landscape: dict | None = None
+
+    # The exact rules this niche was scored under, and a short fingerprint of them.
+    scoring_snapshot: dict | None = None
+    scoring_fingerprint: str | None = None
 
     # Rich JSONB payloads
     marketing_channels: list | None = None

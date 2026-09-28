@@ -68,6 +68,9 @@ class NicheSummary(BaseModel):
     marketplace: str = "US"
     monthly_search_volume: int | None = None
     avg_sale_price: Decimal | None = None
+    # WHY: the /niches list renders and sorts by an "Avg Reviews" column. Without this
+    # field the column always showed "—" and the sort control reordered blank rows.
+    avg_review_count: int | None = None
     opportunity_score: Decimal | None = None
     confidence_tier: str | None = None
     is_seasonal: bool | None = None
@@ -84,6 +87,7 @@ class NicheResponse(BaseModel):
     name: str
     primary_keyword: str
     marketplace: str = "US"
+    status: str | None = None
     category_id: str | None = None
     monthly_search_volume: int | None = None
     avg_sale_price: Decimal | None = None
@@ -126,3 +130,12 @@ class NicheListResponse(PaginatedResponse):
     """Paginated list of niche summaries."""
 
     items: list[NicheSummary]
+
+
+class NicheStatsResponse(BaseModel):
+    """Dashboard headline numbers, computed across all niches."""
+
+    total_niches: int
+    avg_score: float | None
+    high_confidence_count: int
+    total_recommendations: int

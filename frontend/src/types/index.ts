@@ -14,6 +14,7 @@ export interface NicheListItem {
   id: number;
   name: string;
   primary_keyword: string;
+  marketplace: string | null;
   monthly_search_volume: number | null;
   avg_sale_price: string | number | null;
   avg_review_count: number | null;
@@ -24,10 +25,18 @@ export interface NicheListItem {
   created_at: string;
 }
 
+export interface NicheStats {
+  total_niches: number;
+  avg_score: number | null;
+  high_confidence_count: number;
+  total_recommendations: number;
+}
+
 export interface NicheDetail {
   id: number;
   name: string;
   primary_keyword: string;
+  marketplace: string | null;
   category_id: string | null;
   monthly_search_volume: number | null;
   avg_sale_price: string | null;
@@ -147,6 +156,7 @@ export interface RecommendationSummary {
   id: number;
   niche_id: number;
   niche_name?: string;
+  marketplace: string | null;
   omniscient_score: string | number;
   confidence_tier: string;
   recommended_sale_price: string | number | null;
@@ -321,7 +331,25 @@ export interface UserSettings {
   has_ads_api_credentials: boolean;
   has_alibaba_credentials: boolean;
   default_marketplace: string | null;
-  min_margin_threshold: string | null;
-  max_review_moat: number | null;
-  allow_seasonal: boolean | null;
+  scoring_config: ScoringConfig | null;
+  llm_provider: string | null;
+  llm_model: string | null;
+  has_llm_api_key: boolean;
+}
+
+// The seller's tuning of the scoring thesis. Every part is optional; a missing
+// part means "use the built-in default". Mirrors backend scoring_config.py.
+export interface ScoringConfig {
+  thresholds?: Record<string, Record<string, number>>;
+  weights?: Record<string, number>;
+  sales_multiplier?: Record<string, number>;
+  allow_seasonal?: Record<string, boolean>;
+}
+
+// The built-in defaults, from GET /settings/scoring-defaults.
+export interface ScoringDefaults {
+  thresholds: Record<string, Record<string, number>>;
+  weights: Record<string, number>;
+  sales_multiplier: number;
+  allow_seasonal: boolean;
 }

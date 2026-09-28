@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -60,11 +61,19 @@ interface SubNiche {
 interface StoredJob {
   jobId: string;
   keyword: string;
+  marketplace: string;
   startedAt: string;
   phase: "discovery" | "analysis";
   parentNicheId?: number;
   subNiches?: SubNiche[];
 }
+
+// Amazon stores this tool can analyze. Default is AU.
+const MARKETPLACES = [
+  { code: "AU", label: "Amazon.com.au (Australia)" },
+  { code: "US", label: "Amazon.com (United States)" },
+];
+const DEFAULT_MARKETPLACE = "AU";
 
 function saveActiveJob(job: StoredJob) {
   try {
@@ -110,7 +119,9 @@ interface AnalyzeDialogProps {
 // ---------------------------------------------------------------------------
 
 export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
+  const searchParams = useSearchParams();
   const [keyword, setKeyword] = useState("");
+  const [marketplace, setMarketplace] = useState(DEFAULT_MARKETPLACE);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus>("idle");
   const [progress, setProgress] = useState(0);
@@ -126,6 +137,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
     if (stored) {
       setJobId(stored.jobId);
       setKeyword(stored.keyword);
+      if (stored.marketplace) setMarketplace(stored.marketplace);
       if (stored.parentNicheId) setParentNicheId(stored.parentNicheId);
 
       if (stored.subNiches && stored.subNiches.length > 0) {
@@ -165,6 +177,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
             saveActiveJob({
               jobId: jobId,
               keyword,
+              marketplace,
               startedAt: new Date().toISOString(),
               phase: "discovery",
               parentNicheId: result.niche_id,
@@ -177,6 +190,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
               try {
                 const analyzeRes = await api.post("/api/v1/jobs/analyze", {
                   keyword,
+                  marketplace,
                   force: true,
                 });
                 const newJobId = analyzeRes.data.job_id;
@@ -187,6 +201,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
                 saveActiveJob({
                   jobId: newJobId,
                   keyword,
+                  marketplace,
                   startedAt: new Date().toISOString(),
                   phase: "analysis",
                 });
@@ -210,7 +225,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [jobId, jobStatus, keyword, onJobStarted]);
+  }, [jobId, jobStatus, keyword, marketplace, onJobStarted]);
 
   // ---- Polling for analysis phase ----
   useEffect(() => {
@@ -244,11 +259,11 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
     return () => clearInterval(interval);
   }, [jobId, jobStatus]);
 
-  // ---- Submit (starts discovery) ----
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmed = keyword.trim();
+  // ---- Start discovery for a keyword + marketplace ----
+  // Shared by the manual form and the auto-start from a /?keyword=... link.
+  const beginDiscovery = useCallback(
+    async (rawKeyword: string, targetMarketplace: string) => {
+      const trimmed = rawKeyword.trim();
       if (!trimmed) return;
 
       setJobStatus("submitting");
@@ -260,13 +275,14 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
       setStep("");
 
       try {
-        const res = await api.post("/api/v1/jobs/discover", { keyword: trimmed });
+        const res = await api.post("/api/v1/jobs/discover", { keyword: trimmed, marketplace: targetMarketplace });
         const { job_id, result } = res.data;
         setJobId(job_id);
         setJobStatus("discovering");
         saveActiveJob({
           jobId: job_id,
           keyword: trimmed,
+          marketplace: targetMarketplace,
           startedAt: new Date().toISOString(),
           phase: "discovery",
           parentNicheId: result?.niche_id,
@@ -277,8 +293,33 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
         setJobError(err.response?.data?.detail || "Failed to start discovery");
       }
     },
-    [keyword, onJobStarted],
+    [onJobStarted],
   );
+
+  // ---- Submit (starts discovery) ----
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      beginDiscovery(keyword, marketplace);
+    },
+    [keyword, marketplace, beginDiscovery],
+  );
+
+  // ---- Auto-start from a /?keyword=... link (e.g. the Discover page) ----
+  // Runs once. A resumable job in localStorage wins, so we never stomp on
+  // an analysis the user already has in flight.
+  const [autoStarted, setAutoStarted] = useState(false);
+  useEffect(() => {
+    if (autoStarted) return;
+    const linkedKeyword = searchParams.get("keyword");
+    if (!linkedKeyword) return;
+    setAutoStarted(true);
+    if (loadActiveJob()) return;
+    const linkedMarketplace = searchParams.get("marketplace") || DEFAULT_MARKETPLACE;
+    setKeyword(linkedKeyword);
+    setMarketplace(linkedMarketplace);
+    beginDiscovery(linkedKeyword, linkedMarketplace);
+  }, [searchParams, autoStarted, beginDiscovery]);
 
   // ---- Sub-niche selection ----
   const handleSubNicheSelect = useCallback(
@@ -303,6 +344,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
         saveActiveJob({
           jobId: job_id,
           keyword,
+          marketplace,
           startedAt: new Date().toISOString(),
           phase: "analysis",
           parentNicheId,
@@ -313,7 +355,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
         setJobError(err.response?.data?.detail || "Failed to start sub-niche analysis");
       }
     },
-    [parentNicheId, keyword, onJobStarted],
+    [parentNicheId, keyword, marketplace, onJobStarted],
   );
 
   // ---- Reset ----
@@ -325,6 +367,7 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
     setJobResult(null);
     setJobError("");
     setKeyword("");
+    setMarketplace(DEFAULT_MARKETPLACE);
     setSubNiches([]);
     setParentNicheId(null);
     clearActiveJob();
@@ -347,7 +390,20 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
       <CardContent className="space-y-4">
         {/* ---------- Input form ---------- */}
         <form onSubmit={handleSubmit}>
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select
+              aria-label="Amazon marketplace"
+              value={marketplace}
+              onChange={(e) => setMarketplace(e.target.value)}
+              disabled={isInputDisabled}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm shrink-0 disabled:opacity-50"
+            >
+              {MARKETPLACES.map((m) => (
+                <option key={m.code} value={m.code}>
+                  {m.code}
+                </option>
+              ))}
+            </select>
             <Input
               placeholder="Enter a niche keyword (e.g., 'silicone kitchen utensils')"
               value={keyword}
@@ -368,6 +424,9 @@ export function AnalyzeDialog({ onJobStarted }: AnalyzeDialogProps) {
               </span>
             </Button>
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Analyzing {MARKETPLACES.find((m) => m.code === marketplace)?.label ?? marketplace}
+          </p>
         </form>
 
         {/* ---------- Submitting ---------- */}
