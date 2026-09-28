@@ -11,6 +11,22 @@ from app.mcp import mcp
 from app.mcp import _client as api
 
 
+def _as_job(res: dict) -> dict:
+    """Wrap a dispatch response with explicit next-step polling guidance."""
+    if "error" in res:
+        return res
+    job_id = res.get("job_id")
+    return {
+        "job_id": job_id,
+        "status": res.get("status", "pending"),
+        "next": (
+            f"Call job_status('{job_id}') every few seconds until status is 'completed' "
+            "(or 'failed'), then read `result`. It can take several minutes when AI steps "
+            "run on a local model — keep polling."
+        ),
+    }
+
+
 # ---- Read: niches ---------------------------------------------------------
 
 @mcp.tool()
@@ -75,21 +91,23 @@ async def get_recommendation(recommendation_id: int) -> dict:
 
 @mcp.tool()
 async def discover_opportunities(seed: str, marketplace: str = "AU") -> dict:
-    """Rank candidate niches from a broad seed. Returns a job_id; poll job_status."""
-    return await api.post("/jobs/discover-opportunities", {"seed": seed, "marketplace": marketplace})
+    """Rank candidate niches from a broad seed. Returns a job_id + how to poll;
+    when complete, result.candidates holds the ranked niches."""
+    return _as_job(await api.post("/jobs/discover-opportunities", {"seed": seed, "marketplace": marketplace}))
 
 
 @mcp.tool()
 async def analyze_keyword(keyword: str, marketplace: str = "AU") -> dict:
-    """Start a full analysis for a keyword. Returns a job_id; poll job_status."""
-    return await api.post("/jobs/analyze", {"keyword": keyword, "marketplace": marketplace})
+    """Start a full analysis for a keyword (scrape -> score -> recommendation).
+    Returns a job_id + how to poll; when complete, use get_recommendation."""
+    return _as_job(await api.post("/jobs/analyze", {"keyword": keyword, "marketplace": marketplace}))
 
 
 @mcp.tool()
 async def reanalyze_niche(niche_id: int) -> dict:
     """Re-run a niche WITHOUT re-scraping (regenerate AI, suppliers, financials,
-    score). Returns a job_id; poll job_status."""
-    return await api.post("/jobs/reanalyze-niche", {"niche_id": niche_id})
+    score). Returns a job_id + how to poll."""
+    return _as_job(await api.post("/jobs/reanalyze-niche", {"niche_id": niche_id}))
 
 
 @mcp.tool()
