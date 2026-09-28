@@ -38,7 +38,7 @@ async def _guard_marketplace(db: AsyncSession, marketplace: str, license: Licens
                 "feature": FEATURE_MULTI_MARKETPLACE,
                 "message": (
                     f"The free tier analyses one marketplace ({', '.join(sorted(existing))}). "
-                    f"Analysing '{marketplace}' too needs a license with multi_marketplace. See docs/LICENSING.md."
+                    f"Analysing '{marketplace}' too needs a license with multi_marketplace."
                 ),
             },
         )

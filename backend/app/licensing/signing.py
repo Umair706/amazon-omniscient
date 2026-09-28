@@ -4,7 +4,7 @@ A key is: omni1.<base64url(payload)>.<base64url(signature)>
 The payload is compact JSON; the signature is Ed25519 over "omni1.<payload>".
 Only the maintainer's private key can mint a key, so a customer cannot forge or
 upgrade one. Verification needs only the public key, which is safe to publish.
-See docs/LICENSING.md.
+See internal/ISSUING-LICENSES.md.
 """
 
 import base64

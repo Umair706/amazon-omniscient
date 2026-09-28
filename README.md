@@ -119,8 +119,7 @@ graph LR
 > **Bring your own keys.** Omniscient never charges you for data — you plug in your own credentials and it
 > uses them. If you sell on Amazon you already own the credentials (SP-API) that make it accurate and legal,
 > and a local Ollama model makes the AI free. Three setup tiers — scraping-only (no keys), recommended
-> (SP-API + local LLM), and full (add a proxy) — are documented in **[SETUP.md](docs/SETUP.md)**. For where
-> this engine beats Helium 10 / Jungle Scout and where it doesn't, see **[POSITIONING.md](docs/POSITIONING.md)**.
+> (SP-API + local LLM), and full (add a proxy) — are documented in **[SETUP.md](docs/SETUP.md)**.
 
 ### Prerequisites
 
@@ -341,9 +340,9 @@ Full interactive docs at http://localhost:8000/docs after starting the backend.
 
 ## Feature Comparison
 
-How Omniscient compares to popular Amazon seller tools. Read this next to **[POSITIONING.md](docs/POSITIONING.md)**,
-which explains the honest trade-off: Omniscient is a *decision engine*, not a *data platform*. It wins on
-turning data into a profit-aware go/no-go, and loses on data breadth — the rows below mark both.
+How Omniscient compares to popular Amazon seller tools. The honest trade-off: Omniscient is a *decision
+engine*, not a *data platform*. It wins on turning data into a profit-aware go/no-go, and is lighter on
+raw data breadth — the rows below mark both.
 
 | Feature | Omniscient | Helium 10 | Jungle Scout | AMZScout |
 |---------|-----------|-----------|-------------|---------|
