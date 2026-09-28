@@ -9,23 +9,24 @@ context — which is exactly what an LLM's limited context/memory needs.
 
 ## What the agent gets
 
-**Tools**
-- `list_niches`, `get_niche` — analysed niches, scores, sub-scores.
-- `list_recommendations`, `get_recommendation` — full opportunity briefs
-  (financials, suppliers, PPC, blueprint, risk flags, and the exact scoring
-  rules used).
-- `discover_opportunities(seed, marketplace)` — rank candidate niches from a
-  broad idea. Returns a `job_id`.
-- `analyze_keyword(keyword, marketplace)` — start a full analysis. Returns a `job_id`.
-- `reanalyze_niche(niche_id)` — re-run without re-scraping. Returns a `job_id`.
-- `job_status(job_id)` — poll a background job to completion.
-- `estimate_monthly_sales(bsr, category, marketplace)` — pure BSR→sales compute.
+**Read tools** — `list_niches`, `get_niche`, `get_niche_products`,
+`get_niche_competitors`, `get_niche_suppliers`, `get_niche_financials`,
+`get_product`, `list_recommendations`, `get_recommendation` (the full brief:
+financials, suppliers, PPC, blueprint, risk flags, and the exact scoring rules).
 
-**Prompt**
-- `build_business_plan(idea, marketplace)` — a guided workflow: discover →
-  analyze → read the brief → write a sourced, costed plan with a go/no-go.
+**Action tools** (return a `job_id`; poll `job_status`) — `discover_opportunities`,
+`analyze_keyword`, `reanalyze_niche`, `job_status`. Long work never blocks a call.
 
-Long-running work returns a `job_id` the agent polls, so no tool call blocks.
+**Compute tools** (pure, no running API needed) — `estimate_monthly_sales`,
+`landed_cost_and_margin` (converts a USD factory cost to a marketplace-currency
+landed cost and computes pre/post-PPC margin).
+
+**Workflow prompts** — `build_business_plan`, `validate_product_idea`,
+`sourcing_plan`, `launch_plan`: guided playbooks that steer the agent to use the
+tools and respect FAIL verdicts and data gaps.
+
+**Resource** — `omniscient://scoring-guide`: how to read the score, tiers,
+weights, hard filters, and data gaps (generated from the live config).
 
 ## Run it
 
