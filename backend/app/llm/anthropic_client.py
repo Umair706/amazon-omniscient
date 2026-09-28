@@ -28,7 +28,11 @@ class AnthropicClient(BaseLLMClient):
         max_tokens: int = 4096,
         temperature: float = 0.3,
         system_message: str | None = None,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> str:
+        # Anthropic has no response_format; it follows the JSON shape from the
+        # prompt. These params are accepted for interface parity and ignored.
         try:
             kwargs = {
                 "model": self.model,
