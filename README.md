@@ -26,6 +26,7 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 11. **Produces actionable briefs** with product strategy, unit economics, marketing plan, PPC budget, review strategy, and week-by-week launch playbook
 12. **Ranks candidate niches from a broad seed** (Discover) so you don't need an exact keyword to start, and can re-run analysis on an existing niche without re-scraping
 13. **Adapts to your thesis** — every hard-filter threshold, the nine sub-score weights, and the per-marketplace sales multiplier are configurable in Settings (with a reset to the built-in defaults), and each recommendation records the exact rules it was scored under
+14. **Serves an MCP toolbox** — an LLM agent (Claude Desktop, etc.) can connect to Omniscient over MCP and use it as tools to discover niches, run analyses, read scored briefs, and build a sourced business plan; the data lives in Omniscient's DB so the agent isn't limited by its own context (see [MCP.md](docs/MCP.md))
 
 ---
 
