@@ -120,21 +120,29 @@ services:
 
 The LLM-powered steps (review analysis, product blueprint, PPC and marketing
 strategy) normally need a provider key. To try them with no key and no cost,
-run a local model with the bundled Ollama service:
+use a local model with [Ollama](https://ollama.com).
+
+**If you already have Ollama installed** (the common case), just pull a model
+and point the app at it:
 
 ```bash
-# Start the local model server (large image; opt-in via the "llm" profile)
-docker compose --profile llm up -d ollama
-
-# Pull a small but capable model (~2 GB)
-docker compose exec ollama ollama pull qwen2.5:3b
+ollama pull qwen2.5:3b
 ```
 
-Then in the app, open **Settings → LLM Provider**, choose **Ollama (Local)**,
-set the model to **qwen2.5:3b**, and save. The next analysis will use it. CPU
-inference is slow but free; a larger model (e.g. `qwen2.5:7b`) is more capable
-if your machine can spare the RAM. The containers reach Ollama at
-`http://ollama:11434` automatically (`OLLAMA_BASE_URL`).
+Then open **Settings → LLM Provider**, choose **Ollama (Local)**, set the model
+to **qwen2.5:3b**, and save. The containers reach your host Ollama at
+`http://host.docker.internal:11434` automatically (`OLLAMA_BASE_URL`), so no
+other setup is needed. CPU inference is slow but free; a larger model
+(e.g. `qwen2.5:7b`) is more capable if your machine can spare the RAM.
+
+**If you do NOT have Ollama installed**, a containerized one is bundled as a
+fallback. Start it and pull a model, then point `OLLAMA_BASE_URL` at it:
+
+```bash
+docker compose --profile llm up -d ollama
+docker compose exec ollama ollama pull qwen2.5:3b
+# set OLLAMA_BASE_URL=http://ollama:11434/v1 for the backend/worker
+```
 
 ## Where to go next
 

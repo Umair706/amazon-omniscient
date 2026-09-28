@@ -10,7 +10,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
       - ALLOWED_ORIGINS=http://localhost:3000
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -40,7 +40,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -69,7 +69,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
       - OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
