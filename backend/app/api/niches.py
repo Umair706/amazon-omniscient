@@ -30,7 +30,7 @@ from app.schemas.niche import (
     NicheStatsResponse,
     NicheSummary,
 )
-from app.schemas.product import ProductListResponse, ProductResponse
+from app.schemas.product import ProductListItem, ProductListResponse
 from app.schemas.review import ReviewPainPointResponse
 from app.schemas.supplier import SupplierListResponse, SupplierResponse
 from app.scraping.health import SCRAPE_HEALTH_WINDOW_HOURS, summarise_scrape_counts
@@ -246,9 +246,11 @@ async def delete_niche(
 @router.get("/{niche_id}/products", response_model=ProductListResponse)
 async def list_niche_products(
     niche_id: int,
+    limit: int | None = Query(None, ge=1, le=500, description="Cap the number of products returned (top by revenue)"),
     db: AsyncSession = Depends(get_db),
 ) -> ProductListResponse:
-    """Return all products belonging to a niche."""
+    """Return products in a niche, highest revenue first. `limit` caps the count
+    (used by API consumers with tight size budgets, like the MCP tools)."""
     # Verify niche exists
     niche_exists = await db.execute(select(Niche.id).where(Niche.id == niche_id))
     if niche_exists.scalar_one_or_none() is None:
@@ -259,15 +261,18 @@ async def list_niche_products(
     )
     total: int = count_result.scalar_one()
 
-    result = await db.execute(
+    stmt = (
         select(Product)
         .where(Product.niche_id == niche_id)
         .order_by(Product.estimated_monthly_revenue.desc().nullslast())
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
     products = result.scalars().all()
 
     return ProductListResponse(
-        items=[ProductResponse.model_validate(p) for p in products],
+        items=[ProductListItem.model_validate(p) for p in products],
         total=total,
     )
 

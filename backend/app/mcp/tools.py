@@ -51,9 +51,10 @@ async def get_niche(niche_id: int) -> dict:
 
 
 @mcp.tool()
-async def get_niche_products(niche_id: int) -> dict:
-    """The scraped products in a niche (ASIN, price, BSR, rating, reviews, est. sales)."""
-    return await api.get(f"/niches/{niche_id}/products")
+async def get_niche_products(niche_id: int, limit: int = 30) -> dict:
+    """The top products in a niche by revenue (ASIN, price, BSR, rating, reviews,
+    est. sales). Capped at `limit` (default 30) to keep the response small."""
+    return await api.get(f"/niches/{niche_id}/products", {"limit": limit})
 
 
 @mcp.tool()

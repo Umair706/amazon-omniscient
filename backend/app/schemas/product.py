@@ -108,8 +108,44 @@ class ProductResponse(BaseModel):
     # shape is enforced at ingest, not when serving.
 
 
-class ProductListResponse(BaseModel):
-    """List of products (typically scoped to a niche)."""
+class ProductListItem(BaseModel):
+    """Product fields a list/table shows.
 
-    items: list[ProductResponse]
+    Excludes the heavy detail-only payloads (review_attributes, comparison_asins,
+    fbt_asins, star_distribution, category_path, dimensions, cost structure) so a
+    niche's product list stays small. The full object loads on /products/{asin}.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    asin: str
+    niche_id: int | None = None
+    marketplace: str | None = None
+    title: str | None = None
+    brand: str | None = None
+    image_url: str | None = None
+    current_price: Decimal | None = None
+    current_bsr: int | None = None
+    review_count: int | None = None
+    rating: Decimal | None = None
+    is_amazon_choice: bool | None = None
+    is_best_seller: bool | None = None
+    estimated_monthly_units: int | None = None
+    estimated_monthly_revenue: Decimal | None = None
+    listing_quality_score: Decimal | None = None
+    sales_velocity_trend: str | None = None
+    search_position: int | None = None
+    seller_count: int | None = None
+    variation_count: int | None = None
+    deal_badge: str | None = None
+    amazons_choice_keyword: str | None = None
+    last_scraped_at: datetime | None = None
+    created_at: datetime
+
+
+class ProductListResponse(BaseModel):
+    """List of products (typically scoped to a niche) — summaries only."""
+
+    items: list[ProductListItem]
     total: int = Field(ge=0)
