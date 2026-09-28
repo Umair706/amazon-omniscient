@@ -21,8 +21,8 @@ omniscient/
 │   │   ├── main.py            # FastAPI app factory, lifespan, middleware
 │   │   ├── config.py          # Pydantic Settings from env vars
 │   │   ├── dependencies.py    # DI: get_db, get_redis, get_llm_client
-│   │   ├── api/               # FastAPI route handlers (28 endpoints)
-│   │   ├── models/            # SQLAlchemy 2.0 ORM models (14 tables)
+│   │   ├── api/               # FastAPI route handlers (37 endpoints)
+│   │   ├── models/            # SQLAlchemy 2.0 ORM models (19 tables)
 │   │   ├── schemas/           # Pydantic v2 request/response schemas
 │   │   ├── services/          # Business logic layer (16 service modules)
 │   │   ├── core/              # Utilities (BSR regression, FBA calc, proxy, cache)
@@ -300,8 +300,8 @@ cd frontend && npm install && npm run dev
 
 ## Database
 
-- 17 tables, 3 hypertables (bsr_history, price_history, stock_history)
-- 16 migrations in `backend/migrations/versions/`; migration 013 renames the niche score columns to the ScoringService names and adds `avg_rating`, `estimated_monthly_sales`, `last_error`; migration 014 adds the `scrape_events` table (one row per page load attempt, used by `GET /api/v1/niches/scrape-health`); migration 016 adds nullable `bsr_history.review_count`, set on main-rank rows only, so a recent review velocity can be derived from tracker snapshots
+- 19 tables, 3 hypertables (bsr_history, price_history, stock_history)
+- 21 migrations in `backend/migrations/versions/`; migration 014 adds the `scrape_events` table; 016 adds nullable `bsr_history.review_count`; 018/019 add per-marketplace scoring config + the scoring snapshot on recommendations; 020 adds the LLM provider/model/key on user_settings; 021 adds the `agent_artifacts` table (plans/notes an MCP agent writes back)
 
 ## Testing
 
@@ -312,7 +312,7 @@ pytest -v -k scoring      # just scoring tests
 pytest --cov=app          # with coverage
 ```
 
-Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendation engine, and the extracted pipeline steps / market signals. `pytest -q --co` collects 270 tests. The database- and HTTP-backed tests (`tests/test_db/`, `tests/test_api/`) skip unless `TEST_DATABASE_URL` is set, e.g. `TEST_DATABASE_URL=postgresql+asyncpg://... pytest -q`.
+Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendation engine, and the extracted pipeline steps / market signals. The suite is ~351 tests. The database- and HTTP-backed tests (`tests/test_db/`, `tests/test_api/`) skip unless `TEST_DATABASE_URL` is set, e.g. `TEST_DATABASE_URL=postgresql+asyncpg://... pytest -q`.
 
 ## Common patterns
 
@@ -347,20 +347,25 @@ Tests under `backend/tests/` cover scoring, forecasting, supplier, recommendatio
 | `backend/app/scraping/events.py` | Fire-and-forget `scrape_events` telemetry writes |
 | `backend/app/workers/tasks.py` | Celery task definitions (full analysis pipeline) |
 | `backend/app/workers/pipeline_steps/` | Extracted pipeline steps: reviews, ppc, product_source (SP-API-first search/BSR), assumptions (data-gap defaults), review_velocity (recent review velocity from BSR snapshots) |
-| `backend/app/llm/base_client.py` | LLM provider abstract interface |
+| `backend/app/llm/base_client.py` | LLM provider abstract interface; `generate_json` runs in JSON mode and accepts an optional schema so small/local models return valid, shaped JSON |
+| `backend/app/core/currency.py` | Converts USD supplier costs into the marketplace currency (AUD for AU) before margin math |
+| `backend/app/licensing/` | Offline open-core license gate (Ed25519 keys); tiers free/pro/agency gate export, blueprint, financial_report, multi_marketplace, api, white_label. The pipeline skips gated steps when the feature is not licensed |
+| `backend/app/mcp/`, `backend/app/mcp_server.py` | MCP server exposing Omniscient as tools an LLM agent can drive (see `docs/MCP.md`); stdio or hosted SSE |
 | `backend/tests/test_api/` | HTTP-level route tests (httpx `ASGITransport` over the real FastAPI app, real DB rolled back per test); the whole directory skips unless `TEST_DATABASE_URL` is set |
 | `frontend/src/components/sidebar.tsx` | Navigation sidebar with active link highlighting |
 | `frontend/src/app/page.tsx` | Dashboard |
 | `frontend/src/app/docs/page.tsx` | Documentation page |
-| `frontend/src/app/recommendations/[id]/page.tsx` | Opportunity brief (5 tabs) |
+| `frontend/src/app/recommendations/[id]/page.tsx` | Opportunity brief (tabbed) |
 
 ## Environment variables
 
 All config is in `backend/app/config.py`. Key vars:
 - `DATABASE_URL` — Postgres connection string
 - `REDIS_URL` — Redis connection string
-- `LLM_PROVIDER` — `qwen` | `anthropic` | `openai`
+- `LLM_PROVIDER` — `qwen` | `anthropic` | `openai` | `ollama` | `local`
 - `DASHSCOPE_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — LLM auth
+- `OLLAMA_BASE_URL` — local Ollama endpoint (free, no key); set by docker-compose to the host or bundled Ollama
+- `LICENSE_KEY` — the buyer's issued key; empty = free tier. `LICENSE_PUBLIC_KEY` — the key the app verifies with (see `internal/ISSUING-LICENSES.md`)
 - `SP_API_*` — Amazon Selling Partner API credentials
 - `AMAZON_ADS_*` — Amazon Advertising API credentials
 - `PROXY_PROVIDER` — `none` | `free` | `brightdata` | `smartproxy`

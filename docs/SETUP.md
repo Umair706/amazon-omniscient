@@ -144,6 +144,22 @@ docker compose exec ollama ollama pull qwen2.5:3b
 # set OLLAMA_BASE_URL=http://ollama:11434/v1 for the backend/worker
 ```
 
+## Licensing — unlocking Pro features
+
+Note: these **license tiers** are different from the **setup tiers** above. The
+setup tiers (0/1/2) are about which *data* you can reach. The license tiers are
+about which *features* are unlocked.
+
+Omniscient is open-core. The base research runs free. Some features need a paid
+license key: CSV/PDF **export**, the product **blueprint**, the consolidated
+**financial report**, **multi-marketplace**, the **api**, and **white-label**.
+
+- Set `LICENSE_KEY` in your `.env` to unlock them; the app verifies it offline
+  against `LICENSE_PUBLIC_KEY`. No key = free tier (everything still runs; the
+  paid tabs just stay empty and premium routes return 402).
+- License tiers: `free`, `pro`, `agency`. Maintainers issue keys per
+  `internal/ISSUING-LICENSES.md`.
+
 ## Where to go next
 
 - `GUIDE.md` — full provider setup, local vs cloud LLM options, proxy configuration, and troubleshooting.

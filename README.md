@@ -265,7 +265,7 @@ omniscient/
 │   │   │   ├── settings.py
 │   │   │   ├── exports.py        # CSV/PDF export
 │   │   │   └── jobs.py           # Background job management
-│   │   ├── models/               # SQLAlchemy ORM (18 tables)
+│   │   ├── models/               # SQLAlchemy ORM (19 tables)
 │   │   ├── schemas/              # Pydantic request/response
 │   │   ├── services/             # Business logic
 │   │   │   ├── scoring_service.py        # Omniscient Score
@@ -295,7 +295,7 @@ omniscient/
 │   │   │   ├── anthropic_client.py
 │   │   │   └── openai_client.py
 │   │   └── workers/              # Celery tasks
-│   ├── migrations/               # Alembic migrations (20 versions)
+│   ├── migrations/               # Alembic migrations (21 versions)
 │   └── tests/                    # pytest suite
 │
 ├── frontend/
@@ -348,6 +348,9 @@ omniscient/
 | `POST` | `/api/v1/jobs/analyze-sub-niche` | Full analysis of a selected sub-niche |
 | `POST` | `/api/v1/jobs/reanalyze-niche` | Re-run analysis on an existing niche (reuses scraped products, no re-scrape) |
 | `GET` | `/api/v1/settings/scoring-defaults` | Built-in scoring thresholds/weights (for the Settings editor) |
+| `GET` | `/api/v1/license` | Installed license tier, features, and validity |
+| `POST` | `/api/v1/artifacts/` | Save an agent-written plan/note/watchlist |
+| `GET` | `/api/v1/artifacts/` | List saved artifacts (filter by niche/kind) |
 | `GET` | `/api/v1/niches/{id}/velocity` | Niche-level sales velocity |
 | `GET` | `/api/v1/products/{asin}/velocity` | Product sales-velocity time-series |
 | `POST` | `/api/v1/niches/{id}/keywords/research` | Trigger keyword research |

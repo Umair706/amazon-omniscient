@@ -26,6 +26,10 @@ and honesty rules) so it uses the tools correctly from the first call.
 `landed_cost_and_margin` (converts a USD factory cost to a marketplace-currency
 landed cost and computes pre/post-PPC margin).
 
+**Write-back tools** — `save_plan`, `list_plans`, `get_plan`: the agent persists
+its own plans/notes/watchlists into Omniscient (backed by `/artifacts/`), so its
+work survives across sessions.
+
 **Workflow prompts** — `build_business_plan`, `validate_product_idea`,
 `sourcing_plan`, `launch_plan`: guided playbooks that steer the agent to use the
 tools and respect FAIL verdicts and data gaps.
