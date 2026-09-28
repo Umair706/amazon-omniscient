@@ -1020,19 +1020,19 @@ Track specific ASINs over time — monitor their BSR, price changes, review velo
 Replace hardcoded fee estimates with real-time fee calculation using Amazon's fee schedule. Account for product dimensions, weight, and storage duration (including long-term storage fees and aged inventory surcharges).
 
 **15. International marketplace support**
-Currently focused on the US marketplace (ATVPDKIKX0DER). Adding support for UK, Germany, Japan, Canada, and other marketplaces would require:
-- Marketplace-specific BSR regression coefficients
-- Currency conversion
-- Region-specific FBA fee schedules
-- Localized scraping (different Amazon domains)
+US and AU are supported today (AU is the default). Per-marketplace currency
+(`app/core/currency.py`, AUD for AU), AU FBA fee tables, and AU scoring
+thresholds are implemented, and `multi_marketplace` is a licensed feature.
+Adding UK/DE/JP/CA would still need per-marketplace BSR regression coefficients,
+region-specific FBA fee schedules, and localized scraping (different Amazon
+domains). Note AU sales estimates are still uncalibrated (rough).
 
-**16. Test coverage expansion**
-71 tests cover scoring, forecasting, supplier, and recommendation services. Missing coverage:
-- API route integration tests
-- Scraper service tests (with mocked Playwright)
-- LLM client tests (with mocked API responses)
-- Frontend component tests
-- End-to-end tests (Playwright or Cypress)
+**16. Test coverage**
+The suite is ~350 tests across scoring, forecasting, supplier, recommendation
+engine, pipeline steps, market signals, the API routes (`tests/test_api/`), the
+scraper/block-detection/cache (`tests/test_scraping/`), and the LLM retry/JSON
+handling (`tests/test_services/test_llm_retry.py`). Still open: frontend
+component tests and full end-to-end (Playwright/Cypress) tests.
 
 **17. Caching layer optimization**
 Redis caching is implemented but could be more granular:
@@ -1040,3 +1040,30 @@ Redis caching is implemented but could be more granular:
 - Cache BSR regression results (TTL: 1 hour)
 - Cache LLM analysis results by content hash (avoid re-analyzing identical reviews)
 - Invalidation strategies for stale data
+
+---
+
+## 9. Licensing (open-core)
+
+Omniscient is proprietary open-core. The base research runs free; some features
+require a paid license: `export` (CSV/PDF), `blueprint`, `financial_report`,
+`multi_marketplace`, `api`, and `white_label`. The gate is **offline** —
+Ed25519-signed keys, no license server.
+
+- The buyer sets `LICENSE_KEY` in their `.env`; the app verifies it against
+  `LICENSE_PUBLIC_KEY` (embedded or env). No key, or an expired one, = free tier.
+- Premium API routes return **402** when the feature is not licensed, and the
+  pipeline skips gated steps (e.g. the product blueprint and financial report),
+  so those brief tabs stay empty on the free tier by design.
+- Tiers: `free` (nothing), `pro` (export, blueprint, financial_report,
+  multi_marketplace), `agency` (pro + api + white_label).
+- Issuing keys (maintainer only) is documented in `internal/ISSUING-LICENSES.md`.
+
+## 10. Use it with an AI agent (MCP)
+
+Omniscient ships an MCP server so an LLM agent (Claude Desktop, Cursor, Claude
+Code) can drive it as tools — discover niches, run analyses, read scored briefs,
+model economics, and save plans. Start it with
+`docker compose --profile mcp up -d mcp` (SSE on `:8765`), or run
+`python -m app.mcp_server` for a local stdio server. Full tool list, transports,
+and client config are in **`docs/MCP.md`**.

@@ -138,6 +138,28 @@ services:
       - ollama_models:/root/.ollama
     restart: unless-stopped
 
+  # Hosted MCP endpoint so a remote LLM agent can use Omniscient as a toolbox.
+  # Opt-in: `docker compose --profile mcp up -d mcp`. Set MCP_AUTH_TOKEN in .env
+  # to require a bearer token. Connect an SSE MCP client to http://<host>:8765/sse.
+  mcp:
+    build: ./backend
+    profiles: ["mcp"]
+    command: python -m app.mcp_server
+    environment:
+      - MCP_TRANSPORT=sse
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8765
+      - OMNISCIENT_API_URL=http://backend:8000
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+    ports:
+      - "8765:8765"
+    # Mount the source so the MCP server runs current code, like the backend.
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redisdata:

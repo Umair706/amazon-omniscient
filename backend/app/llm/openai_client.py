@@ -1,9 +1,9 @@
 """OpenAI / OpenAI-compatible LLM client (optional provider)."""
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from app.core.exceptions import LLMError
-from app.llm.base_client import BaseLLMClient
+from app.llm.base_client import BaseLLMClient, build_response_format
 
 
 class OpenAIClient(BaseLLMClient):
@@ -34,6 +34,8 @@ class OpenAIClient(BaseLLMClient):
         max_tokens: int = 4096,
         temperature: float = 0.3,
         system_message: str | None = None,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> str:
         try:
             messages = []
@@ -41,12 +43,8 @@ class OpenAIClient(BaseLLMClient):
                 messages.append({"role": "system", "content": system_message})
             messages.append({"role": "user", "content": prompt})
 
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            response_format = build_response_format(json_mode, response_schema)
+            response = await self._create(messages, max_tokens, temperature, response_format)
             content = response.choices[0].message.content
             if content is None:
                 raise LLMError("OpenAI returned empty response")
@@ -55,3 +53,30 @@ class OpenAIClient(BaseLLMClient):
             raise
         except Exception as e:
             raise LLMError(f"OpenAI API call failed: {e}") from e
+
+    async def _create(self, messages, max_tokens, temperature, response_format):
+        """Call the chat API, degrading the JSON request if the endpoint rejects it.
+
+        Not every OpenAI-compatible server (older Ollama, some local runtimes)
+        supports json_schema, or even json_object. So we try what was asked,
+        then step down: json_schema -> json_object -> plain, rather than fail.
+        """
+        base = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if response_format is None:
+            return await self.client.chat.completions.create(**base)
+        try:
+            return await self.client.chat.completions.create(response_format=response_format, **base)
+        except BadRequestError:
+            if response_format.get("type") == "json_schema":
+                try:
+                    return await self.client.chat.completions.create(
+                        response_format={"type": "json_object"}, **base
+                    )
+                except BadRequestError:
+                    return await self.client.chat.completions.create(**base)
+            return await self.client.chat.completions.create(**base)

@@ -13,6 +13,8 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import { amazonProductUrl } from "@/lib/marketplace";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { labelForDataGap } from "@/lib/data-gaps";
+import { toDisplayText } from "@/lib/llm-text";
+import { TabErrorBoundary } from "@/components/tab-error-boundary";
 import { ScoredUnder } from "./scored-under";
 import { PpcPlan } from "./ppc-plan";
 import api from "@/lib/api";
@@ -209,6 +211,9 @@ export default function OpportunityBriefPage() {
         </div>
       </div>
 
+      {/* Each tab renders AI-generated content. A boundary keeps one bad field
+          from crashing the whole brief; key={tab} resets it per tab. */}
+      <TabErrorBoundary key={tab}>
       {/* Overview Tab */}
       {tab === "overview" && (
         <div className="space-y-6">
@@ -429,7 +434,7 @@ export default function OpportunityBriefPage() {
                 <CardHeader><CardTitle className="text-lg">Market Overview</CardTitle></CardHeader>
                 <CardContent>
                   <p className="text-sm leading-relaxed whitespace-pre-line">
-                    {rec.niche_overview.market_narrative}
+                    {toDisplayText(rec.niche_overview.market_narrative)}
                   </p>
                 </CardContent>
               </Card>
@@ -437,7 +442,7 @@ export default function OpportunityBriefPage() {
               {rec.niche_overview.key_takeaway && (
                 <Card className="border-primary/50 bg-primary/5">
                   <CardContent className="p-4">
-                    <p className="font-semibold text-primary">{rec.niche_overview.key_takeaway}</p>
+                    <p className="font-semibold text-primary">{toDisplayText(rec.niche_overview.key_takeaway)}</p>
                   </CardContent>
                 </Card>
               )}
@@ -446,7 +451,7 @@ export default function OpportunityBriefPage() {
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Market Size Assessment</CardTitle></CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground">{rec.niche_overview.market_size_assessment}</p>
+                    <p className="text-sm text-muted-foreground whitespace-pre-line">{toDisplayText(rec.niche_overview.market_size_assessment)}</p>
                   </CardContent>
                 </Card>
               )}
@@ -455,7 +460,7 @@ export default function OpportunityBriefPage() {
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Trend Analysis</CardTitle></CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground">{rec.niche_overview.trend_analysis}</p>
+                    <p className="text-sm text-muted-foreground whitespace-pre-line">{toDisplayText(rec.niche_overview.trend_analysis)}</p>
                   </CardContent>
                 </Card>
               )}
@@ -464,7 +469,7 @@ export default function OpportunityBriefPage() {
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Competitive Dynamics</CardTitle></CardHeader>
                   <CardContent>
-                    <p className="text-sm text-muted-foreground">{rec.niche_overview.competitive_dynamics}</p>
+                    <p className="text-sm text-muted-foreground whitespace-pre-line">{toDisplayText(rec.niche_overview.competitive_dynamics)}</p>
                   </CardContent>
                 </Card>
               )}
@@ -475,10 +480,10 @@ export default function OpportunityBriefPage() {
                   <CardContent>
                     {rec.niche_overview.entry_barriers?.length > 0 ? (
                       <ul className="space-y-2">
-                        {rec.niche_overview.entry_barriers.map((barrier: string, i: number) => (
+                        {rec.niche_overview.entry_barriers.map((barrier: unknown, i: number) => (
                           <li key={i} className="flex items-start gap-2 text-sm">
                             <AlertTriangle className="h-4 w-4 text-rejected shrink-0 mt-0.5" />
-                            {barrier}
+                            {toDisplayText(barrier)}
                           </li>
                         ))}
                       </ul>
@@ -492,10 +497,10 @@ export default function OpportunityBriefPage() {
                   <CardContent>
                     {rec.niche_overview.opportunity_windows?.length > 0 ? (
                       <ul className="space-y-2">
-                        {rec.niche_overview.opportunity_windows.map((opp: string, i: number) => (
+                        {rec.niche_overview.opportunity_windows.map((opp: unknown, i: number) => (
                           <li key={i} className="flex items-start gap-2 text-sm">
                             <Lightbulb className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                            {opp}
+                            {toDisplayText(opp)}
                           </li>
                         ))}
                       </ul>
@@ -1727,6 +1732,7 @@ export default function OpportunityBriefPage() {
           )}
         </div>
       )}
+      </TabErrorBoundary>
     </motion.div>
   );
 }

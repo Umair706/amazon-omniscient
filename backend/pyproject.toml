@@ -32,6 +32,10 @@ dependencies = [
     "python-amazon-sp-api>=0.3.7",
     "httpx>=0.28.0",
 
+    # MCP server (expose Omniscient as tools an LLM agent can call).
+    # Pinned to v1: the code uses the FastMCP v1 API (v2 renamed it to MCPServer).
+    "mcp>=1.2,<2",
+
     # Scraping
     "playwright>=1.49.0",
 

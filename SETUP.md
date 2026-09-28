@@ -1,5 +1,9 @@
 # Project Omniscient -- Setup Guide
 
+> This is the Docker-first, step-by-step setup. For the **bring-your-own-keys**
+> path (data-access tiers, a free local LLM via Ollama, and licensing), see
+> **[docs/SETUP.md](docs/SETUP.md)**.
+
 ## Prerequisites
 
 | Tool | Version | Check |
@@ -240,7 +244,7 @@ asyncio.run(check())
 "
 ```
 
-Should print `Tables created: 14` (or more after migration 002).
+Should print `Tables created: 19` (after all migrations through 021).
 
 ### 4. Start the backend
 
@@ -283,7 +287,7 @@ The frontend starts on http://localhost:3000 and proxies API calls to http://loc
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql+asyncpg://omniscient:password@localhost:5432/omniscient` |
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379/0` |
-| `LLM_PROVIDER` | `qwen`, `anthropic`, or `openai` | `qwen` |
+| `LLM_PROVIDER` | `qwen`, `anthropic`, `openai`, `ollama`, or `local` | `qwen` |
 | `LLM_MODEL` | Model name for the chosen provider | `qwen-max-latest` |
 
 ### LLM provider keys (configure at least one)
@@ -391,9 +395,9 @@ omniscient/
 │   ├── pyproject.toml        # Python dependencies
 │   ├── alembic.ini           # Alembic config
 │   ├── migrations/           # Database migrations
-│   │   └── versions/
+│   │   └── versions/         # 001 … 021 (021_agent_artifacts is the newest)
 │   │       ├── 001_initial_schema.py
-│   │       └── 002_bsr_subcategory_and_review_velocity_gap.py
+│   │       └── … through 021_agent_artifacts.py
 │   ├── app/
 │   │   ├── main.py           # FastAPI entry point
 │   │   ├── config.py         # Environment variable config

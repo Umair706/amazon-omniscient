@@ -26,6 +26,7 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 11. **Produces actionable briefs** with product strategy, unit economics, marketing plan, PPC budget, review strategy, and week-by-week launch playbook
 12. **Ranks candidate niches from a broad seed** (Discover) so you don't need an exact keyword to start, and can re-run analysis on an existing niche without re-scraping
 13. **Adapts to your thesis** — every hard-filter threshold, the nine sub-score weights, and the per-marketplace sales multiplier are configurable in Settings (with a reset to the built-in defaults), and each recommendation records the exact rules it was scored under
+14. **Serves an MCP toolbox** — an LLM agent (Claude Desktop, etc.) can connect to Omniscient over MCP and use it as tools to discover niches, run analyses, read scored briefs, and build a sourced business plan; the data lives in Omniscient's DB so the agent isn't limited by its own context (see [MCP.md](docs/MCP.md))
 
 ---
 
@@ -180,6 +181,23 @@ services:
 - **Health check:** http://localhost:8000/health
 
 For detailed setup instructions including local development without Docker, see [SETUP.md](docs/SETUP.md).
+Free local LLM (Ollama), licensing, and other options are covered there. AI coding agents should
+start with **[AGENTS.md](AGENTS.md)** for setup, conventions, and gotchas.
+
+---
+
+## Use it with an AI agent (MCP)
+
+Omniscient ships an **MCP server** so an LLM agent (Claude Desktop, Cursor, Claude Code) can use it as
+a toolbox — discover niches, run analyses, read scored briefs, model economics, and save plans — then
+write the strategy itself. The data lives in Omniscient's database, so the agent isn't limited by its own
+context. Start it and connect:
+
+```bash
+docker compose --profile mcp up -d mcp     # MCP over SSE on :8765
+```
+
+`.mcp.json` already points Claude Code at it. Full tool list and Claude Desktop config: **[MCP.md](docs/MCP.md)**.
 
 ---
 
@@ -247,7 +265,7 @@ omniscient/
 │   │   │   ├── settings.py
 │   │   │   ├── exports.py        # CSV/PDF export
 │   │   │   └── jobs.py           # Background job management
-│   │   ├── models/               # SQLAlchemy ORM (18 tables)
+│   │   ├── models/               # SQLAlchemy ORM (19 tables)
 │   │   ├── schemas/              # Pydantic request/response
 │   │   ├── services/             # Business logic
 │   │   │   ├── scoring_service.py        # Omniscient Score
@@ -277,7 +295,7 @@ omniscient/
 │   │   │   ├── anthropic_client.py
 │   │   │   └── openai_client.py
 │   │   └── workers/              # Celery tasks
-│   ├── migrations/               # Alembic migrations (20 versions)
+│   ├── migrations/               # Alembic migrations (21 versions)
 │   └── tests/                    # pytest suite
 │
 ├── frontend/
@@ -330,6 +348,9 @@ omniscient/
 | `POST` | `/api/v1/jobs/analyze-sub-niche` | Full analysis of a selected sub-niche |
 | `POST` | `/api/v1/jobs/reanalyze-niche` | Re-run analysis on an existing niche (reuses scraped products, no re-scrape) |
 | `GET` | `/api/v1/settings/scoring-defaults` | Built-in scoring thresholds/weights (for the Settings editor) |
+| `GET` | `/api/v1/license` | Installed license tier, features, and validity |
+| `POST` | `/api/v1/artifacts/` | Save an agent-written plan/note/watchlist |
+| `GET` | `/api/v1/artifacts/` | List saved artifacts (filter by niche/kind) |
 | `GET` | `/api/v1/niches/{id}/velocity` | Niche-level sales velocity |
 | `GET` | `/api/v1/products/{asin}/velocity` | Product sales-velocity time-series |
 | `POST` | `/api/v1/niches/{id}/keywords/research` | Trigger keyword research |

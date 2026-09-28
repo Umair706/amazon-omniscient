@@ -82,6 +82,23 @@ def _is_retryable_status(status_code: int) -> bool:
     return status_code == HTTP_TOO_MANY_REQUESTS or status_code >= HTTP_FIRST_SERVER_ERROR
 
 
+def build_response_format(json_mode: bool, response_schema: dict | None) -> dict | None:
+    """OpenAI-style `response_format` for a JSON request, or None for plain text.
+
+    A schema asks the model to return that exact shape (strict mode — best for
+    small local models that otherwise drift). Without a schema we still force
+    valid JSON (json_object mode). Shared by the OpenAI-compatible clients.
+    """
+    if response_schema is not None:
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": "result", "schema": response_schema, "strict": True},
+        }
+    if json_mode:
+        return {"type": "json_object"}
+    return None
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Return True if exc is a transport-class failure worth retrying."""
     http_error = _find_http_status_error(exc)
@@ -138,8 +155,14 @@ class BaseLLMClient(ABC):
         max_tokens: int = 4096,
         temperature: float = 0.3,
         system_message: str | None = None,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
     ) -> str:
-        """Send prompt to LLM, return text response."""
+        """Send prompt to LLM, return text response.
+
+        json_mode asks the provider for valid JSON; response_schema asks for that
+        exact JSON shape. Providers that can't honor them ignore them.
+        """
         ...
 
     async def generate_json(
@@ -147,13 +170,17 @@ class BaseLLMClient(ABC):
         prompt: str,
         max_tokens: int = 4096,
         system_message: str | None = None,
+        schema: dict | None = None,
     ) -> dict | list:
         """
         Send prompt to LLM, parse response as JSON.
-        Strips markdown code fences if present.
-        Retries once on parse failure with a corrective prompt.
+
+        Requests JSON from the provider (json_mode), and the exact shape when a
+        `schema` is given — so even a small local model returns parseable output
+        of the right shape. Strips markdown fences and retries once on parse
+        failure with a corrective prompt.
         """
-        text = await self._generate_with_retry(prompt, max_tokens, system_message)
+        text = await self._generate_with_retry(prompt, max_tokens, system_message, schema)
         parsed = self._try_parse_json(text)
         if parsed is not None:
             return parsed
@@ -164,7 +191,7 @@ class BaseLLMClient(ABC):
             "Please fix the following and return ONLY valid JSON, no markdown fences:\n\n"
             f"{text}"
         )
-        text = await self._generate_with_retry(retry_prompt, max_tokens, system_message)
+        text = await self._generate_with_retry(retry_prompt, max_tokens, system_message, schema)
         parsed = self._try_parse_json(text)
         if parsed is not None:
             return parsed
@@ -176,12 +203,16 @@ class BaseLLMClient(ABC):
         prompt: str,
         max_tokens: int,
         system_message: str | None,
+        response_schema: dict | None = None,
     ) -> str:
-        """Call generate(), retrying transport-class failures with backoff."""
+        """Call generate() in JSON mode, retrying transport-class failures with backoff."""
         last_error: Exception | None = None
         for attempt in range(1, MAX_TRANSPORT_ATTEMPTS + 1):
             try:
-                return await self.generate(prompt, max_tokens, system_message=system_message)
+                return await self.generate(
+                    prompt, max_tokens, system_message=system_message,
+                    json_mode=True, response_schema=response_schema,
+                )
             except Exception as e:
                 if not _is_retryable(e):
                     raise

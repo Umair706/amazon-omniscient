@@ -4,6 +4,7 @@ Import all models here so that Alembic's ``target_metadata = Base.metadata``
 picks up every table when generating migrations.
 """
 
+from .agent_artifact import AgentArtifact
 from .base import Base, TimestampMixin
 from .bsr_history import BSRHistory
 from .competitor import Competitor
@@ -23,6 +24,7 @@ from .user_settings import UserSettings
 __all__ = [
     "Base",
     "TimestampMixin",
+    "AgentArtifact",
     "BSRHistory",
     "Competitor",
     "FinancialProjection",

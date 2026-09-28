@@ -13,7 +13,7 @@ class FlakyClient(BaseLLMClient):
         self.failures = failures
         self.calls = 0
 
-    async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None):
+    async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None, json_mode=False, response_schema=None):
         self.calls += 1
         if self.calls <= self.failures:
             raise httpx.ConnectError("boom")
@@ -29,7 +29,7 @@ class FlakyOpenAIWrappedClient(BaseLLMClient):
         self.failures = failures
         self.calls = 0
 
-    async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None):
+    async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None, json_mode=False, response_schema=None):
         self.calls += 1
         if self.calls <= self.failures:
             raise _wrapped_openai_timeout()
@@ -113,7 +113,7 @@ async def test_generate_json_does_not_retry_a_bad_api_key(monkeypatch):
     class UnauthorisedClient(BaseLLMClient):
         calls = 0
 
-        async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None):
+        async def generate(self, prompt, max_tokens=4096, temperature=0.3, system_message=None, json_mode=False, response_schema=None):
             self.calls += 1
             raise _http_status_error(401)
 

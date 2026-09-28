@@ -7,16 +7,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class RecommendationSummary(BaseModel):
-    """Lightweight recommendation for list/dashboard views."""
+    """Lightweight recommendation for list/dashboard views.
+
+    Deliberately excludes the big JSONB payloads (blueprint, financials, review
+    intelligence, etc.) so a list stays small — those load only on the detail
+    endpoint. Carries just what a list card shows.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     niche_id: int
+    niche_name: str | None = None
+    marketplace: str | None = None
     omniscient_score: Decimal = Field(ge=0, le=100)
     confidence_tier: str
     recommended_sale_price: Decimal | None = None
     estimated_net_margin_pct: Decimal | None = None
+    break_even_week_base: int | None = None
     total_launch_capital: Decimal | None = None
     generated_at: datetime | None = None
 
@@ -92,7 +100,7 @@ class RecommendationResponse(BaseModel):
 
 
 class RecommendationListResponse(BaseModel):
-    """List of recommendations for a niche."""
+    """List of recommendations — summaries only, so the payload stays small."""
 
-    items: list[RecommendationResponse]
+    items: list[RecommendationSummary]
     total: int = Field(ge=0)
