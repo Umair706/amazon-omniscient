@@ -24,6 +24,8 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 9. **Produces consolidated financial reports** with FBA fee breakdowns, unit economics, and scenario-based P&L summaries
 10. **Scores opportunities 0-100** (Omniscient Score) using 9 weighted sub-scores and 9 hard disqualification filters
 11. **Produces actionable briefs** with product strategy, unit economics, marketing plan, PPC budget, review strategy, and week-by-week launch playbook
+12. **Ranks candidate niches from a broad seed** (Discover) so you don't need an exact keyword to start, and can re-run analysis on an existing niche without re-scraping
+13. **Adapts to your thesis** — every hard-filter threshold, the nine sub-score weights, and the per-marketplace sales multiplier are configurable in Settings (with a reset to the built-in defaults), and each recommendation records the exact rules it was scored under
 
 ---
 
@@ -108,7 +110,7 @@ graph LR
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS, Recharts |
 | Database | PostgreSQL 16 + TimescaleDB (BSR/price time-series) |
 | Queue | Celery with Redis broker |
-| LLM | Configurable: Qwen (default), Anthropic Claude, OpenAI GPT |
+| LLM | Configurable: Qwen (default), Anthropic Claude, OpenAI GPT, or a free local model via Ollama |
 | Scraping | Playwright (headless Chromium) + rotating proxies (free or paid) |
 | Container | Docker + Docker Compose |
 
@@ -170,7 +172,7 @@ services:
     ports: !override []
 ```
 
-### 5. Open the app
+### 4. Open the app
 
 - **Dashboard:** http://localhost:3000
 - **Documentation:** http://localhost:3000/docs (in-app documentation page)
@@ -211,7 +213,9 @@ Weighted composite of 9 sub-scores:
 
 ### Hard Disqualification Filters (9)
 
-Any single failure results in automatic FAIL tier regardless of score:
+Any single failure results in automatic FAIL tier regardless of score. The values below are the **US
+defaults**; thresholds are per-marketplace (e.g. AU uses a wider price band and a lower review moat) and
+every one is tunable in **Settings → Scoring rules**, with a reset to the built-in defaults.
 
 1. Avg price outside $15-$70
 2. Median competitor reviews > 2,000
@@ -221,7 +225,7 @@ Any single failure results in automatic FAIL tier regardless of score:
 6. Restricted/hazmat category
 7. IP/patent risk detected
 8. Seasonal-only demand (unless explicitly allowed)
-9. Review velocity trap (>5 reviews per 100 sales — grey-hat signal)
+9. Review velocity trap (grey-hat signal; off until calibrated)
 
 ---
 
@@ -243,7 +247,7 @@ omniscient/
 │   │   │   ├── settings.py
 │   │   │   ├── exports.py        # CSV/PDF export
 │   │   │   └── jobs.py           # Background job management
-│   │   ├── models/               # SQLAlchemy ORM (14 tables)
+│   │   ├── models/               # SQLAlchemy ORM (18 tables)
 │   │   ├── schemas/              # Pydantic request/response
 │   │   ├── services/             # Business logic
 │   │   │   ├── scoring_service.py        # Omniscient Score
@@ -273,7 +277,7 @@ omniscient/
 │   │   │   ├── anthropic_client.py
 │   │   │   └── openai_client.py
 │   │   └── workers/              # Celery tasks
-│   ├── migrations/               # Alembic migrations (16 versions)
+│   ├── migrations/               # Alembic migrations (20 versions)
 │   └── tests/                    # pytest suite
 │
 ├── frontend/
@@ -294,7 +298,7 @@ omniscient/
 
 ---
 
-## API Endpoints (34)
+## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -322,7 +326,10 @@ omniscient/
 | `GET` | `/api/v1/exports/niches/{id}/csv` | Export niche data as CSV |
 | `GET` | `/api/v1/exports/recommendations/{id}/pdf` | Export recommendation as PDF |
 | `POST` | `/api/v1/jobs/discover` | Discovery phase — detects broad keywords and proposes sub-niches |
+| `POST` | `/api/v1/jobs/discover-opportunities` | Rank candidate niches from a broad seed keyword |
 | `POST` | `/api/v1/jobs/analyze-sub-niche` | Full analysis of a selected sub-niche |
+| `POST` | `/api/v1/jobs/reanalyze-niche` | Re-run analysis on an existing niche (reuses scraped products, no re-scrape) |
+| `GET` | `/api/v1/settings/scoring-defaults` | Built-in scoring thresholds/weights (for the Settings editor) |
 | `GET` | `/api/v1/niches/{id}/velocity` | Niche-level sales velocity |
 | `GET` | `/api/v1/products/{asin}/velocity` | Product sales-velocity time-series |
 | `POST` | `/api/v1/niches/{id}/keywords/research` | Trigger keyword research |
@@ -364,7 +371,7 @@ raw data breadth — the rows below mark both.
 | Launch playbook generation | Yes (AI-generated) | No | No | No |
 | Supplier comparison (AI) | Yes | No | Yes | No |
 | Self-hosted / no subscription | Yes | No ($99/mo) | No ($49/mo) | No ($30/mo) |
-| Configurable LLM (Qwen/Claude/GPT) | Yes | N/A | N/A | N/A |
+| Configurable LLM (Qwen/Claude/GPT, or free local via Ollama) | Yes | N/A | N/A | N/A |
 | Open source code | Yes (visible) | No | No | No |
 | **Keyword research depth** | Autocomplete + SERP estimates only | **Yes (Cerebro/Magnet — billions of rows, reverse-ASIN)** | **Yes (Keyword Scout)** | Yes |
 | **Sales-estimate calibration** | Power-law model, uncalibrated (AU rough) | **Calibrated against sales panels** | **Calibrated against sales panels** | Calibrated |
