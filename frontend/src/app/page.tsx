@@ -8,11 +8,15 @@ import { RecentNichesTable } from "@/components/recent-niches-table";
 import { BarChart3, TrendingUp, Target, DollarSign, AlertTriangle, RefreshCw, Compass, Search, FileText, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ScoreBadge } from "@/components/score-badge";
+import { formatCurrency } from "@/lib/utils";
+import { marketplaceLabel } from "@/lib/marketplace";
 import api from "@/lib/api";
-import type { NicheStats } from "@/types";
+import type { NicheStats, RecommendationSummary } from "@/types";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<NicheStats | null>(null);
+  const [topRec, setTopRec] = useState<RecommendationSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
@@ -28,9 +32,21 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // The best-scoring recommendation, to feature as the hero. The list is
+  // ordered by score, so the first item is the top opportunity.
+  const fetchTopRec = useCallback(async () => {
+    try {
+      const res = await api.get("/api/v1/recommendations/", { params: { per_page: 1 } });
+      setTopRec(res.data?.items?.[0] ?? null);
+    } catch {
+      setTopRec(null);
+    }
+  }, []);
+
   useEffect(() => {
     fetchStats();
-  }, [fetchStats]);
+    fetchTopRec();
+  }, [fetchStats, fetchTopRec]);
 
   return (
     <motion.div
@@ -63,6 +79,27 @@ export default function DashboardPage() {
             <RefreshCw className="h-4 w-4 mr-2" /> Retry
           </Button>
         </motion.div>
+      )}
+
+      {/* Hero: the single best opportunity, so a newcomer knows where to look first. */}
+      {topRec && (
+        <Link href={`/recommendations/${topRec.id}`}>
+          <Card className="hover:border-primary/50 transition-colors bg-gradient-to-br from-primary/5 to-transparent">
+            <CardContent className="p-5 flex items-center gap-5">
+              <ScoreBadge score={topRec.omniscient_score} tier={topRec.confidence_tier} size="md" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your top opportunity</p>
+                <h2 className="text-xl font-bold truncate">{topRec.niche_name ?? "Niche"}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {marketplaceLabel(topRec.marketplace)} · Sale price {formatCurrency(topRec.recommended_sale_price, topRec.marketplace ?? undefined)}
+                </p>
+              </div>
+              <Button variant="outline" className="shrink-0 hidden sm:inline-flex">
+                View brief <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
+        </Link>
       )}
 
       {/* Stats Grid */}

@@ -11,6 +11,7 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import api from "@/lib/api";
 import { marketplaceLabel, amazonProductUrl } from "@/lib/marketplace";
 import { InfoHint } from "@/components/info-hint";
+import { Breadcrumbs } from "@/components/breadcrumbs";
 import {
   ArrowLeft,
   DollarSign,
@@ -301,9 +302,14 @@ export default function ProductDetailPage() {
 
   return (
     <div className="space-y-6">
-      <button onClick={() => window.history.back()} className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> Back
-      </button>
+      <Breadcrumbs
+        items={[
+          { label: "Dashboard", href: "/" },
+          { label: "Niches", href: "/niches" },
+          ...(product.niche_id ? [{ label: `Niche #${product.niche_id}`, href: `/niches/${product.niche_id}` }] : []),
+          { label: product.asin },
+        ]}
+      />
 
       {/* Product Header */}
       <div className="space-y-2">
