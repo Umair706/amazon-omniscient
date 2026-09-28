@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.artifacts import router as artifacts_router
 from app.api.exports import router as exports_router
 from app.api.jobs import router as jobs_router
 from app.api.license import router as license_router
@@ -20,3 +21,4 @@ router.include_router(settings_router)
 router.include_router(exports_router)
 router.include_router(jobs_router)
 router.include_router(license_router)
+router.include_router(artifacts_router)

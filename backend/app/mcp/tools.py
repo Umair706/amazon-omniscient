@@ -115,6 +115,34 @@ def estimate_monthly_sales(bsr: int, category: str = "default", marketplace: str
 
 
 @mcp.tool()
+async def save_plan(title: str, content: str, niche_id: int | None = None, kind: str = "plan") -> dict:
+    """Save the agent's own output (a business plan, note, or watchlist) into
+    Omniscient so it persists across sessions. kind is 'plan', 'note', or
+    'watchlist'. Optionally link it to a niche. Returns the saved artifact."""
+    body: dict = {"title": title, "content": content, "kind": kind}
+    if niche_id is not None:
+        body["niche_id"] = niche_id
+    return await api.post("/artifacts/", body)
+
+
+@mcp.tool()
+async def list_plans(niche_id: int | None = None, kind: str | None = None) -> dict:
+    """List saved artifacts (newest first), optionally filtered by niche or kind."""
+    params: dict = {}
+    if niche_id is not None:
+        params["niche_id"] = niche_id
+    if kind is not None:
+        params["kind"] = kind
+    return await api.get("/artifacts/", params or None)
+
+
+@mcp.tool()
+async def get_plan(artifact_id: int) -> dict:
+    """Read one saved artifact by id."""
+    return await api.get(f"/artifacts/{artifact_id}")
+
+
+@mcp.tool()
 def landed_cost_and_margin(
     unit_cost_usd: float,
     selling_price: float,
