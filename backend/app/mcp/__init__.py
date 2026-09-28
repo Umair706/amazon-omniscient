@@ -30,6 +30,12 @@ Honesty: respect FAIL verdicts (a hard filter failed — usually walk away). Tre
 anything flagged in `data_gaps`/`risk_flags` as an assumption to verify, not a
 fact. AU sales estimates are uncalibrated (rough). Read the omniscient://scoring-guide
 resource before interpreting any score.
+
+License: Omniscient is proprietary open-core. The base research works for free;
+some features (export, blueprint, financial_report, multi_marketplace, api,
+white_label) need a paid license. A 402 error means a feature is locked — tell
+the user they need a license key; do not try to work around the gate. Call
+get_license to see the active tier and features.
 """
 
 mcp = FastMCP("omniscient", instructions=_INSTRUCTIONS)

@@ -30,6 +30,15 @@ def _as_job(res: dict) -> dict:
 # ---- Read: niches ---------------------------------------------------------
 
 @mcp.tool()
+async def get_license() -> dict:
+    """The installed license: tier (free/pro/agency), granted features, validity,
+    and expiry. Omniscient is open-core — some features (export, blueprint,
+    financial_report, multi_marketplace, api, white_label) require a paid license.
+    A 402 error from another tool means that feature is locked; tell the user."""
+    return await api.get("/license")
+
+
+@mcp.tool()
 async def list_niches() -> dict:
     """List analysed niches with Omniscient Score, tier, and marketplace."""
     return await api.get("/niches/")

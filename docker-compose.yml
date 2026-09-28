@@ -153,6 +153,9 @@ services:
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
     ports:
       - "8765:8765"
+    # Mount the source so the MCP server runs current code, like the backend.
+    volumes:
+      - ./backend:/app
     depends_on:
       backend:
         condition: service_healthy

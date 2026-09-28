@@ -181,6 +181,23 @@ services:
 - **Health check:** http://localhost:8000/health
 
 For detailed setup instructions including local development without Docker, see [SETUP.md](docs/SETUP.md).
+Free local LLM (Ollama), licensing, and other options are covered there. AI coding agents should
+start with **[AGENTS.md](AGENTS.md)** for setup, conventions, and gotchas.
+
+---
+
+## Use it with an AI agent (MCP)
+
+Omniscient ships an **MCP server** so an LLM agent (Claude Desktop, Cursor, Claude Code) can use it as
+a toolbox — discover niches, run analyses, read scored briefs, model economics, and save plans — then
+write the strategy itself. The data lives in Omniscient's database, so the agent isn't limited by its own
+context. Start it and connect:
+
+```bash
+docker compose --profile mcp up -d mcp     # MCP over SSE on :8765
+```
+
+`.mcp.json` already points Claude Code at it. Full tool list and Claude Desktop config: **[MCP.md](docs/MCP.md)**.
 
 ---
 

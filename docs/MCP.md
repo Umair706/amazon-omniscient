@@ -9,10 +9,15 @@ context — which is exactly what an LLM's limited context/memory needs.
 
 ## What the agent gets
 
-**Read tools** — `list_niches`, `get_niche`, `get_niche_products`,
-`get_niche_competitors`, `get_niche_suppliers`, `get_niche_financials`,
-`get_product`, `list_recommendations`, `get_recommendation` (the full brief:
-financials, suppliers, PPC, blueprint, risk flags, and the exact scoring rules).
+**Read tools** — `get_license` (tier/features — some features are paid), `list_niches`,
+`get_niche`, `get_niche_products`, `get_niche_competitors`, `get_niche_suppliers`,
+`get_niche_financials`, `get_product`, `list_recommendations`, `get_recommendation`
+(the full brief: financials, suppliers, PPC, blueprint, risk flags, and the exact
+scoring rules).
+
+The server also sends the agent an operating guide (workflow, that jobs are async
+and must be polled, that errors arrive as data with a `hint`, the licensing note,
+and honesty rules) so it uses the tools correctly from the first call.
 
 **Action tools** (return a `job_id`; poll `job_status`) — `discover_opportunities`,
 `analyze_keyword`, `reanalyze_niche`, `job_status`. Long work never blocks a call.
