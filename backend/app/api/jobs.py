@@ -91,6 +91,11 @@ class AnalyzeKeywordRequest(BaseModel):
     force: bool = Field(
         default=False, description="Force re-analysis if niche already exists"
     )
+    skip_llm: bool = Field(
+        default=False,
+        description="Fast-screen: skip the LLM narrative steps. Score, hard filters "
+        "and financials still compute — much faster, for triaging many keywords.",
+    )
 
     @field_validator("keyword")
     @classmethod
@@ -169,7 +174,7 @@ async def trigger_keyword_analysis(
         niche_id=niche.id,
         keyword=niche.primary_keyword,
         marketplace=marketplace,
-        options={"force": payload.force},
+        options={"force": payload.force, "skip_llm": payload.skip_llm},
     )
 
     now = datetime.now(timezone.utc)
