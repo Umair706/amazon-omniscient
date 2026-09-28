@@ -119,7 +119,7 @@ export default function SettingsPage() {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       if (err?.response?.status === 402) {
-        setMessage({ type: "error", text: "CSV export is a Pro feature. See docs/LICENSING.md to obtain a key." });
+        setMessage({ type: "error", text: "CSV export is a Pro feature. Enter a license key in Settings to unlock it." });
         return;
       }
       setMessage({ type: "error", text: "Export failed. Make sure you have analyzed at least one niche." });
@@ -335,7 +335,7 @@ export default function SettingsPage() {
           </Button>
           {!has("export") && (
             <p className="text-xs text-muted-foreground mt-2">
-              CSV and PDF export is a Pro feature. See docs/LICENSING.md to obtain a license key.
+              CSV and PDF export is a Pro feature. Add a license key to unlock it.
             </p>
           )}
         </CardContent>

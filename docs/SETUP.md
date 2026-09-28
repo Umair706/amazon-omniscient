@@ -103,7 +103,7 @@ not physically in) needs an IP in the right place. Options, cheapest first:
 Set the review-velocity hard filter only after you trust your data:
 
 ```
-REVIEW_VELOCITY_FILTER_ENABLED=false   # leave off until calibrated (see TODO.md)
+REVIEW_VELOCITY_FILTER_ENABLED=false   # leave off until the velocity threshold is calibrated
 ```
 
 ## If your machine already runs Redis or Postgres
@@ -146,7 +146,5 @@ docker compose exec ollama ollama pull qwen2.5:3b
 
 ## Where to go next
 
-- `docs/POSITIONING.md` — what this engine does better than Helium 10 / Jungle Scout, and where it doesn't.
-- `GUIDE.md` — full provider setup, scraping-resilience internals, and troubleshooting.
-- `TODO.md` — the honest list of what's deferred, including the sales-model calibration you should finish
-  before selling access.
+- `GUIDE.md` — full provider setup, local vs cloud LLM options, proxy configuration, and troubleshooting.
+- `README.md` — what Omniscient does and how it compares to other Amazon seller tools.

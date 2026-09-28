@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # ── Alibaba / 1688 ─────────────────────────────────────────────────
     # NOTE: APP_KEY/SECRET are reserved for the official Alibaba Open API and
-    # are NOT wired to anything yet — see docs/SUPPLIERS.md for the plan. Only
+    # are NOT wired to anything yet — reserved for a future Alibaba API integration. Only
     # the 1688 login pair below is used today (by AlibabaLoginService, to warm
     # a scraping session). Do not assume supplier data works from these keys.
     ALIBABA_APP_KEY: str = ""

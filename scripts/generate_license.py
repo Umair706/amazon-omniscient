@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Maintainer CLI for issuing Omniscient license keys. See docs/LICENSING.md.
+"""Maintainer CLI for issuing Omniscient license keys. See internal/ISSUING-LICENSES.md.
 
 Run from the backend/ directory (so `app` is importable):
 

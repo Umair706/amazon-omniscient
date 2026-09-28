@@ -1,4 +1,4 @@
-"""Offline license-key gate for the open-core tiers. See docs/LICENSING.md."""
+"""Offline license-key gate for the open-core tiers. See internal/ISSUING-LICENSES.md."""
 
 from app.licensing.features import (
     FEATURE_API,

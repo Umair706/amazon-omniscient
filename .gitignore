@@ -49,3 +49,6 @@ docker-compose.override.yml
 
 # Celery beat writes its schedule database into the mounted backend/ directory
 backend/celerybeat-schedule*
+
+# Internal docs (roadmap, todos, positioning, plans, licensing operator guide) — not for the public repo
+internal/

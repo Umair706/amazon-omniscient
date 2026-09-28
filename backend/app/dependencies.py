@@ -73,7 +73,7 @@ def require_feature(feature: str):
                     "feature": feature,
                     "message": (
                         f"The '{feature}' feature requires a paid license. "
-                        "See docs/LICENSING.md to obtain a key."
+                        "Add a license key to unlock it."
                     ),
                 },
             )
