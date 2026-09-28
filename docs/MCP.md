@@ -61,10 +61,31 @@ Restart Claude Desktop, then ask it to "find a product I can sell in AU and
 build a business plan" — it will call `discover_opportunities`, `analyze_keyword`,
 `get_recommendation`, and write the plan from the real data.
 
+## Hosted / remote agents (HTTP/SSE)
+
+To let a remote agent connect (not a local stdio process), run the MCP over
+HTTP/SSE. It's an opt-in compose service:
+
+```bash
+# optional: require a token
+echo "MCP_AUTH_TOKEN=your-long-random-token" >> .env
+docker compose --profile mcp up -d mcp
+```
+
+The agent connects to `http://<host>:8765/sse`. When `MCP_AUTH_TOKEN` is set,
+every request must carry `Authorization: Bearer <token>`. Run it behind TLS
+(a reverse proxy) before exposing it publicly. You can also start it directly:
+
+```bash
+cd backend
+MCP_TRANSPORT=sse MCP_PORT=8765 OMNISCIENT_API_URL=http://localhost:8000 python -m app.mcp_server
+```
+
 ## Notes
 
 - The server is a thin client over the REST API plus a couple of pure-compute
   tools, so it stays in sync with the app automatically.
-- It's read/observe + dispatch only; it never bypasses the app's own gates.
-- Roadmap: expose supplier and landed-cost tools, resources for the scoring
-  docs, and an HTTP/SSE transport for hosted/remote agents.
+- It's read + dispatch + write-back (saved plans/notes/watchlists); it never
+  bypasses the app's own gates.
+- The bearer token is a coarse gate; per-customer auth tied to the license is a
+  natural next step for a paid hosted offering.
