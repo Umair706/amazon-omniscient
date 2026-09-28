@@ -42,44 +42,22 @@ class KeywordResearchService:
         """
         seen: set[str] = set()
         results: list[dict] = []
-        depth_counter = 0
 
-        # Direct seed query
-        suggestions = await self.scraper.fetch_autocomplete(seed_keyword)
-        for i, kw in enumerate(suggestions):
-            normalised = kw.strip().lower()
-            if normalised and normalised not in seen:
-                seen.add(normalised)
-                results.append({
-                    "keyword": kw.strip(),
-                    "autocomplete_depth": depth_counter,
-                    "position": i,
-                })
-                depth_counter += 1
-
-        # Alphabet expansion: "seed a", "seed b", ..., "seed z"
-        letters = "abcdefghijklmnopqrstuvwxyz"
-        tasks = [
-            self.scraper.fetch_autocomplete(f"{seed_keyword} {letter}")
-            for letter in letters
-        ]
-        letter_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for letter_suggestions in letter_results:
-            if isinstance(letter_suggestions, Exception):
+        # Expand from the seed AND its shorter word-prefixes. A long specific
+        # phrase ("bean bags for adults") has no autocomplete children, but its
+        # roots ("bean bags") have many — so a single seed still yields a real
+        # keyword set. Candidates arrive in discovery order (the exact seed first);
+        # autocomplete_depth is that rank, used later as a rough volume signal.
+        for keyword in await self._autocomplete_candidates(seed_keyword):
+            normalised = keyword.strip().lower()
+            if not normalised or normalised in seen:
                 continue
-            for i, kw in enumerate(letter_suggestions):
-                normalised = kw.strip().lower()
-                if normalised and normalised not in seen:
-                    seen.add(normalised)
-                    results.append({
-                        "keyword": kw.strip(),
-                        "autocomplete_depth": depth_counter,
-                        "position": i,
-                    })
-                    depth_counter += 1
-                    if len(results) >= max_variations:
-                        break
+            seen.add(normalised)
+            results.append({
+                "keyword": keyword.strip(),
+                "autocomplete_depth": len(results),
+                "position": len(results),
+            })
             if len(results) >= max_variations:
                 break
 
@@ -88,6 +66,32 @@ class KeywordResearchService:
             seed_keyword, len(results),
         )
         return results
+
+    @staticmethod
+    def _seed_roots(seed_keyword: str, min_words: int = 2) -> list[str]:
+        """The seed plus its shorter word-prefixes, longest first, down to
+        `min_words` words. Autocomplete returns little for a long specific phrase
+        but a lot for its shorter roots, so we harvest from both."""
+        words = seed_keyword.split()
+        if len(words) <= min_words:
+            return [seed_keyword]
+        return [" ".join(words[:n]) for n in range(len(words), min_words - 1, -1)]
+
+    async def _autocomplete_candidates(self, seed_keyword: str) -> list[str]:
+        """Every autocomplete suggestion for the seed and its roots, in order.
+        For each root, queries the root itself plus the a-z letter expansions."""
+        letters = "abcdefghijklmnopqrstuvwxyz"
+        candidates: list[str] = []
+        for root in self._seed_roots(seed_keyword):
+            queries = [root] + [f"{root} {letter}" for letter in letters]
+            responses = await asyncio.gather(
+                *(self.scraper.fetch_autocomplete(query) for query in queries),
+                return_exceptions=True,
+            )
+            for suggestions in responses:
+                if not isinstance(suggestions, Exception):
+                    candidates.extend(suggestions)
+        return candidates
 
     # ------------------------------------------------------------------
     # 2. SERP-based volume estimation
