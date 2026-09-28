@@ -75,7 +75,7 @@ async def list_recommendations(
 
     items = []
     for r in recs:
-        data = RecommendationResponse.model_validate(r)
+        data = RecommendationSummary.model_validate(r)
         name, marketplace = niche_info.get(r.niche_id, (None, None))
         data.niche_name = name
         data.marketplace = marketplace
