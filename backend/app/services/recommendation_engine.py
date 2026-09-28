@@ -240,8 +240,15 @@ Return a JSON object:
         data: dict,
         metrics: dict,
     ) -> Recommendation:
-        """Persist recommendation to the database."""
+        """Persist recommendation to the database, replacing any prior one for this niche."""
         now = datetime.now(timezone.utc)
+
+        # One recommendation per niche: drop any existing rows before inserting
+        # the new one. This lets a re-run keep the old recommendation visible
+        # while it works, then swap it here — with no duplicates left behind.
+        from sqlalchemy import delete
+        await self.db.execute(delete(Recommendation).where(Recommendation.niche_id == niche_id))
+        await self.db.flush()
 
         rec = Recommendation(
             niche_id=niche_id,

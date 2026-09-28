@@ -517,7 +517,9 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
 
         if options.get("force"):
             from app.workers.pipeline_steps.reset import reset_niche_analysis_data
-            await reset_niche_analysis_data(db, niche_id)
+            # A re-run keeps the old recommendation visible until the new one is
+            # saved, so the niche never disappears from the list mid-run.
+            await reset_niche_analysis_data(db, niche_id, keep_recommendation=options.get("keep_recommendation", False))
             await db.commit()
 
         if product_asins:

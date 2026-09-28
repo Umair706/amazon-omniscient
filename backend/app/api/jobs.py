@@ -277,7 +277,7 @@ async def trigger_niche_reanalysis(
         niche_id=niche.id,
         keyword=niche.primary_keyword,
         marketplace=niche.marketplace or "US",
-        options={"force": True},
+        options={"force": True, "keep_recommendation": True},
         product_asins=list(asins),
     )
 
