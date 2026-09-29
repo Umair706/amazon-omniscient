@@ -11,6 +11,43 @@ from app.llm.base_client import BaseLLMClient
 logger = logging.getLogger(__name__)
 
 
+# --- PPC cost carried by each unit sold (feeds the post-PPC net margin) ---
+# WHY these exist: the net margin subtracts an advertising cost from every unit's
+# profit. The ad cost to win one order is roughly the cost per click divided by the
+# share of clicks that convert. But charging that full cost to EVERY unit assumes
+# 100% of sales come from ads, which no established listing does — it also gets
+# organic (unpaid) sales. So we treat only a share of units as ad-acquired.
+# Before this, the net margin assumed 100% ad-driven sales and showed every product
+# as unprofitable, which contradicted the ACOS break-even analysis shown beside it.
+
+# Orders won per ad click. Amazon PPC converts in roughly the 10-15% range; 12% is a mid estimate.
+PPC_CLICK_CONVERSION_RATE = 0.12
+
+# Share of a listing's units won by ads (the rest are organic). A blended figure
+# between a PPC-heavy launch and an organic-heavy steady state.
+PPC_AD_ATTRIBUTED_SALES_SHARE = 0.5
+
+# Cost per click used only when the Amazon Ads API returned none. In marketplace currency.
+DEFAULT_COST_PER_CLICK = 1.5
+
+
+def blended_ppc_cost_per_unit(
+    avg_cost_per_click: float | None,
+    ad_conversion_rate: float = PPC_CLICK_CONVERSION_RATE,
+    ad_attributed_sales_share: float = PPC_AD_ATTRIBUTED_SALES_SHARE,
+) -> float:
+    """Returns the average advertising cost carried by each unit sold, in marketplace currency.
+
+    Blends the cost to win one ad order (click cost / conversion rate) down by the
+    share of units that come from ads, so organic sales are not charged an ad cost.
+    """
+    if ad_conversion_rate <= 0:
+        raise ValueError(f"ad_conversion_rate must be positive, got {ad_conversion_rate}")
+    cost_per_click = avg_cost_per_click if avg_cost_per_click else DEFAULT_COST_PER_CLICK
+    cost_to_win_one_ad_order = cost_per_click / ad_conversion_rate
+    return cost_to_win_one_ad_order * ad_attributed_sales_share
+
+
 @dataclass
 class ShippingQuote:
     """Shipping cost estimate."""

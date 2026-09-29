@@ -11,6 +11,7 @@ export const DATA_GAP_LABELS: Record<string, string> = {
   sales_estimate_assumed: "Monthly sales assumed (no BSR to estimate from)",
   sales_estimate_uncalibrated: "Sales estimate is uncalibrated for this marketplace (US-derived model)",
   fx_rate_assumed: "Supplier costs converted to your currency at an approximate fixed rate — check today's rate",
+  ppc_ad_share_assumed: "Net margin assumes about half of sales come from ads (the rest organic) — a blended estimate",
 };
 
 export function labelForDataGap(gap: string): string {

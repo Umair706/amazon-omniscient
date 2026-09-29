@@ -1742,7 +1742,7 @@ async def _analyze_suppliers(
 ) -> dict | None:
     """Landed cost + margins. Uses the median scraped 1688 FOB price when we have one."""
     from app.core.category_mapping import category_slugs
-    from app.services.supplier_service import SupplierService
+    from app.services.supplier_service import SupplierService, blended_ppc_cost_per_unit
 
     from dataclasses import replace as _dc_replace
 
@@ -1775,12 +1775,16 @@ async def _analyze_suppliers(
     margin = svc.calculate_margins(
         selling_price=avg_price, landed_cost=landed_for_margin,
         fba_fulfillment_fee=metrics.get("fba_fees", 5),
-        ppc_cost_per_unit=metrics.get("avg_cpc", 1.5) / 0.12,
+        ppc_cost_per_unit=blended_ppc_cost_per_unit(metrics.get("avg_cpc")),
     )
     metrics["fob_unit_cost"] = round(convert_from_usd(unit_cost_usd, marketplace), 4)
     metrics["landed_cost"] = round(landed_in_marketplace, 4)
     metrics["pre_ppc_margin_pct"] = margin["pre_ppc_margin_pct"]
     metrics["post_ppc_margin_pct"] = margin["post_ppc_margin_pct"]
+
+    # The net margin assumes a fixed share of sales come from ads, so disclose it.
+    from app.workers.pipeline_steps.assumptions import GAP_PPC_AD_SHARE, record_data_gap
+    record_data_gap(metrics, GAP_PPC_AD_SHARE)
 
     # A fixed FX rate was applied, so flag it for the seller to sanity-check.
     if is_converted_marketplace(marketplace):

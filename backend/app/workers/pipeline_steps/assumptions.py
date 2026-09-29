@@ -17,6 +17,7 @@ GAP_BSR = "bsr_unavailable"
 GAP_SALES_ESTIMATED = "sales_estimate_assumed"
 GAP_SALES_UNCALIBRATED = "sales_estimate_uncalibrated"
 GAP_FX_ASSUMED = "fx_rate_assumed"
+GAP_PPC_AD_SHARE = "ppc_ad_share_assumed"
 
 # Typical values for a mid-range niche; used only when the real signal is missing.
 ASSUMED_BREAK_EVEN_WEEK = 16

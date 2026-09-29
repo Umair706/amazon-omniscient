@@ -1,7 +1,12 @@
 """Tests for the SupplierService."""
 
 import pytest
-from app.services.supplier_service import SupplierService, LandedCost
+from app.services.supplier_service import (
+    SupplierService,
+    LandedCost,
+    blended_ppc_cost_per_unit,
+    DEFAULT_COST_PER_CLICK,
+)
 
 
 @pytest.fixture
@@ -127,6 +132,38 @@ class TestMargins:
         ]
         for key in expected_keys:
             assert key in result, f"Missing key: {key}"
+
+
+class TestBlendedPpcCostPerUnit:
+    """The net margin must not charge every unit a full ad cost — only ad-driven units are."""
+
+    def test_only_a_share_of_units_carry_the_ad_cost(self):
+        # At a $1.50 click and 12% conversion, winning one ad order costs $12.50.
+        # With half of sales from ads, each unit carries half that: $6.25.
+        cost = blended_ppc_cost_per_unit(
+            avg_cost_per_click=1.5, ad_conversion_rate=0.12, ad_attributed_sales_share=0.5,
+        )
+        assert cost == pytest.approx(1.5 / 0.12 * 0.5)
+
+    def test_full_ad_share_matches_old_100_percent_assumption(self):
+        # The old code assumed 100% ad-driven; a share of 1.0 must reproduce it exactly.
+        cost = blended_ppc_cost_per_unit(
+            avg_cost_per_click=2.0, ad_conversion_rate=0.12, ad_attributed_sales_share=1.0,
+        )
+        assert cost == pytest.approx(2.0 / 0.12)
+
+    def test_blended_cost_is_lower_than_the_full_100_percent_cost(self):
+        blended = blended_ppc_cost_per_unit(avg_cost_per_click=1.8)
+        full = blended_ppc_cost_per_unit(avg_cost_per_click=1.8, ad_attributed_sales_share=1.0)
+        assert blended < full
+
+    def test_missing_cpc_falls_back_to_default(self):
+        assert blended_ppc_cost_per_unit(None) == blended_ppc_cost_per_unit(DEFAULT_COST_PER_CLICK)
+        assert blended_ppc_cost_per_unit(0) == blended_ppc_cost_per_unit(DEFAULT_COST_PER_CLICK)
+
+    def test_zero_conversion_rate_is_rejected(self):
+        with pytest.raises(ValueError):
+            blended_ppc_cost_per_unit(avg_cost_per_click=1.5, ad_conversion_rate=0)
 
 
 class TestSupplierScoring:
