@@ -1,0 +1,17 @@
+# Keep the Docker build context small: without this, `node_modules` and `.next`
+# (hundreds of MB each) get copied into every build, bloating images and the
+# build cache. The image installs its own deps and builds fresh.
+node_modules
+.next
+out
+.git
+.env
+.env.*
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+*.tsbuildinfo
+coverage
+.turbo
+Dockerfile
+.dockerignore

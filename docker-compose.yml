@@ -1,6 +1,7 @@
 services:
   backend:
     build: ./backend
+    mem_limit: 1500m
     ports:
       - "8000:8000"
     env_file: .env
@@ -50,7 +51,12 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q default,analysis,tracking,scraping
+    # Concurrency is memory-bound: each analysis opens a headless Chromium (~0.5-1GB).
+    # Default 2 keeps peak memory sane on a modest machine; raise CELERY_CONCURRENCY
+    # if you have the RAM. mem_limit caps a runaway so it fails the container
+    # instead of exhausting the host and crashing the WSL VM.
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-2} -Q default,analysis,tracking,scraping
+    mem_limit: 4g
     volumes:
       - ./backend:/app
       - cookie_data:/app/data/cookies
@@ -90,6 +96,7 @@ services:
 
   frontend:
     build: ./frontend
+    mem_limit: 1g
     ports:
       - "3000:3000"
     depends_on:
@@ -144,6 +151,7 @@ services:
   mcp:
     build: ./backend
     profiles: ["mcp"]
+    mem_limit: 768m
     command: python -m app.mcp_server
     environment:
       - MCP_TRANSPORT=sse
