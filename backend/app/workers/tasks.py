@@ -485,7 +485,12 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
     from app.services.scraper_service import ScraperService
 
     session_factory = _get_session_factory()
-    llm_client = await _get_llm_client_async()
+    # Fast-screen mode: skip the LLM entirely. The Omniscient Score, hard filters
+    # and financials are pure computation on scraped data — the LLM only adds
+    # narrative (blueprint, review intelligence, strategy). Running with no LLM
+    # client makes every narrative step skip (they are guarded by `if llm_client`),
+    # so a keyword can be triaged in minutes without pegging a local model.
+    llm_client = None if options.get("skip_llm") else await _get_llm_client_async()
 
     # WHY: one browser session for the whole run (search, product pages, keyword
     # SERPs), so every page load shares the same cookies and fingerprint. It is
