@@ -244,10 +244,12 @@ def _page_cache_for(redis, force: bool) -> "PageCache | None":
 
 
 def _shared_pacer(redis, site: str) -> "SharedPacer":
-    """Pacer for `site` ('amazon' or '1688') shared across worker processes through Redis."""
-    from app.scraping.pacing import ALIBABA_GAP_SECONDS, AMAZON_GAP_SECONDS, SharedPacer, pacer_for
+    """Pacer for `site` ('amazon', '1688' or 'made-in-china') shared across worker processes through Redis."""
+    from app.scraping.pacing import (
+        ALIBABA_GAP_SECONDS, AMAZON_GAP_SECONDS, MADE_IN_CHINA_GAP_SECONDS, SharedPacer, pacer_for,
+    )
 
-    gaps = {"amazon": AMAZON_GAP_SECONDS, "1688": ALIBABA_GAP_SECONDS}
+    gaps = {"amazon": AMAZON_GAP_SECONDS, "1688": ALIBABA_GAP_SECONDS, "made-in-china": MADE_IN_CHINA_GAP_SECONDS}
     if site not in gaps:
         raise ValueError(f"Unknown pacing site {site!r}; expected one of {sorted(gaps)}")
     return SharedPacer(redis, *gaps[site], fallback=pacer_for(site))
@@ -809,43 +811,59 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("Product ideas generation failed: %s", e)
 
-        # ── Step 6a: Supplier scraping from 1688 ──────────────────────
+        # ── Step 6a: Supplier scraping ────────────────────────────────
+        # Made-in-China is the primary source: it serves the same China-made products
+        # to anonymous visitors, in English, with FOB prices already in USD. 1688 is a
+        # fallback only — it force-redirects anonymous visitors to a Taobao login, so it
+        # returns nothing unless the user has configured 1688 login credentials.
         task.update_state(state="PROGRESS", meta={"step": "supplier_scraping", "progress": 55})
         from app.core.cookie_manager import CookieManager
+        from app.services.made_in_china_scraper import MadeInChinaScraper
         from app.services.supplier_scraper import SupplierScraper
 
         cookie_manager = CookieManager()
-
-        # Attempt 1688 login if credentials are configured
         settings = Settings()
-        if settings.ALIBABA_1688_EMAIL and settings.ALIBABA_1688_PASSWORD:
-            from app.services.alibaba_login import AlibabaLoginService
-            login_svc = AlibabaLoginService(cookie_manager)
-            try:
-                await login_svc.ensure_logged_in(
-                    settings.ALIBABA_1688_EMAIL,
-                    settings.ALIBABA_1688_PASSWORD,
-                )
-            except Exception as e:
-                logger.warning("1688 login failed: %s", e)
 
-        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager, pacer=_shared_pacer(redis, "1688"))
+        # The divisor that turns a listing's price into USD. Made-in-China already quotes USD.
+        PRICE_ALREADY_USD = 1.0
+        supplier_price_to_usd = PRICE_ALREADY_USD
+        supplier_prices_are_chinese = False
 
+        mic_scraper = MadeInChinaScraper(pacer=_shared_pacer(redis, "made-in-china"))
         scraped_suppliers: list[dict] = []
         try:
-            scraped_suppliers = await supplier_scraper.search_suppliers(keyword, max_results=10)
+            scraped_suppliers = await mic_scraper.search_suppliers(keyword, max_results=10)
         except Exception as e:
-            logger.warning("Supplier scraping failed: %s", e)
+            logger.warning("Made-in-China scraping failed: %s", e)
+
+        # 1688 fallback (needs login). supplier_scraper is also reused by per-product matching below.
+        supplier_scraper = SupplierScraper(cookie_manager=cookie_manager, pacer=_shared_pacer(redis, "1688"))
+        if not scraped_suppliers:
+            if settings.ALIBABA_1688_EMAIL and settings.ALIBABA_1688_PASSWORD:
+                from app.services.alibaba_login import AlibabaLoginService
+                login_svc = AlibabaLoginService(cookie_manager)
+                try:
+                    await login_svc.ensure_logged_in(settings.ALIBABA_1688_EMAIL, settings.ALIBABA_1688_PASSWORD)
+                except Exception as e:
+                    logger.warning("1688 login failed: %s", e)
+            try:
+                scraped_suppliers = await supplier_scraper.search_suppliers(keyword, max_results=10)
+                if scraped_suppliers:
+                    supplier_price_to_usd = _CNY_TO_USD_RATE
+                    supplier_prices_are_chinese = True
+            except Exception as e:
+                logger.warning("1688 supplier scraping failed: %s", e)
 
         # Save scraped suppliers to DB
         if scraped_suppliers:
-            await _save_suppliers(db, niche_id, scraped_suppliers)
+            await _save_suppliers(db, niche_id, scraped_suppliers, price_to_usd_rate=supplier_price_to_usd)
 
         from app.services.market_signals import summarize_suppliers
-        supplier_summary = summarize_suppliers(scraped_suppliers, cny_to_usd_rate=_CNY_TO_USD_RATE)
+        supplier_summary = summarize_suppliers(scraped_suppliers, price_to_usd_rate=supplier_price_to_usd)
 
         # ── Step 6a-ii: Translate Chinese supplier fields ─────────────
-        if scraped_suppliers and llm_client:
+        # Only 1688 listings are in Chinese; Made-in-China is already English.
+        if scraped_suppliers and supplier_prices_are_chinese and llm_client:
             task.update_state(state="PROGRESS", meta={"step": "translating_suppliers", "progress": 57})
             try:
                 scraped_suppliers = await _translate_supplier_fields(llm_client, scraped_suppliers)
@@ -859,9 +877,10 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
         product_supplier_matches = []
         if llm_client:
             try:
+                # Use whichever source actually returned suppliers above (MIC unless we fell back to 1688).
                 match_svc = SupplierMatchService(
                     llm_client=llm_client,
-                    supplier_scraper=supplier_scraper,
+                    supplier_scraper=(supplier_scraper if supplier_prices_are_chinese else mic_scraper),
                 )
                 product_supplier_matches = await match_svc.find_matches_for_products(
                     products=detailed_products[:10],
@@ -1864,12 +1883,14 @@ def _calculate_supplier_score(supplier: dict) -> float:
 
 
 async def _save_suppliers(
-    db: AsyncSession, niche_id: int, scraped_suppliers: list[dict]
+    db: AsyncSession, niche_id: int, scraped_suppliers: list[dict],
+    price_to_usd_rate: float = _CNY_TO_USD_RATE,
 ) -> list[int]:
-    """Save scraped 1688 supplier data to the Supplier model.
+    """Save scraped supplier data to the Supplier model.
 
-    Converts CNY prices to USD and computes a basic supplier score.
-    Returns the list of created supplier IDs.
+    Divides each listing's price by price_to_usd_rate to reach USD (the CNY-per-USD
+    rate for 1688, or 1.0 for a source like Made-in-China that already quotes USD),
+    computes a basic supplier score, and returns the created supplier IDs.
     """
     from app.models.supplier import Supplier
 
@@ -1880,11 +1901,11 @@ async def _save_suppliers(
         if not supplier_name:
             continue
 
-        # Convert CNY prices to USD
-        price_min_cny = s.get("price_min")
-        price_max_cny = s.get("price_max")
-        fob_min = round(price_min_cny / _CNY_TO_USD_RATE, 4) if price_min_cny else None
-        fob_max = round(price_max_cny / _CNY_TO_USD_RATE, 4) if price_max_cny else None
+        # Each source's price is divided by its own rate to reach USD (1688 is CNY, MIC is USD).
+        price_min = s.get("price_min")
+        price_max = s.get("price_max")
+        fob_min = round(price_min / price_to_usd_rate, 4) if price_min else None
+        fob_max = round(price_max / price_to_usd_rate, 4) if price_max else None
 
         # Calculate supplier score
         score = _calculate_supplier_score(s)

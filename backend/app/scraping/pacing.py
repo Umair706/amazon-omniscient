@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 AMAZON_GAP_SECONDS = (3.0, 7.0)
 ALIBABA_GAP_SECONDS = (5.0, 10.0)
+MADE_IN_CHINA_GAP_SECONDS = (4.0, 9.0)
 
 
 class Pacer:
@@ -33,11 +34,12 @@ class Pacer:
 _PACERS = {
     "amazon": Pacer(*AMAZON_GAP_SECONDS),
     "1688": Pacer(*ALIBABA_GAP_SECONDS),
+    "made-in-china": Pacer(*MADE_IN_CHINA_GAP_SECONDS),
 }
 
 
 def pacer_for(site: str) -> Pacer:
-    """'amazon' or '1688'."""
+    """'amazon', '1688' or 'made-in-china'."""
     return _PACERS[site]
 
 

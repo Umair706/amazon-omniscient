@@ -14,7 +14,7 @@ Built for Amazon FBA sellers, private label entrepreneurs, and e-commerce busine
 ## What It Does
 
 1. **Scrapes & collects** Amazon search results, product pages, reviews, and BSR history using one headless Playwright browser session per analysis run (coherent persona, jittered pacing, rotating proxies free via proxyscrape.com or paid residential), preferring the official SP-API catalog/rank data when Amazon SP-API credentials are configured
-2. **Scrapes 1688.com suppliers** for real factory pricing, MOQs, and supplier ratings to feed into landed cost calculations
+2. **Scrapes supplier data from Made-in-China.com** (no login, USD FOB prices and MOQs) for real factory costs feeding the landed-cost math, with 1688.com kept as a login-gated fallback
 3. **Analyzes competition** by scoring listing quality across 7 dimensions and detecting exploitable vulnerabilities
 4. **Estimates sales** from BSR using category-specific power-law regression models (handles both main-category and sub-category BSR)
 5. **Calculates landed costs** including FOB, shipping, customs duty, Section 301 tariffs, insurance, inspection, FBA prep, and inbound fees
@@ -51,7 +51,7 @@ graph TB
 
     subgraph External Services
         AMZ["Amazon<br/>Product Pages"]
-        ALI["1688.com<br/>Supplier Pages"]
+        ALI["Made-in-China.com<br/>(1688 fallback)"]
         SPAPI["Amazon SP-API"]
         LLM["LLM Provider<br/>Qwen / Claude / GPT"]
         PX["Proxy Service<br/>BrightData / SmartProxy"]
@@ -271,7 +271,8 @@ omniscient/
 │   │   │   ├── scoring_service.py        # Omniscient Score
 │   │   │   ├── competitor_service.py     # Listing quality + gaps
 │   │   │   ├── supplier_service.py       # Landed cost + margins
-│   │   │   ├── supplier_scraper.py       # 1688.com supplier scraping
+│   │   │   ├── made_in_china_scraper.py  # Made-in-China.com supplier scraping (primary, USD FOB)
+│   │   │   ├── supplier_scraper.py       # 1688.com supplier scraping (login-gated fallback)
 │   │   │   ├── sales_forecast.py         # 52-week projections
 │   │   │   ├── recommendation_engine.py  # Master orchestrator
 │   │   │   ├── product_blueprint.py      # AI-driven product design
@@ -381,7 +382,7 @@ raw data breadth — the rows below mark both.
 | Competitor listing quality scoring | Yes (7 dimensions) | No | No | No |
 | Review sentiment analysis (AI) | Yes (LLM-powered) | No | No | No |
 | Review velocity gap detection | Yes | No | No | No |
-| 1688.com supplier scraping | Yes (factory pricing, MOQ, ratings) | No | No | No |
+| Supplier scraping (Made-in-China + 1688) | Yes (USD FOB, MOQ, no login) | No | No | No |
 | Landed cost calculator (China to FBA) | Yes (tariffs, duties, FBA fees) | Basic | Yes | Basic |
 | Product blueprint (complaint-driven design) | Yes (AI-generated) | No | No | No |
 | Consolidated financial report | Yes (FBA fees, unit economics, P&L) | No | No | No |
@@ -439,8 +440,8 @@ flowchart TD
     end
 
     subgraph Sourcing["Phase 3 — Supplier + Costs"]
-        S6a["6a. 1688.com Supplier Scraping<br/>Factory prices, MOQ, ratings"]
-        S6aii["6a-ii. Translate Suppliers<br/>Chinese → English via LLM"]
+        S6a["6a. Supplier Scraping<br/>Made-in-China USD FOB + MOQ (1688 fallback)"]
+        S6aii["6a-ii. Translate Suppliers<br/>only for the Chinese 1688 fallback"]
         S6aiii["6a-iii. Supplier Matching<br/>Match suppliers to products"]
         S6b["6b. Landed Cost Calculation<br/>FOB + shipping + tariffs + FBA"]
         S5 --> S6a --> S6aii --> S6aiii --> S6b

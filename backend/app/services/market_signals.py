@@ -75,12 +75,16 @@ def average_recent_velocity_gap(windows: list[dict], estimator: BSRSalesEstimato
     return round(sum(ratios) / len(ratios), 2)
 
 
-def summarize_suppliers(suppliers: list[dict], cny_to_usd_rate: float) -> dict:
-    """Aggregate scraped 1688 listings into the supplier sub-score inputs. Prices in the input are CNY."""
+def summarize_suppliers(suppliers: list[dict], price_to_usd_rate: float) -> dict:
+    """Aggregate scraped listings into the supplier sub-score inputs.
+
+    price_to_usd_rate is what each listing's price is divided by to reach USD: the
+    CNY-per-USD rate for 1688 listings, or 1.0 for a source already quoting USD.
+    """
     if not suppliers:
         return {"count": 0, "best_score": None, "min_moq": None, "median_fob_usd": None}
     moqs = [s["moq"] for s in suppliers if s.get("moq")]
-    fob_usd = [round(s["price_min"] / cny_to_usd_rate, 4) for s in suppliers if s.get("price_min")]
+    fob_usd = [round(s["price_min"] / price_to_usd_rate, 4) for s in suppliers if s.get("price_min")]
     scores = [s["supplier_score"] for s in suppliers if s.get("supplier_score") is not None]
     return {
         "count": len(suppliers),

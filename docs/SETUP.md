@@ -12,7 +12,7 @@ an Ads account. Use them. They are free to you, location-independent, and never 
 
 | Tier | You provide | What you get | Cost to you |
 |---|---|---|---|
-| 0 — Scraping only | nothing | Approximate data for the marketplace your IP is in; reviews and 1688 suppliers | free |
+| 0 — Scraping only | nothing | Approximate data for the marketplace your IP is in; reviews and Made-in-China supplier prices | free |
 | 1 — Recommended | SP-API creds + local LLM | Real catalog, rank, pricing and FBA fees for your account; free AI analysis | free (you already have the keys) |
 | 2 — Full | Tier 1 + a proxy | Reliable multi-marketplace scraping for the data SP-API doesn't cover | proxy cost only |
 
@@ -23,11 +23,12 @@ so you know why Tier 2 still exists:
 
 - **SP-API gives you:** catalog items, sales rank / BSR, competitive pricing, and real FBA fee estimates —
   all for the marketplace your account is registered in.
-- **SP-API does not give you:** customer reviews, or 1688 supplier prices. Those still come from scraping.
+- **SP-API does not give you:** customer reviews, or supplier FOB prices. Those still come from scraping
+  (reviews from Amazon, factory prices from Made-in-China.com).
 
-So the review-pain-point analysis, the product blueprint, and the landed-cost/margin math (which needs 1688
-prices) depend on scraping even when SP-API is configured. Tier 1 makes the core metrics accurate; Tier 2
-makes the rest reliable.
+So the review-pain-point analysis, the product blueprint, and the landed-cost/margin math (which needs
+supplier FOB prices) depend on scraping even when SP-API is configured. Tier 1 makes the core metrics
+accurate; Tier 2 makes the rest reliable.
 
 ## Tier 0 — scraping only (no keys)
 
@@ -40,8 +41,9 @@ docker compose up --build # the backend container migrates the DB on start
 
 Open http://localhost:3000. Honest limits: you can only reliably analyse the Amazon marketplace your own IP
 is in (from an Australian network, `marketplace: US` fails with a clear `wrong_marketplace` message, because
-Amazon redirects you to the local store), sales numbers are power-law estimates, and 1688 may serve a login
-wall from a datacenter IP. Good for trying the engine; not what you charge a customer to rely on.
+Amazon redirects you to the local store), and sales numbers are power-law estimates. Supplier FOB prices
+come from Made-in-China.com, which needs no login and works from a datacenter IP; 1688 is only a fallback and
+does require a login. Good for trying the engine; not what you charge a customer to rely on.
 
 ## Tier 1 — recommended: your SP-API + a free local LLM
 

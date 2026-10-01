@@ -70,16 +70,16 @@ def test_summarize_suppliers():
         {"supplier_name": "Y", "moq": 100, "price_min": 30.0, "supplier_score": 85},
         {"supplier_name": "Z", "moq": None, "price_min": None, "supplier_score": 20},
     ]
-    s = summarize_suppliers(suppliers, cny_to_usd_rate=10.0)
+    s = summarize_suppliers(suppliers, price_to_usd_rate=10.0)
     assert s == {"count": 3, "best_score": 85, "min_moq": 100, "median_fob_usd": 2.5}
-    assert summarize_suppliers([], cny_to_usd_rate=10.0) == {"count": 0, "best_score": None, "min_moq": None, "median_fob_usd": None}
+    assert summarize_suppliers([], price_to_usd_rate=10.0) == {"count": 0, "best_score": None, "min_moq": None, "median_fob_usd": None}
 
 
 def test_summarize_suppliers_ignores_missing_scores():
     # A supplier we couldn't score (no transaction/verification data scraped) must not look
     # like a real score of 0 and drag down best_score.
     suppliers = [{"supplier_name": "X", "moq": 500, "price_min": 20.0, "supplier_score": None}]
-    s = summarize_suppliers(suppliers, cny_to_usd_rate=10.0)
+    s = summarize_suppliers(suppliers, price_to_usd_rate=10.0)
     assert s["best_score"] is None
 
 
