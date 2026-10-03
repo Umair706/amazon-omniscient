@@ -78,6 +78,14 @@ class FinancialReportService:
         0.70, 0.65, 0.60, 0.55, 0.50, 0.45,
     ]
 
+    # Ad spend as a share of the revenue it drives (ACOS), easing from the launch
+    # rate down to a steady-state rate as organic rank builds. WHY: PPC used to be a
+    # fixed daily budget regardless of units sold, so a low-volume product showed a
+    # paper loss from spending far more on ads than the sales earned. Tying PPC to
+    # revenue keeps the P&L consistent with the per-unit margin.
+    LAUNCH_ACOS = 0.45
+    STEADY_ACOS = 0.25
+
     # Sales ramp for months 1-12 (fraction of estimated_monthly_sales)
     SALES_RAMP = [
         0.60, 0.75, 0.85, 0.90, 0.95, 1.00,
@@ -91,6 +99,15 @@ class FinancialReportService:
 
         from app.core.marketplace import get_marketplace
         self._mp_config = get_marketplace(self._marketplace)
+
+    @classmethod
+    def _acos_for_month(cls, month_index: int) -> float:
+        """Modelled ACOS for a 0-based launch month, easing from the launch rate to steady state."""
+        taper = cls.PPC_MONTHLY_TAPER[min(month_index, len(cls.PPC_MONTHLY_TAPER) - 1)]
+        taper_floor = cls.PPC_MONTHLY_TAPER[-1]
+        span = 1.0 - taper_floor
+        frac = (taper - taper_floor) / span if span else 0.0  # 1.0 at launch, 0.0 at steady state
+        return cls.STEADY_ACOS + (cls.LAUNCH_ACOS - cls.STEADY_ACOS) * frac
 
     # ==================================================================
     # Main entry point
@@ -596,8 +613,9 @@ class FinancialReportService:
             2,
         )
 
-        # Weekly PPC spend
-        weekly_ppc = round(launch_ppc_daily * 7, 2)
+        # Week-1 PPC spend: the launch ACOS applied to week-1 revenue (not a fixed budget).
+        _week1_units = estimated_monthly_sales / 4.33 * ramp_penalty * self.SALES_RAMP[0]
+        weekly_ppc = round(_week1_units * selling_price * self._acos_for_month(0), 2)
 
         # Weekly sales revenue (with Amazon's 14-day hold for new sellers)
         weekly_sales_units = estimated_monthly_sales / 4.33 * ramp_penalty
@@ -689,15 +707,16 @@ class FinancialReportService:
         }
 
         for week in range(2, 53):
-            # PPC spend tapers over time as organic rank builds
             month_index = min((week - 1) // 4, 11)
             ramp = self.SALES_RAMP[month_index]
-            ppc_taper = self.PPC_MONTHLY_TAPER[month_index]
-            week_cash_out = round(launch_ppc_daily * 7 * ppc_taper, 2)
 
             # Units sold this week (fractional to preserve accuracy)
             units_this_week = weekly_sales_units * ramp
             units_sold_by_week[week] = units_this_week
+
+            # PPC cash out = the launch-to-steady ACOS applied to this week's revenue,
+            # not a fixed daily budget (which would overstate spend when sales are low).
+            week_cash_out = round(units_this_week * selling_price * self._acos_for_month(month_index), 2)
 
             # Revenue arrives with a 2-week delay (Amazon 14-day hold)
             week_cash_in = 0.0
@@ -711,7 +730,7 @@ class FinancialReportService:
 
             event_parts = []
             if week_cash_out > 0:
-                event_parts.append(f"PPC spend (tapered {int(ppc_taper * 100)}%)")
+                event_parts.append(f"PPC spend (ACOS {int(self._acos_for_month(month_index) * 100)}%)")
             if week_cash_in > 0:
                 event_parts.append(f"Amazon payout (~{max(1, int(round(delayed_units)))} units)")
             event = " + ".join(event_parts) if event_parts else "No activity"
@@ -765,7 +784,6 @@ class FinancialReportService:
         for month in range(1, 13):
             idx = month - 1
             ramp = self.SALES_RAMP[idx]
-            ppc_taper = self.PPC_MONTHLY_TAPER[idx]
 
             units_sold = int(round(estimated_monthly_sales * ramp * ramp_penalty))
 
@@ -782,7 +800,7 @@ class FinancialReportService:
                 2,
             )
 
-            ppc_spend = round(launch_ppc_daily * 30 * ppc_taper, 2)
+            ppc_spend = round(revenue * self._acos_for_month(idx), 2)
 
             other_costs = 0.0
 
@@ -898,7 +916,6 @@ class FinancialReportService:
 
             for month in range(12):
                 ramp = self.SALES_RAMP[month]
-                ppc_taper = self.PPC_MONTHLY_TAPER[month]
 
                 monthly_units = int(round(estimated_monthly_sales * ramp * mult * ramp_penalty))
                 monthly_revenue = selling_price * monthly_units
@@ -910,7 +927,7 @@ class FinancialReportService:
                     * monthly_units
                     + monthly_revenue * self.RETURNS_RATE
                 )
-                monthly_ppc = launch_ppc_daily * 30 * ppc_taper
+                monthly_ppc = monthly_revenue * self._acos_for_month(month)
 
                 annual_units += monthly_units
                 annual_revenue += monthly_revenue
@@ -937,7 +954,6 @@ class FinancialReportService:
             break_even_week = None
             for month in range(12):
                 ramp = self.SALES_RAMP[month]
-                ppc_taper = self.PPC_MONTHLY_TAPER[month]
 
                 mu = int(round(estimated_monthly_sales * ramp * mult * ramp_penalty))
                 mr = selling_price * mu
@@ -949,7 +965,7 @@ class FinancialReportService:
                     * mu
                     + mr * self.RETURNS_RATE
                 )
-                mppc = launch_ppc_daily * 30 * ppc_taper
+                mppc = mr * self._acos_for_month(month)
                 monthly_net = mr - mc - maf - mppc
                 cumulative += monthly_net
                 if cumulative >= 0 and break_even_week is None:

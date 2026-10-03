@@ -12,6 +12,8 @@ export const DATA_GAP_LABELS: Record<string, string> = {
   sales_estimate_uncalibrated: "Sales estimate is uncalibrated for this marketplace (US-derived model)",
   fx_rate_assumed: "Supplier costs converted to your currency at an approximate fixed rate — check today's rate",
   ppc_ad_share_assumed: "Net margin assumes about half of sales come from ads (the rest organic) — a blended estimate",
+  forecast_unprofitable: "The realistic 52-week projection does not clear a profit — treat the score with caution",
+  review_analysis_unavailable: "Review pain-point analysis could not be generated for this niche",
 };
 
 export function labelForDataGap(gap: string): string {

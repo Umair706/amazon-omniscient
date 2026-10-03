@@ -16,7 +16,7 @@ def test_shared_pacer_uses_site_gaps_and_local_fallback():
 
 
 def test_shared_pacer_names_the_known_sites_when_given_an_unknown_one():
-    with pytest.raises(ValueError, match=r"Unknown pacing site 'ebay'; expected one of \['1688', 'amazon'\]"):
+    with pytest.raises(ValueError, match=r"Unknown pacing site 'ebay'; expected one of \['1688', 'amazon', 'made-in-china'\]"):
         tasks._shared_pacer(object(), "ebay")
 
 

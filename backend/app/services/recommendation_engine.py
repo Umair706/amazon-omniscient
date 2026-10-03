@@ -66,6 +66,15 @@ class RecommendationEngine:
         # Step 1: Compute Omniscient Score
         score_result = self.scorer.compute_score(metrics)
 
+        # The market overview's one-line takeaway is the engine's own verdict, derived
+        # from THIS final score, not the LLM's separate (and often contradictory) guess.
+        # Setting it here guarantees the prose and the headline number always agree.
+        if niche_overview:
+            from app.services.niche_intelligence import engine_verdict
+            niche_overview["key_takeaway"] = engine_verdict(
+                score_result["omniscient_score"], score_result["confidence_tier"]
+            )
+
         # Snapshot the exact rules this score was computed under, so the result
         # stays reproducible and explainable after the settings change.
         effective_config = resolve_effective_config(

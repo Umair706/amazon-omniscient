@@ -7,6 +7,28 @@ from app.llm.base_client import BaseLLMClient, EXPERT_SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
 
 
+def engine_verdict(score: float, tier: str) -> str:
+    """One-line buy/skip verdict derived from the engine's score and tier.
+
+    WHY: the LLM used to write its own "worth pursuing?" verdict in the overview,
+    which contradicted the Omniscient Score (e.g. "not worth pursuing" on a 65/100
+    product). The verdict shown to the user now comes from the score itself, so the
+    prose and the number always agree.
+    """
+    tier = (tier or "").upper()
+    rounded = round(score or 0)
+    if tier == "FAIL":
+        return f"Not recommended — scores {rounded}/100 but fails a hard disqualifying filter."
+    if tier == "HIGH":
+        return f"Strong opportunity — scores {rounded}/100; demand, competition and margin all line up."
+    if tier == "MEDIUM":
+        return (f"Workable opportunity at {rounded}/100 — viable with a real edge "
+                f"(differentiation, a lower supplier cost, or tighter ad spend), not a slam dunk.")
+    if tier == "LOW":
+        return f"Marginal at {rounded}/100 — only pursue with a specific advantage; the economics are thin."
+    return f"Weak at {rounded}/100 — most signals are unfavorable."
+
+
 class NicheIntelligenceService:
     """Generates comprehensive LLM-powered intelligence reports."""
 
@@ -91,7 +113,7 @@ Write a market intelligence report as JSON:
     "opportunity_windows": ["<specific, actionable opportunity supported by the data — or empty if none>"],
     "realistic_capital_required": "<estimated total capital needed for launch through break-even, including inventory, PPC, Vine, listing, and buffer>",
     "realistic_timeline_to_profitability": "<months to monthly break-even, accounting for PPC ramp and review building>",
-    "key_takeaway": "<one decisive sentence — be blunt about whether this is worth pursuing>"
+    "key_takeaway": "<one factual sentence naming the single biggest thing a new entrant faces here (e.g. the review moat, the price band, the margin). Describe the situation; do NOT give a buy-or-skip verdict — the engine's score decides that separately.>"
 }}"""
 
         return await self.llm.generate_json(prompt, max_tokens=4096, system_message=EXPERT_SYSTEM_PROMPT)

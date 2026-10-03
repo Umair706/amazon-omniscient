@@ -255,6 +255,20 @@ def _shared_pacer(redis, site: str) -> "SharedPacer":
     return SharedPacer(redis, *gaps[site], fallback=pacer_for(site))
 
 
+def _has_content(payload: dict) -> bool:
+    """True if an LLM JSON result actually carries usable content, not just an empty shell."""
+    if not isinstance(payload, dict):
+        return False
+    for value in payload.values():
+        if isinstance(value, (list, dict)) and len(value) > 0:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, (int, float)) and value:
+            return True
+    return False
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Full Niche Analysis Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
@@ -718,6 +732,13 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             except Exception as e:
                 logger.warning("Review intelligence failed: %s", e)
 
+        # A hollow LLM result (empty object, no pain points) renders as a blank
+        # reviews section that looks broken. Treat it as missing so it gets flagged
+        # as an honest data gap instead of shown as empty analysis.
+        if review_intelligence is not None and not _has_content(review_intelligence):
+            logger.warning("Review intelligence came back empty for niche %d; flagging as a gap", niche_id)
+            review_intelligence = None
+
         # ── Step 4c: Niche Intelligence Report (LLM) ──────────────────
         task.update_state(state="PROGRESS", meta={"step": "niche_intelligence", "progress": 45})
         from app.services.niche_intelligence import NicheIntelligenceService
@@ -936,6 +957,14 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
             niche_id, score_result["omniscient_score"], confidence_tier,
         )
 
+        # Flag honestly when the review pain-point analysis could not be produced,
+        # instead of leaving the brief's reviews section silently blank.
+        # (The overview's key_takeaway is set from the final score inside
+        # RecommendationEngine, so the prose and the number can't disagree.)
+        if not review_intelligence:
+            from app.workers.pipeline_steps.assumptions import GAP_REVIEW_ANALYSIS, record_data_gap
+            record_data_gap(metrics, GAP_REVIEW_ANALYSIS)
+
         # ── Step 8: PPC strategy ───────────────────────────────────────
         task.update_state(state="PROGRESS", meta={"step": "ppc_strategy", "progress": 65})
         from app.services.ppc_service import PPCService
@@ -986,13 +1015,22 @@ async def _run_full_analysis_async(task, niche_id: int, keyword: str, options: d
                 landed_cost=metrics.get("landed_cost") or 8,
                 fba_fees=metrics.get("fba_fees") or 5,
                 base_weekly_sales=max(1, (metrics.get("estimated_monthly_sales") or 100) // 4),
-                initial_ppc_daily=metrics.get("ppc_daily_budget") or 30,
+                ppc_acos=metrics.get("break_even_acos") or 30.0,
             )
             financial_summary = forecast_svc.summarize_forecast(forecast)
             await forecast_svc.save_projections(niche_id, forecast)
             metrics["break_even_week_base"] = _base_case_break_even_week(financial_summary)
-            from app.workers.pipeline_steps.assumptions import GAP_BREAK_EVEN, clear_data_gap
+            from app.workers.pipeline_steps.assumptions import (
+                GAP_BREAK_EVEN, GAP_FORECAST_UNPROFITABLE, clear_data_gap, record_data_gap,
+            )
             clear_data_gap(metrics, GAP_BREAK_EVEN)
+
+            # Surface a loud flag when the realistic (base) case loses money over the year,
+            # so a losing P&L can never sit silently behind a high score.
+            if (financial_summary.get("base") or {}).get("total_profit", 0) < 0:
+                record_data_gap(metrics, GAP_FORECAST_UNPROFITABLE)
+            else:
+                clear_data_gap(metrics, GAP_FORECAST_UNPROFITABLE)
 
             # Calculate launch capital
             launch_capital = forecast_svc.calculate_launch_capital(

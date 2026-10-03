@@ -11,6 +11,19 @@ from app.models.financial_projection import FinancialProjection
 
 logger = logging.getLogger(__name__)
 
+# Ads cost this share of the revenue they drive (ACOS), heavier at launch to buy
+# rank and tapering toward a healthy steady state as organic sales take over.
+# WHY this exists: ad spend used to be a fixed daily budget independent of how much
+# sold, so a low-volume week modelled spending far more on ads than the sale earned
+# (e.g. $315 of ads to sell one $49 unit — a 600%+ ACOS no real seller runs). Tying
+# ad spend to a capped share of revenue keeps the forecast consistent with the
+# per-unit margin and stops the guaranteed-loss nonsense.
+LAUNCH_ACOS = 0.45
+DEFAULT_STEADY_ACOS = 0.25
+# A seller's steady-state ACOS target realistically sits in this band.
+MIN_STEADY_ACOS = 0.10
+MAX_STEADY_ACOS = 0.40
+
 
 class SalesForecastService:
     """
@@ -60,7 +73,6 @@ class SalesForecastService:
         fba_fees: float,
         referral_fee_pct: float = 0.15,
         base_weekly_sales: int = 20,
-        initial_ppc_daily: float = 30.0,
         ppc_acos: float = 35.0,
         storage_per_unit_month: float = 0.10,
         returns_rate: float = 0.03,
@@ -84,7 +96,6 @@ class SalesForecastService:
                 fba_fees=fba_fees,
                 referral_fee_pct=referral_fee_pct,
                 base_weekly_sales=base_weekly_sales,
-                initial_ppc_daily=initial_ppc_daily,
                 ppc_acos=ppc_acos,
                 storage_per_unit_month=storage_per_unit_month,
                 returns_rate=returns_rate,
@@ -105,7 +116,6 @@ class SalesForecastService:
         fba_fees: float,
         referral_fee_pct: float,
         base_weekly_sales: int,
-        initial_ppc_daily: float,
         ppc_acos: float,
         storage_per_unit_month: float,
         returns_rate: float,
@@ -124,6 +134,11 @@ class SalesForecastService:
         vine_schedule = {3: 8, 4: 8, 5: 5, 6: 3}  # Vine reviews per week
 
         referral_fee = selling_price * referral_fee_pct
+
+        # Ad spend is a share of revenue (ACOS), not a fixed budget. The steady-state
+        # target comes from the PPC plan (ppc_acos, a percentage); launch runs hotter.
+        steady_acos = min(max((ppc_acos or 0) / 100.0, MIN_STEADY_ACOS), MAX_STEADY_ACOS)
+        launch_acos = max(LAUNCH_ACOS, steady_acos)
 
         for week in range(1, 53):
             # --- Organic rank progression ---
@@ -154,15 +169,17 @@ class SalesForecastService:
             weekly_sales = int(weekly_sales * review_boost * multipliers["conversion_boost"])
             weekly_sales = max(1, weekly_sales)
 
-            # --- PPC spend ---
-            # PPC spend tapers as organic traffic grows
-            organic_traffic_pct = self._estimate_organic_traffic_pct(week, organic_rank)
-            ppc_taper = max(0.2, 1.0 - organic_traffic_pct * 0.8)
-            daily_ppc = initial_ppc_daily * ppc_taper / multipliers["ppc_efficiency"]
-            weekly_ad_spend = daily_ppc * 7
-
             # --- Revenue ---
             revenue = weekly_sales * selling_price
+
+            # --- PPC spend (a tapering share of the revenue it drives) ---
+            # Start near the launch ACOS, ease toward the steady-state ACOS as organic
+            # traffic grows. A scenario's ppc_efficiency scales the whole thing: a more
+            # efficient scenario (bull) spends less per sale, a worse one (bear) more.
+            organic_traffic_pct = self._estimate_organic_traffic_pct(week, organic_rank)
+            target_acos = steady_acos + (launch_acos - steady_acos) * (1.0 - organic_traffic_pct)
+            target_acos = target_acos / multipliers["ppc_efficiency"]
+            weekly_ad_spend = revenue * target_acos
 
             # --- Costs ---
             cogs = weekly_sales * landed_cost

@@ -63,14 +63,26 @@ class TestGenerateForecast:
         base = result["base"]
         assert base[-1]["cumulative_profit"] > base[0]["cumulative_profit"]
 
-    def test_ppc_spend_decreases_over_time(self, forecast_svc):
+    def test_acos_tapers_over_time(self, forecast_svc):
+        # Ad spend scales with revenue now, so absolute spend can rise as sales grow.
+        # What must taper is ACOS (ad spend as a share of revenue): heavy at launch,
+        # lighter at steady state as organic sales take over.
         result = forecast_svc.generate_forecast(
             selling_price=30, landed_cost=8, fba_fees=5
         )
         base = result["base"]
-        early_ad = base[1]["ad_spend"]
-        late_ad = base[-1]["ad_spend"]
-        assert late_ad < early_ad
+        early_acos = base[1]["ad_spend"] / base[1]["revenue"]
+        late_acos = base[-1]["ad_spend"] / base[-1]["revenue"]
+        assert late_acos < early_acos
+
+    def test_ad_spend_never_exceeds_revenue(self, forecast_svc):
+        # The old fixed-budget model could spend far more on ads than the sale earned
+        # (a 600%+ ACOS). Ad spend must now stay a sane fraction of revenue every week.
+        result = forecast_svc.generate_forecast(
+            selling_price=30, landed_cost=8, fba_fees=5, base_weekly_sales=1
+        )
+        for week in result["base"]:
+            assert week["ad_spend"] <= week["revenue"]
 
     def test_reviews_accumulate(self, forecast_svc):
         result = forecast_svc.generate_forecast(
